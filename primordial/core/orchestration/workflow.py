@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 import json
 from datetime import timedelta
 from pathlib import Path
@@ -27,6 +28,7 @@ from primordial.core.domain.models import (
     OrchestrationReport,
     PrimitiveManifest,
     Target,
+    TargetMethodologyState,
     Task,
     TaskRun,
     utc_now,
@@ -55,6 +57,19 @@ class MemoryServiceProtocol(Protocol):
 
 class PrimitiveResolverProtocol(Protocol):
     def resolve_primitives(self, task: Task) -> list[PrimitiveManifest]: ...
+
+
+@dataclass(slots=True, frozen=True)
+class PlannedTargetAction:
+    kind: TaskKind
+    title: str
+    summary: str
+    confidence: float
+    phase_label: str
+    subphase: str
+    transition_reason: str
+    prerequisite: str | None = None
+    metadata: dict[str, object] = field(default_factory=dict)
 
 
 class WorkflowOrchestrator:
