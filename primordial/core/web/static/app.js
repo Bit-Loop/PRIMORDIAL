@@ -289,9 +289,9 @@ function formatWebAction(item) {
 }
 
 function renderExecutionMode() {
-  const payload = state.executionMode || { mode: "tick", interval_seconds: 10 };
+  const payload = state.executionMode || { mode: "tick", interval_seconds: 30 };
   const mode = payload.mode || "tick";
-  const interval = payload.interval_seconds || 10;
+  const interval = payload.interval_seconds || 30;
   const scheduleKey = `${mode}:${interval}`;
   elements.executionMode.value = mode;
   elements.continuousInterval.value = interval;
@@ -864,7 +864,7 @@ async function updateExecutionMode(mode) {
   try {
     await runAction("/api/execution-mode", {
       mode,
-      interval_seconds: Number(elements.continuousInterval.value || 10),
+      interval_seconds: Number(elements.continuousInterval.value || 30),
     });
   } catch (error) {
     setActionLog(`Execution mode update failed: ${error.message}`);
@@ -877,10 +877,10 @@ function scheduleContinuousLoop() {
     state.continuousTimer = null;
   }
   if ((state.executionMode?.mode || "tick") !== "continuous") {
-    state.continuousScheduleKey = `${state.executionMode?.mode || "tick"}:${state.executionMode?.interval_seconds || 10}`;
+    state.continuousScheduleKey = `${state.executionMode?.mode || "tick"}:${state.executionMode?.interval_seconds || 30}`;
     return;
   }
-  const interval = Math.max(2, Number(state.executionMode?.interval_seconds || elements.continuousInterval.value || 10));
+  const interval = Math.max(2, Number(state.executionMode?.interval_seconds || elements.continuousInterval.value || 30));
   state.continuousTimer = setTimeout(runContinuousTick, interval * 1000);
 }
 

@@ -125,6 +125,12 @@ The intent is:
 - `app` wires the whole runtime together
 - `ui` stays operator-facing
 
+Contributor docs:
+
+- `docs/HOW_PRIMORDIAL_WORKS.md`
+- `docs/FLOOR_PLAN.md`
+- `docs/HUMAN_CHANGE_GUIDE.md`
+
 ## Local Model Setup
 
 Primordial now expects local Ollama models to live in:

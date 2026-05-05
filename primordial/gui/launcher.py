@@ -107,13 +107,14 @@ class PrimordialLauncher:
         self.execution_mode_var = tk.StringVar(value="tick")
         self.execution_toggle_text_var = tk.StringVar(value="Enable Continuous Mode")
         self.execution_mode_status_var = tk.StringVar(value="Execution mode: tick")
-        self.continuous_interval_var = tk.IntVar(value=10)
+        self.continuous_interval_var = tk.IntVar(value=PrimordialRuntime.DEFAULT_EXECUTION_INTERVAL_SECONDS)
         self.model_vars: dict[str, tk.StringVar] = {}
         self.model_processor_vars: dict[str, tk.StringVar] = {}
         self.model_combos: dict[str, ttk.Combobox] = {}
         self.model_processor_combos: dict[str, ttk.Combobox] = {}
         self.run_more_ticks_button: ttk.Button | None = None
         self.stop_work_button: ttk.Button | None = None
+        self.continuous_interval_entry: ttk.Entry | None = None
         self.scope_profile_combo: ttk.Combobox | None = None
         self.scope_profiles_tree: ttk.Treeview | None = None
         self.chat_target_var = tk.StringVar(value="pirate.htb")
@@ -136,6 +137,8 @@ class PrimordialLauncher:
         self._runtime_lock = RLock()
         self._stop_requested = Event()
         self._continuous_tick_running = False
+        self._applied_execution_interval_seconds = PrimordialRuntime.DEFAULT_EXECUTION_INTERVAL_SECONDS
+        self._execution_mode_after_id: str | None = None
         self._operation_seq = 0
         self._active_operations: dict[str, dict[str, str]] = {}
         self.root.report_callback_exception = self._handle_tk_exception
@@ -399,9 +402,15 @@ class PrimordialLauncher:
         ttk.Button(action_frame, text="Exit", command=self._close).grid(row=0, column=9, padx=6)
         ttk.Label(action_frame, textvariable=self.work_status_var).grid(row=1, column=0, columnspan=10, sticky=tk.W, pady=(8, 0))
         ttk.Label(action_frame, textvariable=self.execution_mode_status_var).grid(row=2, column=0, columnspan=3, sticky=tk.W, pady=(8, 0))
-        ttk.Label(action_frame, text="Continuous interval seconds").grid(row=2, column=3, sticky=tk.W, pady=(8, 0))
-        ttk.Entry(action_frame, textvariable=self.continuous_interval_var, width=8).grid(row=2, column=4, sticky=tk.W, padx=6, pady=(8, 0))
-        ttk.Button(action_frame, textvariable=self.execution_toggle_text_var, command=self._toggle_execution_mode).grid(row=2, column=5, columnspan=2, sticky=tk.W, padx=6, pady=(8, 0))
+        ttk.Label(action_frame, text="Tick interval seconds").grid(row=2, column=3, sticky=tk.W, pady=(8, 0))
+        self.continuous_interval_entry = ttk.Entry(action_frame, textvariable=self.continuous_interval_var, width=8)
+        self.continuous_interval_entry.grid(row=2, column=4, sticky=tk.W, padx=6, pady=(8, 0))
+        ttk.Button(action_frame, text="Apply Tick Interval", command=self._apply_tick_interval).grid(
+            row=2, column=5, sticky=tk.W, padx=6, pady=(8, 0)
+        )
+        ttk.Button(action_frame, textvariable=self.execution_toggle_text_var, command=self._toggle_execution_mode).grid(
+            row=2, column=6, columnspan=2, sticky=tk.W, padx=6, pady=(8, 0)
+        )
 
         current_frame = ttk.LabelFrame(root, text="Current Work", padding=10)
         current_frame.pack(fill=tk.X, pady=8)
@@ -985,6 +994,23 @@ class PrimordialLauncher:
         target = "tick" if current == "continuous" else "continuous"
         self._run_background("Updating execution mode", lambda: self._set_execution_mode_sync(target))
 
+    def _apply_tick_interval(self) -> None:
+        self._run_background("Applying tick interval", self._apply_tick_interval_sync)
+
+    def _apply_tick_interval_sync(self) -> str:
+        current = self.execution_mode_var.get().strip().lower() or "tick"
+        with self._runtime_lock:
+            payload = self.runtime.update_execution_mode(
+                current,
+                interval_seconds=self._continuous_interval_seconds(),
+            )
+        self._queue.put(("refresh_tabs", ""))
+        self._queue.put(("reschedule_execution_mode_poll", ""))
+        interval = int(payload["interval_seconds"])
+        if str(payload["mode"]) == "continuous":
+            return f"Applied {interval}s tick interval. Continuous mode will use the new cadence on the next loop."
+        return f"Applied {interval}s tick interval. It is now the default cadence for future continuous runs."
+
     def _set_execution_mode_sync(self, mode: str) -> str:
         with self._runtime_lock:
             payload = self.runtime.update_execution_mode(
@@ -998,7 +1024,11 @@ class PrimordialLauncher:
         with self._runtime_lock:
             payload = self.runtime.execution_mode_payload()
         self.execution_mode_var.set(str(payload["mode"]))
-        self.continuous_interval_var.set(int(payload["interval_seconds"]))
+        interval = int(payload["interval_seconds"])
+        self._applied_execution_interval_seconds = interval
+        focus_widget = self.root.focus_get()
+        if self.continuous_interval_entry is None or focus_widget != self.continuous_interval_entry:
+            self.continuous_interval_var.set(interval)
         self.execution_mode_status_var.set(self._format_execution_mode(payload))
         if payload["mode"] == "continuous":
             self.execution_toggle_text_var.set("Switch To Tick Mode")
@@ -1015,20 +1045,35 @@ class PrimordialLauncher:
 
     def _format_execution_mode(self, payload: dict[str, object]) -> str:
         mode = str(payload.get("mode", "tick"))
-        interval = int(payload.get("interval_seconds", 10))
+        interval = int(payload.get("interval_seconds", PrimordialRuntime.DEFAULT_EXECUTION_INTERVAL_SECONDS))
         if mode == "continuous":
             return f"Execution mode: continuous/autonomous, bounded tick every {interval}s"
         return "Execution mode: tick/manual, only runs when you press a tick/work button"
 
-    def _continuous_interval_seconds(self) -> int:
+    def _continuous_interval_seconds(self, default: int | None = None) -> int:
         try:
             return max(2, int(self.continuous_interval_var.get()))
         except (tk.TclError, ValueError):
-            return 10
+            if default is not None:
+                return max(2, int(default))
+            return PrimordialRuntime.DEFAULT_EXECUTION_INTERVAL_SECONDS
+
+    def _schedule_execution_mode_poll(self, delay_seconds: int | None = None) -> None:
+        if self._execution_mode_after_id is not None:
+            try:
+                self.root.after_cancel(self._execution_mode_after_id)
+            except tk.TclError:
+                pass
+            self._execution_mode_after_id = None
+        if self._closed:
+            return
+        interval_seconds = max(2, int(delay_seconds or self._applied_execution_interval_seconds))
+        self._execution_mode_after_id = self.root.after(interval_seconds * 1000, self._poll_execution_mode)
 
     def _poll_execution_mode(self) -> None:
         if self._closed:
             return
+        self._execution_mode_after_id = None
         try:
             self._refresh_execution_mode()
             if self.execution_mode_var.get() == "continuous" and not self._continuous_tick_running:
@@ -1037,7 +1082,7 @@ class PrimordialLauncher:
                 self._run_background("Continuous tick", self._continuous_tick_sync)
         finally:
             if not self._closed:
-                self.root.after(self._continuous_interval_seconds() * 1000, self._poll_execution_mode)
+                self._schedule_execution_mode_poll()
 
     def _continuous_tick_sync(self) -> str | None:
         try:
@@ -1707,6 +1752,8 @@ class PrimordialLauncher:
                     self._refresh_all_tabs()
                 elif status == "refresh_scope_profiles":
                     self._refresh_scope_profiles()
+                elif status == "reschedule_execution_mode_poll":
+                    self._schedule_execution_mode_poll()
                 elif status == "set_guidance":
                     self.guidance_input.delete("1.0", tk.END)
                     self.guidance_input.insert(tk.END, message)

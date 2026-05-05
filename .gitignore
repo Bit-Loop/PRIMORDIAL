@@ -58,3 +58,4 @@ Thumbs.db
 # Runtime artifacts (except specific subdirectories we want)
 runtime/crash.journal
 *.log
+docs/HUMAN_CHANGE_GUIDE.md

@@ -61,6 +61,7 @@ class PrimordialRuntime:
     EXECUTION_MODE_SETTING = "execution_mode"
     EXECUTION_MODE_INTERVAL_SETTING = "execution_mode_interval_seconds"
     EXECUTION_MODES = {"tick", "continuous"}
+    DEFAULT_EXECUTION_INTERVAL_SECONDS = 30
     SCOPE_PROFILE_PRESETS_SETTING = "scope_profile_presets"
 
     MODEL_ROLE_CONFIG = {
@@ -314,11 +315,14 @@ class PrimordialRuntime:
         mode = str(self.store.get_setting(self.EXECUTION_MODE_SETTING, "tick")).strip().lower()
         if mode not in self.EXECUTION_MODES:
             mode = "tick"
-        interval = self.store.get_setting(self.EXECUTION_MODE_INTERVAL_SETTING, 10)
+        interval = self.store.get_setting(
+            self.EXECUTION_MODE_INTERVAL_SETTING,
+            self.DEFAULT_EXECUTION_INTERVAL_SECONDS,
+        )
         try:
             interval_seconds = max(2, int(interval))
         except (TypeError, ValueError):
-            interval_seconds = 10
+            interval_seconds = self.DEFAULT_EXECUTION_INTERVAL_SECONDS
         return {
             "mode": mode,
             "continuous": mode == "continuous",

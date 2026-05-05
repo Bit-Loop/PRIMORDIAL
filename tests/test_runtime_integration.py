@@ -25,6 +25,24 @@ MANIFESTS_DIR = Path(__file__).resolve().parents[1] / "manifests"
 
 
 class RuntimeIntegrationTests(unittest.TestCase):
+    def test_execution_mode_defaults_to_longer_cpu_friendly_interval(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = AppConfig.from_env(project_root=root)
+            config.manifests_dir = MANIFESTS_DIR
+            config.ensure_directories()
+            runtime = PrimordialRuntime(config)
+            runtime.initialize()
+
+            payload = runtime.execution_mode_payload()
+
+            self.assertEqual(payload["mode"], "tick")
+            self.assertEqual(
+                payload["interval_seconds"],
+                PrimordialRuntime.DEFAULT_EXECUTION_INTERVAL_SECONDS,
+            )
+            runtime.shutdown()
+
     def test_real_recon_creates_evidence_and_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
