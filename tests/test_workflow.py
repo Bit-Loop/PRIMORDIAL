@@ -222,6 +222,19 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(service_task.metadata["active_ip"], "10.129.244.95")
         self.assertEqual(str(service_task.metadata["active_ip_generation"]), "1")
 
+    def test_planner_persists_methodology_state_for_target(self) -> None:
+        report = self.runtime.run_tick(max_executions=0)
+
+        stored_target = self.runtime.store.get_target(self.target.id)
+        methodology_state = stored_target.metadata.get("methodology_state", {})
+
+        self.assertTrue(report.created_tasks)
+        self.assertIsInstance(methodology_state, dict)
+        self.assertEqual(methodology_state.get("phase"), "recon")
+        self.assertEqual(methodology_state.get("subphase"), "bootstrap")
+        self.assertTrue(methodology_state.get("candidate_actions"))
+        self.assertEqual(methodology_state.get("planner_version"), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

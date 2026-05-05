@@ -38,7 +38,7 @@ DEFAULT_BLUEPRINTS: dict[TaskKind, TaskBlueprint] = {
     TaskKind.RECON_SCAN: TaskBlueprint(
         phase=MethodologyPhase.RECON,
         role=AgentRole.RECON_WORKER,
-        capabilities=("http-probe", "content-discovery", "traffic-search"),
+        capabilities=("http-probe", "content-discovery"),
         risk_tier=RiskTier.LOW,
         default_priority=90,
         max_attempts=2,

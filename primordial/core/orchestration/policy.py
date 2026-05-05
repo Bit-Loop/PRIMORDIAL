@@ -220,13 +220,15 @@ class PolicyEngine:
             RiskTier.CRITICAL,
         }
         target_metadata = target.metadata if target else {}
-        default_timeout = self.settings.max_poc_timeout_seconds if risky else max(60, self.settings.max_poc_timeout_seconds)
+        explicit_time_cap = "timeout_seconds" in task.metadata or "policy_timeout_seconds" in target_metadata
+        default_timeout = self.settings.max_poc_timeout_seconds if risky else max(180, self.settings.max_poc_timeout_seconds)
         default_requests = self.settings.max_poc_requests if risky else max(25, self.settings.max_poc_requests)
         default_concurrency = self.settings.high_risk_concurrency if risky else self.settings.hot_path_concurrency
         return {
             "target_profile": target.profile.value if target else None,
             "request_cap": int(task.metadata.get("max_requests", target_metadata.get("policy_max_requests", default_requests)) or default_requests),
             "time_cap_seconds": int(task.metadata.get("timeout_seconds", target_metadata.get("policy_timeout_seconds", default_timeout)) or default_timeout),
+            "explicit_time_cap": explicit_time_cap,
             "rate_window_seconds": int(target_metadata.get("policy_rate_window_seconds", 60 if target and target.profile == ScopeProfile.HACK_THE_BOX else 300)),
             "concurrency_ceiling": int(target_metadata.get("policy_concurrency_ceiling", default_concurrency) or default_concurrency),
             "side_effect_class": str(task.metadata.get("side_effect_class", "exploitative" if risky else "read_only")),
@@ -301,7 +303,14 @@ class PolicyEngine:
                 target_id=task.target_id,
                 task_id=task.id,
             )
-        if primitive.timeout_seconds > int(action_policy["time_cap_seconds"]):
+        if (
+            primitive.timeout_seconds > int(action_policy["time_cap_seconds"])
+            and (
+                bool(action_policy.get("explicit_time_cap"))
+                or task.risk_tier in {RiskTier.HIGH, RiskTier.CRITICAL}
+                or primitive.side_effect_level in {SideEffectLevel.MUTATING, SideEffectLevel.EXPLOITATIVE}
+            )
+        ):
             return PolicyDecision(
                 action_kind=primitive.name,
                 verdict=PolicyVerdict.NEEDS_APPROVAL,

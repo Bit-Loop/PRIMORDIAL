@@ -14,6 +14,7 @@ const state = {
   refreshTimer: null,
   continuousTimer: null,
   continuousInFlight: false,
+  continuousScheduleKey: null,
 };
 
 const elements = {
@@ -290,15 +291,20 @@ function formatWebAction(item) {
 function renderExecutionMode() {
   const payload = state.executionMode || { mode: "tick", interval_seconds: 10 };
   const mode = payload.mode || "tick";
+  const interval = payload.interval_seconds || 10;
+  const scheduleKey = `${mode}:${interval}`;
   elements.executionMode.value = mode;
-  elements.continuousInterval.value = payload.interval_seconds || 10;
+  elements.continuousInterval.value = interval;
   elements.modeToggleButton.textContent = mode === "continuous" ? "Switch To Tick Mode" : "Enable Continuous Mode";
   elements.modeToggleButton.className = mode === "continuous" ? "danger-button" : "ghost-button";
   elements.tickButton.className = mode === "continuous" ? "muted-stop-button" : "";
   elements.tickButton.disabled = mode === "continuous";
   elements.stopWorkButton.className = "danger-button";
   elements.stopWorkButton.disabled = false;
-  scheduleContinuousLoop();
+  if (state.continuousScheduleKey !== scheduleKey) {
+    state.continuousScheduleKey = scheduleKey;
+    scheduleContinuousLoop();
+  }
 }
 
 function tableCell(content) {
@@ -871,6 +877,7 @@ function scheduleContinuousLoop() {
     state.continuousTimer = null;
   }
   if ((state.executionMode?.mode || "tick") !== "continuous") {
+    state.continuousScheduleKey = `${state.executionMode?.mode || "tick"}:${state.executionMode?.interval_seconds || 10}`;
     return;
   }
   const interval = Math.max(2, Number(state.executionMode?.interval_seconds || elements.continuousInterval.value || 10));

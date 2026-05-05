@@ -8,12 +8,14 @@ from primordial.core.domain.enums import (
     AutonomyMode,
     MethodologyPhase,
     PolicyVerdict,
+    PrimitiveRuntime,
     ProviderRoute,
     RiskTier,
+    SideEffectLevel,
     ScopeProfile,
     TaskKind,
 )
-from primordial.core.domain.models import Target, Task
+from primordial.core.domain.models import PrimitiveManifest, Target, Task
 from primordial.core.orchestration.policy import PolicyEngine
 
 
@@ -124,6 +126,46 @@ class PolicyEngineTests(unittest.TestCase):
 
         self.assertEqual(decision.verdict, PolicyVerdict.ALLOW)
         self.assertEqual(decision.metadata["approval_source"], "behavior_verifier")
+
+    def test_secret_bearing_primitive_needs_gate_when_credentials_are_missing(self) -> None:
+        engine = PolicyEngine(
+            AutonomySettings(mode=AutonomyMode.SUPERVISED_AUTO, allow_exploitative_actions=True),
+            credentials_status_loader=lambda: {
+                "services": {
+                    "lab": {
+                        "username": {"configured": False},
+                        "password": {"configured": False},
+                    }
+                }
+            },
+        )
+        target = Target(handle="pirate.htb", display_name="Pirate", profile=ScopeProfile.HACK_THE_BOX)
+        task = Task(
+            target_id=target.id,
+            phase=MethodologyPhase.EXPLOITATION,
+            kind=TaskKind.CREDENTIALED_ACCESS_CHECK,
+            title="Verify credentialed access",
+            summary="Use lab credentials.",
+            role=AgentRole.EXPLOITATION_WORKER,
+            risk_tier=RiskTier.HIGH,
+        )
+        primitive = PrimitiveManifest(
+            name="credentialed-access-check",
+            version="1.0",
+            description="Check SMB/WinRM credentials",
+            capability_tags=["credentialed-access-check"],
+            allowed_phases=[MethodologyPhase.EXPLOITATION],
+            runtime=PrimitiveRuntime.HOST,
+            risk_tier=RiskTier.HIGH,
+            side_effect_level=SideEffectLevel.EXPLOITATIVE,
+            required_secrets=["lab.username", "lab.password"],
+        )
+
+        decision = engine.evaluate_primitive(task, target, primitive)
+
+        self.assertEqual(decision.verdict, PolicyVerdict.NEEDS_APPROVAL)
+        self.assertIn("not configured", decision.reason)
+        self.assertEqual(decision.metadata["action_policy"]["credential_usage_class"], "lab")
 
 
 if __name__ == "__main__":

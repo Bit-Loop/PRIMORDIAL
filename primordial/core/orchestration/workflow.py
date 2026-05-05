@@ -944,8 +944,8 @@ class WorkflowOrchestrator:
         self._register_task(task, target, report)
 
     def _target_analysis_signature(self, target: Target) -> str:
-        evidence = self.store.list_evidence(target_id=target.id, limit=200)
-        tasks = self.store.list_tasks(target_id=target.id, limit=200)
+        evidence = self._current_generation_evidence(target, limit=200)
+        tasks = self._current_generation_tasks(target, limit=200)
         payload = {
             "evidence": sorted(item.id for item in evidence),
             "blocked_or_failed_tasks": sorted(

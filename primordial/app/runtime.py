@@ -1871,6 +1871,18 @@ class PrimordialRuntime:
                 lines.append(
                     f"Active IP: {target.metadata.get('active_ip')} generation={target.metadata.get('active_ip_generation')}"
                 )
+            methodology_state = target.metadata.get("methodology_state", {})
+            if isinstance(methodology_state, dict) and methodology_state:
+                lines.append(
+                    "Methodology state: "
+                    f"phase={methodology_state.get('phase')} "
+                    f"subphase={methodology_state.get('subphase')} "
+                    f"completion={methodology_state.get('completion')}"
+                )
+                if methodology_state.get("no_progress_reason"):
+                    lines.append(f"No-progress reason: {methodology_state.get('no_progress_reason')}")
+                if methodology_state.get("next_unblock_action"):
+                    lines.append(f"Next unblock action: {methodology_state.get('next_unblock_action')}")
         active_generation = self._target_active_generation(target)
         tasks = self.store.list_tasks(target_id=target_id, limit=12)
         raw_evidence = self.store.list_evidence(target_id=target_id, limit=30)
@@ -2005,6 +2017,26 @@ class PrimordialRuntime:
         )
         next_actions = self._deterministic_next_actions(current_evidence, interests, findings, capabilities)
         capability_gaps = self._deterministic_capability_gaps(current_evidence, evidence_kinds, capabilities)
+        methodology_state = target.metadata.get("methodology_state", {}) if target else {}
+        if isinstance(methodology_state, dict):
+            planned_actions = methodology_state.get("candidate_actions", [])
+            if isinstance(planned_actions, list) and planned_actions:
+                next_actions = []
+                for item in planned_actions[:5]:
+                    if not isinstance(item, dict):
+                        continue
+                    title = str(item.get("title") or "Untitled action")
+                    confidence = item.get("confidence")
+                    prerequisite = str(item.get("prerequisite") or "").strip()
+                    reason = str(item.get("transition_reason") or "").strip()
+                    line = title
+                    if prerequisite:
+                        line += f" Prerequisite: {prerequisite}."
+                    if confidence not in {None, ""}:
+                        line += f" Confidence: {float(confidence):.2f}."
+                    if reason:
+                        line += f" Reason: {reason}"
+                    next_actions.append(line.strip())
 
         facts = []
         if target:
@@ -2012,6 +2044,11 @@ class PrimordialRuntime:
             active_ip = str(target.metadata.get("active_ip") or "").strip()
             if active_ip:
                 facts.append(f"Active operator-confirmed IP is `{active_ip}`.")
+            if isinstance(methodology_state, dict) and methodology_state:
+                facts.append(
+                    f"Methodology phase is `{methodology_state.get('phase')}` / `{methodology_state.get('subphase')}` "
+                    f"with completion state `{methodology_state.get('completion')}`."
+                )
             if stale_evidence:
                 facts.append(
                     f"{len(stale_evidence)} recent evidence record(s) are historical for an older active-IP generation."
@@ -2037,6 +2074,16 @@ class PrimordialRuntime:
             "**Blockers**\n"
             + "\n".join(f"- {blocker}" for blocker in (blockers or ["No current blockers derived from stored state."]))
         )
+        if isinstance(methodology_state, dict) and methodology_state.get("no_progress_reason"):
+            sections.append(
+                "**Planner State**\n"
+                + "\n".join(
+                    [
+                        f"- No progress reason: {methodology_state.get('no_progress_reason')}",
+                        f"- Next unblock action: {methodology_state.get('next_unblock_action') or 'none'}",
+                    ]
+                )
+            )
         sections.append(
             "**Next Actions**\n"
             + "\n".join(f"- {action}" for action in (next_actions or ["No runnable next action is derivable from current evidence."]))

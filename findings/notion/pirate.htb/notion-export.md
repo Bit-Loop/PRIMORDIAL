@@ -2,7 +2,7 @@
 
 Target: `pirate.htb`
 Profile: `hack_the_box`
-Generated: 2026-05-05T16:08:26.288492+00:00
+Generated: 2026-05-05T16:22:19.422893+00:00
 
 ## AI Agent Guidance
 
@@ -39,6 +39,7 @@ Generated: 2026-05-05T16:08:26.288492+00:00
 
 ## Recent Notes
 
+- Behavior verification note: Verifier reviewed 0 trace records. No unsupported durable claim promotion occurred in this branch.
 - Compaction audit: Memory compaction merged recent task context into episodic and semantic layers while preserving evidence lineage.
 - Operator-confirmed active target IP: Active IP for `pirate.htb` is `10.129.244.95`. Prior recon evidence may still reference older IPs and should be treated as historical until refreshed recon tasks complete.
 - Behavior verification note: Verifier reviewed 0 trace records. No unsupported durable claim promotion occurred in this branch.
@@ -83,11 +84,6 @@ Example excerpts retained: 4
 - Behavior verification note: Verifier reviewed 0 trace records. No unsupported durable claim promotion occurred in this branch.
 - Behavior verification note: Verifier reviewed 0 trace records. No unsupported durable claim promotion occurred in this branch.
 - Behavior verification note: Verifier reviewed 0 trace records. No unsupported durable claim promotion occurred in this branch.
-- Web content discovery summary: Base URLs: http://10.129.47.117/, http://pirate.htb/
-Words checked: 420
-Interesting paths: 0
-No interesting paths were observed in the bounded wordlist run.
-This is content inventory only; no authentication or exploit attempt was performed.
 
 ## Evidence References
 

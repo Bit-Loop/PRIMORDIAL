@@ -1,6 +1,6 @@
 # HTB Pirate Evidence Index
 
-Generated: 2026-05-05T16:08:26.288384+00:00
+Generated: 2026-05-05T16:22:19.422504+00:00
 
 - `evidence_bf546d645ef4` Kerberos user discovery: pirate.htb: Kerberos user discovery against 10.129.47.117 found 0 user principal(s) and 0 SPN candidate(s).
 - `evidence_e3efd682e2b4` Exploit research: pirate.htb: Searchsploit research found 4 non-DoS candidate(s), suppressed 0 DoS/crash-oriented result(s), and retained 4 example excerpt(s): Microsoft Active Directory LDAP Server - 'Username' Enumeration, Microsoft Windows Server 2000 - Active Directory Remote Stack Overflow, Microsoft Exchange Active Directory Topology 15.0.847.40 - 'Service MSExchangeADTopology' Unquoted Service Path, Microsoft Exchange Active Directory Topology 15.02.1118.007 - 'Service MSExchangeADTopology' Unquoted Service Path.
