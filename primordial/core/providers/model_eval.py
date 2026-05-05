@@ -102,7 +102,7 @@ class ModelEvaluationService:
                     "normalizes Title, EDB-ID, Path, Type, Platform, filters DoS/crash entries, and never executes "
                     "files. Include two pytest-style tests as strings."
                 ),
-                required_terms=("parse_searchsploit_json", "json.loads", "denial of service", "tests", "never executes"),
+                required_terms=("parse_searchsploit_json", "json.loads", "filters dos/crash", "tests", "never executes"),
             ),
             ModelEvalCase(
                 id="poc_applicability",

@@ -118,6 +118,10 @@ class WorkflowOrchestrator:
             tasks=self.store.list_tasks(limit=500),
             traces=self.store.list_traces(limit=200),
             evidence=self.store.list_evidence(limit=200),
+            targets=targets,
+            interests=self.store.list_interests(limit=200),
+            findings=self.store.list_findings(limit=100),
+            events=self.store.list_events(limit=200),
         )
         for signal in signals:
             if self._verifier_signal_already_handled(signal):
@@ -163,155 +167,575 @@ class WorkflowOrchestrator:
         return task
 
     def _plan_target(self, target: Target, session_id: str | None, report: OrchestrationReport) -> None:
-        if not self.store.target_has_evidence(target.id):
-            self._plan_if_missing(
-                target,
+        methodology_state = self._evaluate_target_methodology_state(target)
+        self._persist_target_methodology_state(target, methodology_state, report)
+        planned_any = False
+        for action in methodology_state.candidate_actions:
+            kind = TaskKind(str(action["kind"]))
+            if kind == TaskKind.ANALYZE_EVIDENCE:
+                task = self._build_analysis_task_if_stale(target, session_id)
+                if task is None:
+                    continue
+                self._register_task(task, target, report)
+                planned_any = True
+                continue
+            task = self._build_task(
+                target.id,
+                kind,
+                str(action["title"]),
+                str(action["summary"]),
+                session_id=session_id,
+            )
+            active_generation = self._target_active_generation(target)
+            if active_generation is not None:
+                task.metadata["active_ip_generation"] = active_generation
+                task.metadata["active_ip"] = target.metadata.get("active_ip")
+            task.metadata.update(dict(action.get("metadata", {})))
+            self._register_task(task, target, report)
+            planned_any = True
+        if not planned_any and methodology_state.no_progress_reason:
+            self._record_no_progress_state(target, methodology_state, report)
+
+    def _evaluate_target_methodology_state(self, target: Target) -> TargetMethodologyState:
+        active_generation = self._target_active_generation(target)
+        evidence = self._current_generation_evidence(target)
+        tasks = self._current_generation_tasks(target)
+        waiting_or_active = [
+            task
+            for task in tasks
+            if task.status in {TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.WAITING, TaskStatus.NEEDS_APPROVAL}
+        ]
+        candidate_actions = self._methodology_candidate_actions(target)
+        blockers = self._methodology_blockers(target, evidence)
+        ai_admission = self._evaluate_ai_proposal_admission(tasks)
+        if ai_admission["rejected"]:
+            blockers.extend(
+                f"AI proposal rejected: {item['title']} ({item['reason']})"
+                for item in ai_admission["rejected"][:3]
+            )
+        verified_interests = self._verified_interest_count_current_generation(target)
+        retry_budget = {
+            task.kind.value: max(0, task.max_attempts - task.attempts)
+            for task in tasks
+            if task.status in {TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.WAITING, TaskStatus.NEEDS_APPROVAL, TaskStatus.FAILED}
+        }
+
+        if candidate_actions:
+            lead = candidate_actions[0]
+            phase = blueprint_for(lead.kind).phase
+            completion = "candidate_actions_ready"
+            transition_reason = lead.transition_reason
+            subphase = lead.subphase
+        elif waiting_or_active:
+            lead_task = waiting_or_active[0]
+            phase = lead_task.phase
+            subphase = lead_task.kind.value
+            completion = "waiting_on_existing_tasks"
+            transition_reason = f"Existing {lead_task.status.value} task is already covering the next methodology step."
+        elif not evidence:
+            phase = blueprint_for(TaskKind.RECON_SCAN).phase
+            subphase = "bootstrap"
+            completion = "blocked"
+            transition_reason = "No current-generation target evidence is available yet."
+        elif self._memory_service().needs_compaction(target.id):
+            phase = blueprint_for(TaskKind.COMPACT_MEMORY).phase
+            subphase = TaskKind.COMPACT_MEMORY.value
+            completion = "memory_maintenance_due"
+            transition_reason = "Memory maintenance is due, but an equivalent task is already satisfied or waiting."
+        elif verified_interests >= 2:
+            phase = blueprint_for(TaskKind.CHAIN_CANDIDATES).phase
+            subphase = "chain_backlog"
+            completion = "steady_state"
+            transition_reason = "Verified exploit-chain inputs exist, but no new chain action is currently admissible."
+        elif verified_interests >= 1:
+            phase = blueprint_for(TaskKind.VERIFY_HYPOTHESIS).phase
+            subphase = "verification_backlog"
+            completion = "steady_state"
+            transition_reason = "A verified hypothesis exists, but no new bounded verification action is currently admissible."
+        else:
+            phase = blueprint_for(TaskKind.ANALYZE_EVIDENCE).phase
+            subphase = "analysis_backlog"
+            completion = "steady_state"
+            transition_reason = "No new methodology transition is currently admissible from the current evidence."
+
+        next_unblock_action = blockers[0] if blockers else None
+        no_progress_reason = None
+        if not candidate_actions and not waiting_or_active:
+            no_progress_reason = blockers[0] if blockers else transition_reason
+
+        return TargetMethodologyState(
+            phase=phase,
+            subphase=subphase,
+            completion=completion,
+            transition_reason=transition_reason,
+            candidate_actions=[
+                {
+                    "kind": item.kind.value,
+                    "title": item.title,
+                    "summary": item.summary,
+                    "confidence": item.confidence,
+                    "phase": item.phase_label,
+                    "subphase": item.subphase,
+                    "transition_reason": item.transition_reason,
+                    "prerequisite": item.prerequisite,
+                    "metadata": dict(item.metadata),
+                }
+                for item in candidate_actions
+            ],
+            blockers=blockers,
+            next_unblock_action=next_unblock_action,
+            no_progress_reason=no_progress_reason,
+            retry_budget=retry_budget,
+            metadata={
+                "active_ip_generation": active_generation,
+                "current_generation_evidence_count": len(evidence),
+                "waiting_task_count": len(waiting_or_active),
+                "verified_interest_count": verified_interests,
+                "ai_proposal_admission": ai_admission,
+            },
+        )
+
+    def _methodology_candidate_actions(self, target: Target) -> list[PlannedTargetAction]:
+        actions: list[PlannedTargetAction] = []
+
+        def add(
+            kind: TaskKind,
+            title: str,
+            summary: str,
+            *,
+            confidence: float,
+            subphase: str,
+            transition_reason: str,
+            prerequisite: str | None = None,
+            metadata: dict[str, object] | None = None,
+        ) -> None:
+            active_generation = self._target_active_generation(target)
+            if kind != TaskKind.ANALYZE_EVIDENCE and self._task_exists_for_current_generation(target.id, kind, active_generation):
+                return
+            actions.append(
+                PlannedTargetAction(
+                    kind=kind,
+                    title=title,
+                    summary=summary,
+                    confidence=confidence,
+                    phase_label=blueprint_for(kind).phase.value,
+                    subphase=subphase,
+                    transition_reason=transition_reason,
+                    prerequisite=prerequisite,
+                    metadata=metadata or {},
+                )
+            )
+
+        if not self._target_has_current_generation_evidence(target):
+            add(
                 TaskKind.RECON_SCAN,
                 "Run recon sweep",
                 f"Collect initial recon evidence for {target.handle}.",
-                report,
-                session_id,
+                confidence=0.95,
+                subphase="bootstrap",
+                transition_reason="No current-generation evidence exists for the active target generation.",
             )
             if self._should_plan_service_discovery(target):
-                self._plan_if_missing(
-                    target,
+                add(
                     TaskKind.SERVICE_DISCOVERY,
                     "Run bounded service discovery",
                     f"Collect TCP service inventory evidence for {target.handle}.",
-                    report,
-                    session_id,
+                    confidence=0.93,
+                    subphase="service_inventory",
+                    transition_reason="A fresh active-IP generation needs service inventory before deeper branching.",
                 )
-            return
+            return actions
 
         if self._should_plan_service_discovery(target):
-            self._plan_if_missing(
-                target,
+            add(
                 TaskKind.SERVICE_DISCOVERY,
                 "Run bounded service discovery",
                 f"Collect TCP service inventory evidence for {target.handle}.",
-                report,
-                session_id,
+                confidence=0.93,
+                subphase="service_inventory",
+                transition_reason="Fresh service inventory is missing for the active target generation.",
             )
-
         if self._should_plan_dns_enumeration(target):
-            self._plan_if_missing(
-                target,
+            add(
                 TaskKind.DNS_ENUMERATION,
                 "Run bounded DNS enumeration",
                 f"Collect DNS records and zone-transfer evidence for {target.handle}.",
-                report,
-                session_id,
+                confidence=0.88,
+                subphase="dns_inventory",
+                transition_reason="Port and host evidence indicates DNS is present and unresolved for the current generation.",
+                prerequisite="current-generation service discovery",
             )
-
         if self._should_plan_web_content_discovery(target):
-            self._plan_if_missing(
-                target,
+            add(
                 TaskKind.WEB_CONTENT_DISCOVERY,
                 "Run bounded web content discovery",
                 f"Discover HTTP paths and virtual directories for {target.handle}.",
-                report,
-                session_id,
+                confidence=0.87,
+                subphase="web_surface",
+                transition_reason="HTTP evidence exists without bounded content-discovery coverage for the current generation.",
+                prerequisite="current-generation HTTP probe evidence",
             )
-
         if self._should_plan_ad_enumeration(target):
-            self._plan_if_missing(
-                target,
+            add(
                 TaskKind.AD_ENUMERATION,
                 "Run bounded AD enumeration",
                 f"Collect anonymous SMB/LDAP/RPC inventory for {target.handle}.",
-                report,
-                session_id,
+                confidence=0.89,
+                subphase="ad_inventory",
+                transition_reason="Current-generation service evidence exposes AD-adjacent ports without corresponding AD inventory.",
+                prerequisite="current-generation service discovery",
             )
-
         if self._should_plan_kerberos_user_discovery(target):
-            self._plan_if_missing(
-                target,
+            add(
                 TaskKind.KERBEROS_USER_DISCOVERY,
                 "Run Kerberos/LDAP user discovery",
                 f"Discover candidate AD/Kerberos principals for {target.handle}.",
-                report,
-                session_id,
+                confidence=0.83,
+                subphase="principal_discovery",
+                transition_reason="AD evidence exists, but current-generation principal discovery has not run yet.",
+                prerequisite="current-generation AD enumeration",
             )
-
-        self._plan_analysis_if_stale(
-            target,
-            report,
-            session_id,
-        )
-
+        if self._analysis_is_stale(target):
+            add(
+                TaskKind.ANALYZE_EVIDENCE,
+                "Analyze accumulated evidence",
+                f"Cluster recon evidence and generate bounded hypotheses for {target.handle}.",
+                confidence=0.9,
+                subphase="evidence_review",
+                transition_reason="The current evidence signature has not been analyzed yet.",
+                prerequisite="current-generation recon evidence",
+            )
         if self._should_plan_exploit_research(target):
-            self._plan_if_missing(
-                target,
+            add(
                 TaskKind.EXPLOIT_RESEARCH,
                 "Research relevant public PoCs",
                 f"Search local exploit references for evidence-backed services on {target.handle}.",
-                report,
-                session_id,
+                confidence=0.81,
+                subphase="exploit_research",
+                transition_reason="Current-generation recon evidence supports public exploit research triage.",
+                prerequisite="current-generation service or AD evidence",
             )
-
         if self._should_plan_poc_applicability_validation(target):
-            self._plan_if_missing(
-                target,
+            add(
                 TaskKind.POC_APPLICABILITY_VALIDATION,
                 "Validate public PoC applicability",
                 (
                     "Classify retained public exploit references against exact service/version evidence, "
                     f"foothold prerequisites, and policy gates for {target.handle}."
                 ),
-                report,
-                session_id,
+                confidence=0.79,
+                subphase="poc_gating",
+                transition_reason="Retained public PoC research exists, but deterministic applicability gating has not run.",
+                prerequisite="current-generation exploit research",
             )
-
         if self._should_plan_kerberos_attack_check(target):
-            self._plan_if_missing(
-                target,
+            add(
                 TaskKind.KERBEROS_ATTACK_CHECK,
                 "Run Kerberos attack-path checks",
                 f"Check AS-REP/Kerberoast applicability for discovered principals on {target.handle}.",
-                report,
-                session_id,
+                confidence=0.76,
+                subphase="kerberos_attack_path",
+                transition_reason="Current-generation principal evidence supports bounded Kerberos attack-path checks.",
+                prerequisite="current-generation principal discovery",
             )
-
         if self._should_plan_credentialed_access_check(target):
-            self._plan_if_missing(
-                target,
+            add(
                 TaskKind.CREDENTIALED_ACCESS_CHECK,
                 "Verify credentialed SMB/WinRM access",
                 f"Use configured lab credentials to verify access and collect flags for {target.handle}.",
-                report,
-                session_id,
+                confidence=0.75,
+                subphase="credentialed_verification",
+                transition_reason="Operator-configured lab credentials are present and remote-admin surfaces are in scope.",
+                prerequisite="configured lab credentials and current-generation remote-admin evidence",
             )
-
-        verified_interests = self.store.verified_interest_count(target.id)
+        verified_interests = self._verified_interest_count_current_generation(target)
         if verified_interests >= 1:
-            self._plan_if_missing(
-                target,
+            add(
                 TaskKind.VERIFY_HYPOTHESIS,
                 "Verify prioritized hypothesis",
                 f"Run bounded verification for a high-value hypothesis on {target.handle}.",
-                report,
-                session_id,
+                confidence=0.71,
+                subphase="bounded_verification",
+                transition_reason="At least one current-generation verified interest exists and deserves bounded verification planning.",
+                prerequisite="current-generation verified interest",
             )
-
         if verified_interests >= 2:
-            self._plan_if_missing(
-                target,
+            add(
                 TaskKind.CHAIN_CANDIDATES,
                 "Review exploit-chain candidates",
                 f"Review related verified interests for possible exploit chains on {target.handle}.",
-                report,
-                session_id,
+                confidence=0.67,
+                subphase="chain_review",
+                transition_reason="Multiple current-generation verified interests may support exploit-chain review.",
+                prerequisite="two or more current-generation verified interests",
             )
-
         if self._memory_service().needs_compaction(target.id):
-            self._plan_if_missing(
-                target,
+            add(
                 TaskKind.COMPACT_MEMORY,
                 "Compact notes and memory",
                 f"Promote durable memory and compact noisy context for {target.handle}.",
-                report,
-            session_id,
+                confidence=0.64,
+                subphase="memory_maintenance",
+                transition_reason="Memory service indicates the current target context needs compaction.",
+            )
+        return actions
+
+    def _methodology_blockers(self, target: Target, evidence) -> list[str]:
+        blockers: list[str] = []
+        capabilities = {
+            tag.lower()
+            for primitive in self.store.list_primitives()
+            for tag in [primitive.name, *primitive.capability_tags]
+        }
+        has_remote_admin_surface = self._target_has_remote_admin_surface(evidence)
+        has_research_candidates = any(
+            item.metadata.get("kind") == "exploit_research" and int(item.metadata.get("match_count", 0) or 0) > 0
+            for item in evidence
         )
+        if has_research_candidates and not self._poc_adaptation_available(capabilities):
+            blockers.append(
+                "Retained public PoC candidates exist, but no gated PoC applicability/adaptation primitive is registered."
+            )
+        if has_remote_admin_surface and not self._lab_credentials_configured():
+            blockers.append("Lab username/password are not configured, so credentialed SMB/WinRM verification cannot run.")
+        if target.metadata.get("active_ip"):
+            active_generation = self._target_active_generation(target)
+            has_current_recon = any(
+                item.metadata.get("kind") == "tcp_service_discovery"
+                and str(item.metadata.get("active_ip_generation", "")) == active_generation
+                for item in evidence
+            )
+            if active_generation and not has_current_recon:
+                blockers.append(
+                    f"Active IP changed to {target.metadata['active_ip']}, but fresh current-generation service discovery has not completed."
+                )
+        return blockers
+
+    def _persist_target_methodology_state(
+        self,
+        target: Target,
+        state: TargetMethodologyState,
+        report: OrchestrationReport,
+    ) -> None:
+        previous_state = target.metadata.get("methodology_state", {})
+        previous_payload = previous_state if isinstance(previous_state, dict) else {}
+        payload = state.as_payload()
+        payload["planner_version"] = 2
+        payload["fingerprint"] = json.dumps(
+            {
+                "phase": payload["phase"],
+                "subphase": payload["subphase"],
+                "completion": payload["completion"],
+                "candidate_actions": payload["candidate_actions"],
+                "blockers": payload["blockers"],
+                "no_progress_reason": payload["no_progress_reason"],
+            },
+            sort_keys=True,
+        )
+        target.metadata["methodology_state"] = payload
+        target.updated_at = utc_now()
+        self.store.insert_target(target)
+        if previous_payload.get("fingerprint") != payload["fingerprint"]:
+            event = EventRecord(
+                type=EventType.TASK_PLANNED,
+                summary=f"Methodology state updated: {state.phase.value}/{state.subphase}",
+                target_id=target.id,
+                metadata={
+                    "phase": state.phase.value,
+                    "subphase": state.subphase,
+                    "completion": state.completion,
+                    "candidate_actions": len(state.candidate_actions),
+                },
+            )
+            self.store.insert_event(event)
+            report.events.append(event)
+
+    def _record_no_progress_state(
+        self,
+        target: Target,
+        state: TargetMethodologyState,
+        report: OrchestrationReport,
+    ) -> None:
+        current_state = target.metadata.get("methodology_state", {})
+        if not isinstance(current_state, dict):
+            return
+        no_progress_key = json.dumps(
+            {
+                "reason": state.no_progress_reason,
+                "next_unblock_action": state.next_unblock_action,
+                "phase": state.phase.value,
+                "subphase": state.subphase,
+            },
+            sort_keys=True,
+        )
+        if current_state.get("last_no_progress_key") == no_progress_key:
+            return
+        current_state["last_no_progress_key"] = no_progress_key
+        target.metadata["methodology_state"] = current_state
+        target.updated_at = utc_now()
+        self.store.insert_target(target)
+        event = EventRecord(
+            type=EventType.NO_PROGRESS,
+            summary=state.no_progress_reason or "No admissible methodology transition is currently available.",
+            target_id=target.id,
+            metadata={
+                "phase": state.phase.value,
+                "subphase": state.subphase,
+                "next_unblock_action": state.next_unblock_action,
+                "blockers": list(state.blockers),
+            },
+        )
+        self.store.insert_event(event)
+        report.events.append(event)
+
+    def _target_has_current_generation_evidence(self, target: Target) -> bool:
+        return bool(self._current_generation_evidence(target, limit=200))
+
+    def _current_generation_evidence(self, target: Target, *, limit: int = 200):
+        return [
+            item
+            for item in self.store.list_evidence(target_id=target.id, limit=limit)
+            if self._evidence_matches_active_generation(target, item)
+        ]
+
+    def _current_generation_tasks(self, target: Target, *, limit: int = 500) -> list[Task]:
+        active_generation = self._target_active_generation(target)
+        tasks = self.store.list_tasks(target_id=target.id, limit=limit)
+        if active_generation is None:
+            return tasks
+        return [
+            task
+            for task in tasks
+            if task.metadata.get("active_ip_generation") is None
+            or str(task.metadata.get("active_ip_generation", "")) == active_generation
+        ]
+
+    def _verified_interest_count_current_generation(self, target: Target) -> int:
+        return len(
+            [
+                item
+                for item in self.store.list_interests(target_id=target.id, limit=200)
+                if item.status.value == "verified" and self._record_matches_active_generation(target, item)
+            ]
+        )
+
+    def _analysis_is_stale(self, target: Target) -> bool:
+        signature = self._target_analysis_signature(target)
+        if self.store.task_exists(
+            target.id,
+            TaskKind.ANALYZE_EVIDENCE,
+            statuses=(
+                TaskStatus.PENDING,
+                TaskStatus.RUNNING,
+                TaskStatus.WAITING,
+                TaskStatus.NEEDS_APPROVAL,
+            ),
+        ):
+            return False
+        for task in self.store.list_tasks(target_id=target.id, limit=100):
+            if task.kind != TaskKind.ANALYZE_EVIDENCE or task.status != TaskStatus.SUCCEEDED:
+                continue
+            if task.metadata.get("analysis_signature") == signature:
+                return False
+        return True
+
+    def _build_analysis_task_if_stale(self, target: Target, session_id: str | None) -> Task | None:
+        if not self._analysis_is_stale(target):
+            return None
+        task = self._build_task(
+            target.id,
+            TaskKind.ANALYZE_EVIDENCE,
+            "Analyze accumulated evidence",
+            f"Cluster recon evidence and generate bounded hypotheses for {target.handle}.",
+            session_id=session_id,
+        )
+        task.metadata["analysis_signature"] = self._target_analysis_signature(target)
+        active_generation = self._target_active_generation(target)
+        if active_generation is not None:
+            task.metadata["active_ip_generation"] = active_generation
+            task.metadata["active_ip"] = target.metadata.get("active_ip")
+        return task
+
+    def _lab_credentials_configured(self) -> bool:
+        if not self.credentials_status_loader:
+            return False
+        status = self.credentials_status_loader()
+        services = status.get("services", {}) if isinstance(status, dict) else {}
+        lab = services.get("lab", {}) if isinstance(services, dict) else {}
+        if not isinstance(lab, dict):
+            return False
+        username = lab.get("username", {})
+        password = lab.get("password", {})
+        return (
+            isinstance(username, dict)
+            and isinstance(password, dict)
+            and bool(username.get("configured"))
+            and bool(password.get("configured"))
+        )
+
+    def _target_has_remote_admin_surface(self, evidence) -> bool:
+        remote_ports = {445, 5985, 5986, 3389}
+        for item in evidence:
+            for service in item.metadata.get("open_services", []):
+                if isinstance(service, dict) and int(service.get("port", 0) or 0) in remote_ports:
+                    return True
+        return False
+
+    def _poc_adaptation_available(self, capabilities: set[str]) -> bool:
+        return any(
+            capability in capabilities
+            for capability in {
+                "poc-applicability-validation",
+                "poc-adaptation",
+                "exploit-safety-review",
+            }
+        )
+
+    def _record_matches_active_generation(self, target: Target, record: object) -> bool:
+        active_generation = self._target_active_generation(target)
+        if active_generation is None:
+            return True
+        metadata = getattr(record, "metadata", {})
+        if not isinstance(metadata, dict):
+            return False
+        return str(metadata.get("active_ip_generation", "")) == active_generation
+
+    def _evaluate_ai_proposal_admission(self, tasks: list[Task]) -> dict[str, list[dict[str, object]]]:
+        available_primitives = {primitive.name.lower() for primitive in self.store.list_primitives()}
+        available_capabilities = {
+            tag.lower()
+            for primitive in self.store.list_primitives()
+            for tag in primitive.capability_tags
+        }
+        accepted: list[dict[str, object]] = []
+        rejected: list[dict[str, object]] = []
+        for task in tasks:
+            proposal = task.metadata.get("ai_proposal")
+            if not isinstance(proposal, dict):
+                continue
+            for action in proposal.get("candidate_actions", [])[:6]:
+                if not isinstance(action, dict):
+                    continue
+                title = str(action.get("title") or "untitled action").strip()
+                primitive_hint = str(action.get("primitive_hint") or "").strip().lower()
+                if primitive_hint and (primitive_hint in available_primitives or primitive_hint in available_capabilities):
+                    accepted.append(
+                        {
+                            "task_id": task.id,
+                            "title": title,
+                            "primitive_hint": primitive_hint,
+                        }
+                    )
+                else:
+                    rejected.append(
+                        {
+                            "task_id": task.id,
+                            "title": title,
+                            "primitive_hint": primitive_hint,
+                            "reason": "missing primitive mapping" if primitive_hint else "no primitive hint supplied",
+                        }
+                    )
+        return {"accepted": accepted[:8], "rejected": rejected[:8]}
 
     def _should_plan_service_discovery(self, target: Target) -> bool:
         if target.profile.value != "hack_the_box" and not target.metadata.get("allow_service_discovery"):
@@ -774,6 +1198,8 @@ class WorkflowOrchestrator:
                         "runner_id": dispatch.runner_id,
                         "offer_id": dispatch.offer_id,
                         "offer_count": dispatch.offer_count,
+                        "worker_contract": dispatch.worker_contract,
+                        "suitability_score": dispatch.suitability_score,
                     }
                 )
                 self.store.insert_task_run(run)
@@ -796,8 +1222,12 @@ class WorkflowOrchestrator:
                     "runner_id": dispatch.runner_id,
                     "offer_id": dispatch.offer_id,
                     "offer_count": dispatch.offer_count,
+                    "worker_contract": dispatch.worker_contract,
+                    "suitability_score": dispatch.suitability_score,
                 }
             )
+            if dispatch.worker_contract:
+                task.metadata["worker_contract"] = dispatch.worker_contract
             self.store.insert_task_run(run)
             self.store.insert_event(
                 EventRecord(

@@ -1151,9 +1151,7 @@ class PrimitiveExecutor:
                 "not imply any PoC executed."
             ),
         )
-        if ai_review:
-            result.notes.append(ai_review["note"])
-            result.traces.append(ai_review["trace"])
+        self._apply_ai_review(result, task, ai_review)
         if research["matches"]:
             summary = self._build_exploit_research_notification(target.handle, research)
             result.interests.append(
@@ -1216,7 +1214,7 @@ class PrimitiveExecutor:
             result.error = "target not found"
             return result
 
-        evidence = self.store.list_evidence(target_id=target.id, limit=100)
+        evidence = self._task_generation_records(task, target, self.store.list_evidence(target_id=target.id, limit=100))
         research_items = [item for item in evidence if item.metadata.get("kind") == "exploit_research"]
         service_items = [
             item
@@ -1303,9 +1301,7 @@ class PrimitiveExecutor:
                 "finding verified."
             ),
         )
-        if ai_review:
-            result.notes.append(ai_review["note"])
-            result.traces.append(ai_review["trace"])
+        self._apply_ai_review(result, task, ai_review)
         if ready_count:
             result.interests.append(
                 Interest(
@@ -1340,7 +1336,7 @@ class PrimitiveExecutor:
             result.error = "target not found"
             return result
 
-        evidence = self.store.list_evidence(target_id=target.id, limit=24)
+        evidence = self._task_generation_records(task, target, self.store.list_evidence(target_id=target.id, limit=24))
         auth_refs = [
             item.id
             for item in evidence
@@ -1394,12 +1390,7 @@ class PrimitiveExecutor:
                 "triage, credential/scope prerequisites, and exact missing primitives."
             ),
         )
-        if ai_review:
-            result.notes.append(ai_review["note"])
-            result.traces.append(ai_review["trace"])
-            task.metadata["ai_review_attempted"] = True
-            task.metadata["ai_model"] = ai_review["metadata"].get("model")
-            task.metadata["ai_processor"] = ai_review["metadata"].get("processor")
+        self._apply_ai_review(result, task, ai_review)
         if auth_refs:
             result.interests.append(
                 Interest(
@@ -1422,7 +1413,7 @@ class PrimitiveExecutor:
             result.error = "target not found"
             return result
 
-        interests = self.store.list_interests(target_id=target.id, limit=8)
+        interests = self._task_generation_records(task, target, self.store.list_interests(target_id=target.id, limit=8))
         result.summary = "verification planning complete; execution remains primitive-gated"
         result.notes.append(
             Note(
@@ -1449,9 +1440,7 @@ class PrimitiveExecutor:
                 "and stop conditions. Do not write exploit code here and do not mark anything verified."
             ),
         )
-        if ai_review:
-            result.notes.append(ai_review["note"])
-            result.traces.append(ai_review["trace"])
+        self._apply_ai_review(result, task, ai_review)
         return result
 
     def _handle_chain_candidates(self, task: Task, context: ContextSlice) -> TaskExecutionResult:
@@ -1461,7 +1450,7 @@ class PrimitiveExecutor:
             result.success = False
             result.error = "target not found"
             return result
-        interests = self.store.list_interests(target_id=target.id, limit=12)
+        interests = self._task_generation_records(task, target, self.store.list_interests(target_id=target.id, limit=12))
         verified = [item for item in interests if item.status == InterestStatus.VERIFIED]
         if len(verified) < 2:
             result.success = False
@@ -1489,25 +1478,24 @@ class PrimitiveExecutor:
                 "to reject weak chains. Do not mark a chain valid without primitive-backed verification."
             ),
         )
-        if ai_review:
-            result.notes.append(ai_review["note"])
-            result.traces.append(ai_review["trace"])
+        self._apply_ai_review(result, task, ai_review)
         return result
 
     def _handle_verify_agent_behavior(self, task: Task, context: ContextSlice) -> TaskExecutionResult:
         result = TaskExecutionResult(summary="behavior verification complete")
         target = self.store.get_target(task.target_id)
         traces = self.store.list_traces(task_id=task.id, limit=12)
-        result.notes.append(
-            Note(
-                target_id=target.id if target else self.store.list_targets()[0].id,
-                task_id=task.id,
-                title="Behavior verification note",
-                body=f"Verifier reviewed {len(traces)} trace records. No unsupported durable claim promotion occurred in this branch.",
-                confidence=0.82,
-                freshness=0.95,
+        if target is not None:
+            result.notes.append(
+                Note(
+                    target_id=target.id,
+                    task_id=task.id,
+                    title="Behavior verification note",
+                    body=f"Verifier reviewed {len(traces)} trace records. No unsupported durable claim promotion occurred in this branch.",
+                    confidence=0.82,
+                    freshness=0.95,
+                )
             )
-        )
         ai_review = self._run_ai_review(
             task,
             target_id=target.id if target else None,
@@ -1519,9 +1507,7 @@ class PrimitiveExecutor:
                 "control-plane corrections."
             ),
         )
-        if ai_review:
-            result.notes.append(ai_review["note"])
-            result.traces.append(ai_review["trace"])
+        self._apply_ai_review(result, task, ai_review)
         return result
 
     def _handle_compact_memory(self, task: Task, context: ContextSlice) -> TaskExecutionResult:
@@ -1552,9 +1538,7 @@ class PrimitiveExecutor:
                 "that should not guide next actions."
             ),
         )
-        if ai_review:
-            result.notes.append(ai_review["note"])
-            result.traces.append(ai_review["trace"])
+        self._apply_ai_review(result, task, ai_review)
         result.sync_jobs.append(
             ExternalSyncJob(
                 kind=ExternalSyncKind.NOTION,
@@ -1646,6 +1630,29 @@ class PrimitiveExecutor:
             error=f"no production execution adapter is registered for {task.kind.value}",
         )
 
+    def _apply_ai_review(
+        self,
+        result: TaskExecutionResult,
+        task: Task,
+        ai_review: dict[str, object] | None,
+    ) -> None:
+        if not ai_review:
+            task.metadata["ai_review_status"] = "unavailable"
+            return
+        note = ai_review.get("note")
+        trace = ai_review.get("trace")
+        proposal = ai_review.get("proposal")
+        if isinstance(note, Note):
+            result.notes.append(note)
+        if isinstance(trace, AgentTrace):
+            result.traces.append(trace)
+        if isinstance(proposal, dict):
+            task.metadata["ai_proposal"] = proposal
+        task.metadata["ai_review_status"] = str(ai_review.get("status") or "completed")
+        task.metadata["ai_review_attempted"] = True
+        task.metadata["ai_model"] = ai_review.get("metadata", {}).get("model")
+        task.metadata["ai_processor"] = ai_review.get("metadata", {}).get("processor")
+
     def _run_ai_review(
         self,
         task: Task,
@@ -1657,26 +1664,36 @@ class PrimitiveExecutor:
     ) -> dict[str, object] | None:
         if not self.ai_generate:
             return None
-        note_target_id = target_id or self._fallback_target_id()
-        if not note_target_id:
-            return None
         system = (
             "You are a Primordial autonomous worker inside a policy-gated authorized security platform. "
             "Use only the supplied runtime snapshot. Be specific, evidence-backed, and operational. "
             "Never propose DoS, flooding, destructive actions, credential spraying, or unbounded brute force. "
-            "If execution needs a missing primitive, state that as a capability gap instead of pretending it ran."
+            "If execution needs a missing primitive, state that as a capability gap instead of pretending it ran. "
+            "Return a single JSON object only."
         )
         prompt = (
             f"Task: {task.kind.value}\n"
             f"Task title: {task.title}\n"
             f"Instruction: {instruction}\n\n"
             f"Runtime snapshot:\n{snapshot}\n\n"
-            "Return concise sections: Facts, Current Hypotheses, Safe Next Actions, Blockers, Capability Gaps."
+            "Return JSON with keys:\n"
+            "- summary: short operational summary\n"
+            "- facts: list of concise evidence-backed facts\n"
+            "- candidate_actions: list of objects with title, rationale, confidence, primitive_hint\n"
+            "- blocked_reasons: list of concise blockers\n"
+            "- required_primitives: list of missing or required primitive names\n"
+            "- evidence_refs: list of evidence IDs if visible in the snapshot\n"
+            "- confidence: float between 0 and 1\n"
+            "- stop_conditions: list of explicit stop conditions or guardrails\n"
+            "- capability_gaps: list of concrete missing capabilities\n"
+            "Do not wrap the JSON in markdown fences."
         )
         response = self.ai_generate(task, system, prompt, 0.2)
         if not response or not response.get("text"):
             return None
         text = str(response["text"]).strip()
+        proposal = self._parse_ai_review_json(text)
+        status = "completed" if proposal is not None else "parse_failed"
         metadata = {
             "kind": "worker_ai_review",
             "task_kind": task.kind.value,
@@ -1684,33 +1701,51 @@ class PrimitiveExecutor:
             "elapsed_seconds": response.get("elapsed_seconds"),
             "num_gpu": response.get("num_gpu"),
             "processor": response.get("processor"),
+            "structured_output": proposal is not None,
+            "status": status,
         }
-        note = Note(
-            target_id=note_target_id,
-            task_id=task.id,
-            title=title,
-            body=text,
-            confidence=0.72,
-            freshness=0.95,
-            metadata=metadata,
-        )
+        note = None
+        if target_id:
+            note = Note(
+                target_id=target_id,
+                task_id=task.id,
+                title=title,
+                body=self._render_ai_review_note(proposal, text),
+                confidence=0.72,
+                freshness=0.95,
+                metadata={**metadata, "proposal": proposal or {}},
+            )
         trace = AgentTrace(
             task_id=task.id,
             role=task.role,
             status="ai_review_completed",
             summary=f"{title} generated by {response.get('model') or task.provider_model or 'local model'}",
-            metadata={**metadata, "summary_key": f"{task.kind.value}:ai_review"},
+            metadata={**metadata, "summary_key": f"{task.kind.value}:ai_review", "proposal": proposal or {}},
         )
-        return {"note": note, "trace": trace, "metadata": metadata}
+        return {"note": note, "trace": trace, "metadata": metadata, "proposal": proposal, "status": status}
 
     def _build_ai_target_snapshot(self, target_id: str) -> str:
         target = self.store.get_target(target_id)
-        evidence = self.store.list_evidence(target_id=target_id, limit=18)
-        interests = self.store.list_interests(target_id=target_id, limit=12)
-        findings = self.store.list_findings(target_id=target_id, limit=8)
-        tasks = self.store.list_tasks(target_id=target_id, limit=20)
+        active_generation = self._target_active_generation(target)
+        evidence = self._records_for_generation(
+            self.store.list_evidence(target_id=target_id, limit=18),
+            active_generation,
+        )
+        interests = self._records_for_generation(
+            self.store.list_interests(target_id=target_id, limit=12),
+            active_generation,
+        )
+        findings = self._records_for_generation(
+            self.store.list_findings(target_id=target_id, limit=8),
+            active_generation,
+        )
+        tasks = self._task_records_for_generation(
+            self.store.list_tasks(target_id=target_id, limit=20),
+            active_generation,
+        )
         lines = [
             f"Target: {target.handle if target else target_id}",
+            f"Active generation: {active_generation or 'none'}",
             "Evidence:",
         ]
         lines.extend(
@@ -1749,6 +1784,131 @@ class PrimitiveExecutor:
     def _fallback_target_id(self) -> str | None:
         targets = self.store.list_targets()
         return targets[0].id if targets else None
+
+    def _parse_ai_review_json(self, text: str) -> dict[str, object] | None:
+        candidate = text.strip()
+        fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", candidate, flags=re.DOTALL)
+        if fenced:
+            candidate = fenced.group(1)
+        elif "{" in candidate and "}" in candidate:
+            candidate = candidate[candidate.find("{") : candidate.rfind("}") + 1]
+        try:
+            payload = json.loads(candidate)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        return {
+            "summary": str(payload.get("summary", "")).strip(),
+            "facts": self._normalize_string_list(payload.get("facts")),
+            "candidate_actions": self._normalize_candidate_actions(payload.get("candidate_actions")),
+            "blocked_reasons": self._normalize_string_list(payload.get("blocked_reasons")),
+            "required_primitives": self._normalize_string_list(payload.get("required_primitives")),
+            "evidence_refs": self._normalize_string_list(payload.get("evidence_refs")),
+            "confidence": self._normalize_confidence(payload.get("confidence")),
+            "stop_conditions": self._normalize_string_list(payload.get("stop_conditions")),
+            "capability_gaps": self._normalize_string_list(payload.get("capability_gaps")),
+        }
+
+    def _render_ai_review_note(self, proposal: dict[str, object] | None, raw_text: str) -> str:
+        if proposal is None:
+            return raw_text
+        lines = ["## Summary", str(proposal.get("summary") or "No summary provided.")]
+        facts = proposal.get("facts", [])
+        if isinstance(facts, list) and facts:
+            lines.append("\n## Facts")
+            lines.extend(f"- {item}" for item in facts[:8])
+        candidate_actions = proposal.get("candidate_actions", [])
+        if isinstance(candidate_actions, list) and candidate_actions:
+            lines.append("\n## Candidate Actions")
+            for item in candidate_actions[:6]:
+                if not isinstance(item, dict):
+                    continue
+                title = str(item.get("title") or "untitled action")
+                rationale = str(item.get("rationale") or "")
+                confidence = item.get("confidence")
+                primitive = str(item.get("primitive_hint") or "")
+                suffix = []
+                if confidence not in {None, ""}:
+                    suffix.append(f"confidence={confidence}")
+                if primitive:
+                    suffix.append(f"primitive={primitive}")
+                meta = f" ({', '.join(suffix)})" if suffix else ""
+                lines.append(f"- {title}{meta}")
+                if rationale:
+                    lines.append(f"  {rationale}")
+        blocked = proposal.get("blocked_reasons", [])
+        if isinstance(blocked, list) and blocked:
+            lines.append("\n## Blockers")
+            lines.extend(f"- {item}" for item in blocked[:8])
+        gaps = proposal.get("capability_gaps", [])
+        if isinstance(gaps, list) and gaps:
+            lines.append("\n## Capability Gaps")
+            lines.extend(f"- {item}" for item in gaps[:8])
+        stop_conditions = proposal.get("stop_conditions", [])
+        if isinstance(stop_conditions, list) and stop_conditions:
+            lines.append("\n## Stop Conditions")
+            lines.extend(f"- {item}" for item in stop_conditions[:8])
+        return "\n".join(lines)
+
+    def _normalize_string_list(self, value: object) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        return [str(item).strip() for item in value if str(item).strip()][:12]
+
+    def _normalize_candidate_actions(self, value: object) -> list[dict[str, object]]:
+        if not isinstance(value, list):
+            return []
+        actions: list[dict[str, object]] = []
+        for item in value[:8]:
+            if isinstance(item, dict):
+                actions.append(
+                    {
+                        "title": str(item.get("title", "")).strip(),
+                        "rationale": str(item.get("rationale", "")).strip(),
+                        "confidence": self._normalize_confidence(item.get("confidence")),
+                        "primitive_hint": str(item.get("primitive_hint", "")).strip(),
+                    }
+                )
+            elif str(item).strip():
+                actions.append({"title": str(item).strip(), "rationale": "", "confidence": None, "primitive_hint": ""})
+        return actions
+
+    def _normalize_confidence(self, value: object) -> float | None:
+        try:
+            confidence = float(value)
+        except (TypeError, ValueError):
+            return None
+        return max(0.0, min(1.0, confidence))
+
+    def _target_active_generation(self, target) -> str | None:
+        if target is None or target.metadata.get("active_ip_generation") is None:
+            return None
+        return str(target.metadata.get("active_ip_generation"))
+
+    def _records_for_generation(self, records: list[object], active_generation: str | None) -> list[object]:
+        if active_generation is None:
+            return records
+        selected = []
+        for record in records:
+            metadata = getattr(record, "metadata", {})
+            if isinstance(metadata, dict) and str(metadata.get("active_ip_generation", "")) == active_generation:
+                selected.append(record)
+        return selected
+
+    def _task_records_for_generation(self, tasks: list[Task], active_generation: str | None) -> list[Task]:
+        if active_generation is None:
+            return tasks
+        return [
+            task
+            for task in tasks
+            if task.metadata.get("active_ip_generation") is None
+            or str(task.metadata.get("active_ip_generation", "")) == active_generation
+        ]
+
+    def _task_generation_records(self, task: Task, target, records: list[object]) -> list[object]:
+        generation = str(task.metadata.get("active_ip_generation", "")).strip() or self._target_active_generation(target)
+        return self._records_for_generation(records, generation)
 
     def _write_artifact(self, task: Task, target_id: str, prefix: str, payload: dict[str, object]) -> ArtifactRecord:
         task_dir = self.config.artifacts_dir / (task.id or "task")
@@ -2490,8 +2650,11 @@ class PrimitiveExecutor:
         return rendered if len(rendered) <= limit else rendered[:limit] + "\n...TRUNCATED..."
 
     def _build_searchsploit_queries(self, target_id: str) -> list[str]:
-        evidence = self.store.list_evidence(target_id=target_id, limit=200)
         target = self.store.get_target(target_id)
+        evidence = self._records_for_generation(
+            self.store.list_evidence(target_id=target_id, limit=200),
+            self._target_active_generation(target),
+        )
         allow_lab_fallbacks = bool(target and target.profile.value == "hack_the_box")
         queries: list[str] = []
         fallbacks: list[str] = []
@@ -2924,8 +3087,15 @@ class PrimitiveExecutor:
 
     def _poc_has_foothold(self, evidence: list[EvidenceRecord]) -> bool:
         for item in evidence:
-            text = f"{item.title} {item.summary} {json.dumps(item.metadata)}".lower()
-            if any(token in text for token in ("credentialed_access", "credentialed shell", "winrm session", "smb session")):
+            if item.metadata.get("kind") != "credentialed_access_check":
+                continue
+            if item.verification_status != VerificationStatus.VERIFIED:
+                continue
+            metadata = item.metadata if isinstance(item.metadata, dict) else {}
+            auth_results = metadata.get("auth_results", [])
+            if isinstance(auth_results, list) and any(
+                isinstance(result, dict) and result.get("valid") is True for result in auth_results
+            ):
                 return True
         return False
 

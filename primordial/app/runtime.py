@@ -11,12 +11,14 @@ from primordial.adapters.notion import NotionSyncService
 from primordial.core.config import AppConfig
 from primordial.core.credentials import CredentialStore
 from primordial.core.domain.enums import (
+    AgentRole,
     EvidenceType,
     EventType,
     InterestStatus,
     MethodologyName,
     ProviderRoute,
     ScopeProfile,
+    TaskKind,
     TaskRunStatus,
     TaskStatus,
     VerificationStatus,
@@ -51,7 +53,7 @@ from primordial.core.providers.scheduler import ModelScheduler
 from primordial.core.skills import RuntimeSkillRegistry
 from primordial.core.storage.runtime import RuntimeStore
 from primordial.core.validation import build_default_validation_registry
-from primordial.core.workers import InProcessWorkerRunner, WorkerBroker
+from primordial.core.workers import InProcessWorkerRunner, WorkerBroker, WorkerContract
 from primordial.modes.security.module import SecurityModeServices, build_security_mode_services
 
 
@@ -100,7 +102,7 @@ class PrimordialRuntime:
         self.event_bus = EventBus()
         self.modules = ModuleRegistry(self.event_bus)
         self.crash_journal = CrashJournal(config.crash_journal_path)
-        self.policy = PolicyEngine(config.autonomy)
+        self.policy = PolicyEngine(config.autonomy, credentials_status_loader=self.credentials_payload)
         self.router = ProviderRouter(config.topology)
         self.ollama = OllamaClient()
         self.model_scheduler = ModelScheduler(config.autonomy)
@@ -644,6 +646,7 @@ class PrimordialRuntime:
                 "agent": task.role.value,
                 "route": task.provider_route.value if task.provider_route else None,
                 "model": task.provider_model,
+                "worker_contract": task.metadata.get("worker_contract"),
                 "target": target_label(task.target_id),
                 "updated_at": task.updated_at.isoformat(),
             }
@@ -661,6 +664,8 @@ class PrimordialRuntime:
                 "agent": run.role.value,
                 "route": run.provider_route.value,
                 "model": run.model_name,
+                "worker_contract": run.metadata.get("worker_contract"),
+                "suitability_score": run.metadata.get("suitability_score"),
                 "target": target_label(task.target_id if task else None),
                 "started_at": run.started_at.isoformat(),
                 "heartbeat_at": run.heartbeat_at.isoformat() if run.heartbeat_at else None,
@@ -674,6 +679,23 @@ class PrimordialRuntime:
         recent_items = [run_payload(run) for run in recent_runs]
         mode = self.execution_mode_payload()
         blockers = self._work_status_blockers()
+        target_states = []
+        for target in targets.values():
+            state = target.metadata.get("methodology_state", {})
+            if not isinstance(state, dict):
+                continue
+            target_states.append(
+                {
+                    "target": target.handle,
+                    "phase": state.get("phase"),
+                    "subphase": state.get("subphase"),
+                    "completion": state.get("completion"),
+                    "transition_reason": state.get("transition_reason"),
+                    "next_unblock_action": state.get("next_unblock_action"),
+                    "no_progress_reason": state.get("no_progress_reason"),
+                    "candidate_actions": state.get("candidate_actions", []),
+                }
+            )
 
         if active_items:
             summary = f"Working on {len(active_items)} active item(s)."
@@ -681,6 +703,8 @@ class PrimordialRuntime:
             summary = f"Idle between executions; {len(queued_items)} task(s) are queued."
         elif waiting_items:
             summary = f"Blocked or waiting; {len(waiting_items)} task(s) need approval or resume."
+        elif target_states and target_states[0].get("no_progress_reason"):
+            summary = "Idle/stalled: " + str(target_states[0]["no_progress_reason"])
         elif blockers:
             summary = "Idle/stalled: " + blockers[0]["summary"]
         elif mode["mode"] == "continuous":
@@ -709,6 +733,7 @@ class PrimordialRuntime:
             "waiting": waiting_items,
             "recent": recent_items,
             "blockers": blockers,
+            "target_states": target_states,
         }
 
     def _work_status_blockers(self) -> list[dict[str, object]]:
@@ -2417,15 +2442,65 @@ class PrimordialRuntime:
     def _register_worker_runners(self) -> None:
         self.worker_broker.register_runner(
             InProcessWorkerRunner(
-                runner_id="security-hot-runner",
+                runner_id="security-analysis-runner",
                 lane="hot-path",
                 supported_routes={
                     ProviderRoute.LOCAL_FAST,
-                    ProviderRoute.LOCAL_DEEP,
-                    ProviderRoute.LOCAL_CODE,
                 },
                 executor_loader=lambda: self.security.primitive_executor,
                 max_concurrency=self.config.autonomy.hot_path_concurrency,
+                contract=WorkerContract(
+                    name="analysis_hot_contract",
+                    supported_roles={AgentRole.ORCHESTRATOR, AgentRole.RECON_WORKER, AgentRole.ANALYSIS_WORKER},
+                    preferred_kinds={
+                        TaskKind.RECON_SCAN,
+                        TaskKind.SERVICE_DISCOVERY,
+                        TaskKind.DNS_ENUMERATION,
+                        TaskKind.WEB_CONTENT_DISCOVERY,
+                        TaskKind.AD_ENUMERATION,
+                        TaskKind.KERBEROS_USER_DISCOVERY,
+                        TaskKind.ANALYZE_EVIDENCE,
+                    },
+                    processor="gpu",
+                    quality_tier=82,
+                ),
+            )
+        )
+        self.worker_broker.register_runner(
+            InProcessWorkerRunner(
+                runner_id="security-deep-runner",
+                lane="hot-path",
+                supported_routes={ProviderRoute.LOCAL_DEEP},
+                executor_loader=lambda: self.security.primitive_executor,
+                max_concurrency=self.config.autonomy.high_risk_concurrency,
+                contract=WorkerContract(
+                    name="deep_reasoning_contract",
+                    supported_roles={AgentRole.EXPLOITATION_WORKER, AgentRole.CHAINING_WORKER},
+                    preferred_kinds={
+                        TaskKind.KERBEROS_ATTACK_CHECK,
+                        TaskKind.CREDENTIALED_ACCESS_CHECK,
+                        TaskKind.VERIFY_HYPOTHESIS,
+                        TaskKind.CHAIN_CANDIDATES,
+                    },
+                    processor="gpu",
+                    quality_tier=88,
+                ),
+            )
+        )
+        self.worker_broker.register_runner(
+            InProcessWorkerRunner(
+                runner_id="security-code-runner",
+                lane="cold-path",
+                supported_routes={ProviderRoute.LOCAL_CODE, ProviderRoute.COLD_REVIEW},
+                executor_loader=lambda: self.security.primitive_executor,
+                max_concurrency=self.config.autonomy.cold_path_concurrency,
+                contract=WorkerContract(
+                    name="code_cpu_contract",
+                    supported_roles={AgentRole.CODE_WORKER},
+                    preferred_kinds={TaskKind.EXPLOIT_RESEARCH, TaskKind.POC_APPLICABILITY_VALIDATION},
+                    processor="cpu",
+                    quality_tier=91,
+                ),
             )
         )
         self.worker_broker.register_runner(
@@ -2435,15 +2510,13 @@ class PrimordialRuntime:
                 supported_routes={ProviderRoute.LOCAL_COMPACT},
                 executor_loader=lambda: self.security.primitive_executor,
                 max_concurrency=self.config.autonomy.compact_path_concurrency,
-            )
-        )
-        self.worker_broker.register_runner(
-            InProcessWorkerRunner(
-                runner_id="security-cold-runner",
-                lane="cold-path",
-                supported_routes={ProviderRoute.COLD_REVIEW},
-                executor_loader=lambda: self.security.primitive_executor,
-                max_concurrency=self.config.autonomy.cold_path_concurrency,
+                contract=WorkerContract(
+                    name="compact_verifier_contract",
+                    supported_roles={AgentRole.MEMORY_WORKER, AgentRole.BEHAVIOR_VERIFIER},
+                    preferred_kinds={TaskKind.VERIFY_AGENT_BEHAVIOR, TaskKind.COMPACT_MEMORY},
+                    processor="cpu",
+                    quality_tier=84,
+                ),
             )
         )
         self.worker_broker.register_runner(
@@ -2453,5 +2526,12 @@ class PrimordialRuntime:
                 supported_routes={ProviderRoute.REMOTE_PREMIUM},
                 executor_loader=lambda: self.security.primitive_executor,
                 max_concurrency=self.config.autonomy.remote_premium_concurrency,
+                contract=WorkerContract(
+                    name="premium_review_contract",
+                    supported_roles={AgentRole.CLAUDE_REVIEWER},
+                    preferred_kinds={TaskKind.REVIEW_PREMIUM_ESCALATION},
+                    processor="cpu",
+                    quality_tier=95,
+                ),
             )
         )
