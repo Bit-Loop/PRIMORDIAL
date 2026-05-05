@@ -1,0 +1,20 @@
+{
+  "body": "Did you find anything with searchsploit yet? are you able to try?",
+  "created_at": "2026-05-05T04:49:17.128373+00:00",
+  "id": "opmsg_b9d2eeda6bb2",
+  "metadata": {
+    "target_reference": "pirate.htb"
+  },
+  "model": null,
+  "role": "operator",
+  "target": {
+    "created_at": "2026-05-05T02:04:46.452719+00:00",
+    "display_name": "Pirate HTB",
+    "handle": "pirate.htb",
+    "id": "target_19956ec84d56",
+    "in_scope": true,
+    "metadata": {},
+    "profile": "hack_the_box",
+    "updated_at": "2026-05-05T02:04:46.452719+00:00"
+  }
+}

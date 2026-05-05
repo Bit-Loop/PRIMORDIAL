@@ -1,0 +1,19 @@
+{
+  "name": "notion-sync",
+  "version": "0.1.0",
+  "description": "Publish target-centric notes, findings, and next actions to Notion.",
+  "capability_tags": ["notion-sync"],
+  "allowed_phases": ["notification"],
+  "runtime": "remote",
+  "risk_tier": "low",
+  "side_effect_level": "mutating",
+  "required_secrets": ["NOTION_API_KEY"],
+  "input_schema": {"target_id": "string"},
+  "output_schema": {"page_ids": "array"},
+  "timeout_seconds": 60,
+  "retry_policy": {"max_attempts": 1},
+  "evidence_adapter": "notion_sync_audit",
+  "sandbox_profile": "notion-api",
+  "healthcheck": "notion credentials configured"
+}
+

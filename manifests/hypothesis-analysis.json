@@ -1,0 +1,20 @@
+{
+  "name": "hypothesis-analysis",
+  "version": "0.1.0",
+  "description": "Cluster evidence, rank anomalies, and generate bounded hypotheses.",
+  "capability_tags": ["evidence-analysis", "hypothesis-generation"],
+  "allowed_phases": ["analysis"],
+  "runtime": "host",
+  "risk_tier": "low",
+  "side_effect_level": "none",
+  "required_secrets": [],
+  "input_schema": {"target_id": "string"},
+  "output_schema": {"hypotheses": "array"},
+  "timeout_seconds": 90,
+  "retry_policy": {"max_attempts": 2},
+  "evidence_adapter": "analysis_summary",
+  "sandbox_profile": "local-state-only",
+  "healthcheck": "analysis worker available",
+  "metadata": {"bundles": ["recon", "h1-safe-web"], "profile_support": ["hackerone", "hack_the_box"]}
+}
+

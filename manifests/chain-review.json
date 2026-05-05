@@ -1,0 +1,20 @@
+{
+  "name": "chain-review",
+  "version": "0.1.0",
+  "description": "Combine related evidence and interests into bounded exploit-chain candidates.",
+  "capability_tags": ["chain-reasoning", "prerequisite-resolution"],
+  "allowed_phases": ["chaining"],
+  "runtime": "host",
+  "risk_tier": "high",
+  "side_effect_level": "none",
+  "required_secrets": [],
+  "input_schema": {"target_id": "string"},
+  "output_schema": {"candidate_chains": "array"},
+  "timeout_seconds": 120,
+  "retry_policy": {"max_attempts": 2},
+  "evidence_adapter": "chain_review",
+  "sandbox_profile": "local-state-only",
+  "healthcheck": "chain reasoning worker available",
+  "metadata": {"bundles": ["auth-session"], "profile_support": ["hackerone", "hack_the_box"]}
+}
+

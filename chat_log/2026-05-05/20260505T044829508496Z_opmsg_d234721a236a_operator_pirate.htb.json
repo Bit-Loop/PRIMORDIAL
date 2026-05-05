@@ -1,0 +1,20 @@
+{
+  "body": "What are you thinking? What do you know?",
+  "created_at": "2026-05-05T04:48:29.508496+00:00",
+  "id": "opmsg_d234721a236a",
+  "metadata": {
+    "target_reference": "pirate.htb"
+  },
+  "model": null,
+  "role": "operator",
+  "target": {
+    "created_at": "2026-05-05T02:04:46.452719+00:00",
+    "display_name": "Pirate HTB",
+    "handle": "pirate.htb",
+    "id": "target_19956ec84d56",
+    "in_scope": true,
+    "metadata": {},
+    "profile": "hack_the_box",
+    "updated_at": "2026-05-05T02:04:46.452719+00:00"
+  }
+}

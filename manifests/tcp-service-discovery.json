@@ -1,0 +1,30 @@
+{
+  "name": "tcp-service-discovery",
+  "version": "0.1.0",
+  "description": "Perform bounded TCP connect checks and lightweight banner collection for in-scope lab hosts.",
+  "capability_tags": ["tcp-service-discovery", "service-identification", "recon", "evidence-collection"],
+  "allowed_phases": ["recon"],
+  "runtime": "host",
+  "risk_tier": "low",
+  "side_effect_level": "read_only",
+  "required_secrets": [],
+  "input_schema": {
+    "target_id": "string",
+    "ports": "array<int>"
+  },
+  "output_schema": {
+    "open_services": "array<object>",
+    "closed_count": "integer",
+    "errors": "array<object>"
+  },
+  "timeout_seconds": 90,
+  "retry_policy": {"max_attempts": 1},
+  "evidence_adapter": "tcp_service_discovery_results",
+  "sandbox_profile": "host-readonly-network",
+  "healthcheck": "python socket TCP connect support available",
+  "metadata": {
+    "default_scope": "hack_the_box",
+    "probe_style": "connect_scan",
+    "banner_bytes": 160
+  }
+}

@@ -1,0 +1,66 @@
+{
+  "asset": "10.129.47.117 (pirate.htb)",
+  "content_type": "text/html",
+  "discovery_results": [
+    {
+      "content_type": "text/html",
+      "path": "/robots.txt",
+      "status": 404,
+      "url": "http://10.129.47.117/robots.txt"
+    },
+    {
+      "content_type": "text/html",
+      "path": "/sitemap.xml",
+      "status": 404,
+      "url": "http://10.129.47.117/sitemap.xml"
+    },
+    {
+      "content_type": "text/html",
+      "path": "/.well-known/security.txt",
+      "status": 404,
+      "url": "http://10.129.47.117/.well-known/security.txt"
+    },
+    {
+      "content_type": "text/html",
+      "path": "/login",
+      "status": 404,
+      "url": "http://10.129.47.117/login"
+    },
+    {
+      "content_type": "text/html",
+      "path": "/admin",
+      "status": 404,
+      "url": "http://10.129.47.117/admin"
+    },
+    {
+      "content_type": "text/html",
+      "path": "/api/",
+      "status": 404,
+      "url": "http://10.129.47.117/api/"
+    }
+  ],
+  "effective_url": "http://10.129.47.117/",
+  "forms": [],
+  "headers": {
+    "accept-ranges": "bytes",
+    "connection": "close",
+    "content-length": "703",
+    "content-type": "text/html",
+    "date": "Tue, 05 May 2026 10:39:34 GMT",
+    "etag": "\"3d769255b5d8db1:0\"",
+    "last-modified": "Sun, 08 Jun 2025 20:38:47 GMT",
+    "server": "Microsoft-IIS/10.0"
+  },
+  "page_links": [
+    "http://go.microsoft.com/fwlink/?linkid=66138&clcid=0x409"
+  ],
+  "requested_url": "http://10.129.47.117/",
+  "resolved_ips": [
+    "10.129.47.117"
+  ],
+  "scripts": [],
+  "server": "Microsoft-IIS/10.0",
+  "ssl_verification_disabled": false,
+  "status_code": 200,
+  "title": "IIS Windows Server"
+}

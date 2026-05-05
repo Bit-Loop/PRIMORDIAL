@@ -1,0 +1,18 @@
+{
+  "name": "caido-search",
+  "version": "0.1.0",
+  "description": "Search Caido traffic for endpoints, parameters, and auth artifacts.",
+  "capability_tags": ["traffic-search", "evidence-analysis", "caido"],
+  "allowed_phases": ["recon", "analysis"],
+  "runtime": "caido",
+  "risk_tier": "low",
+  "side_effect_level": "read_only",
+  "required_secrets": ["caido.graphql_url", "caido.api_token"],
+  "input_schema": {"httpql": "string", "limit": "integer"},
+  "output_schema": {"matches": "array", "source": "caido_graphql"},
+  "timeout_seconds": 120,
+  "retry_policy": {"max_attempts": 2},
+  "evidence_adapter": "caido_search_results",
+  "sandbox_profile": "caido-readonly",
+  "healthcheck": "caido client reachable"
+}

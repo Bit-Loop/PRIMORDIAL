@@ -1,0 +1,23 @@
+{
+  "name": "kerberos-attack-check",
+  "version": "0.1.0",
+  "description": "Run bounded AS-REP/Kerberoast applicability checks from discovered principals without cracking or executing PoCs.",
+  "capability_tags": ["asrep-roast-check", "kerberoast-check", "kerberos-attack-check", "auth-analysis", "finding-verification"],
+  "allowed_phases": ["analysis", "exploitation"],
+  "runtime": "host",
+  "risk_tier": "high",
+  "side_effect_level": "read_only",
+  "required_secrets": [],
+  "input_schema": {"target_id": "string"},
+  "output_schema": {
+    "asrep_hashes": "array<object>",
+    "spn_candidates": "array<object>",
+    "command_results": "array<object>"
+  },
+  "timeout_seconds": 120,
+  "retry_policy": {"max_attempts": 1},
+  "evidence_adapter": "kerberos_attack_check_results",
+  "sandbox_profile": "restricted-network-readonly",
+  "healthcheck": "GetNPUsers.py/impacket-GetNPUsers available for AS-REP checks",
+  "metadata": {"bundles": ["auth-session"], "profile_support": ["hack_the_box"], "cracks_hashes": false}
+}

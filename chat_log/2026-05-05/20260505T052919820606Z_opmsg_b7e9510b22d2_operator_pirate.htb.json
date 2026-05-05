@@ -1,0 +1,20 @@
+{
+  "body": "status and next step",
+  "created_at": "2026-05-05T05:29:19.820606+00:00",
+  "id": "opmsg_b7e9510b22d2",
+  "metadata": {
+    "target_reference": "pirate.htb"
+  },
+  "model": null,
+  "role": "operator",
+  "target": {
+    "created_at": "2026-05-05T02:04:46.452719+00:00",
+    "display_name": "HTB Pirate",
+    "handle": "pirate.htb",
+    "id": "target_19956ec84d56",
+    "in_scope": true,
+    "metadata": {},
+    "profile": "hack_the_box",
+    "updated_at": "2026-05-05T05:29:09.898769+00:00"
+  }
+}

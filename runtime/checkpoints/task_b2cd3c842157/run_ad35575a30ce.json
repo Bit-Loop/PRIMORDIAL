@@ -1,0 +1,61 @@
+{
+  "run": {
+    "attempt_number": 1,
+    "cold_path": false,
+    "error": null,
+    "finished_at": "2026-05-05T04:13:02.182405+00:00",
+    "heartbeat_at": "2026-05-05T04:13:02.182406+00:00",
+    "id": "run_ad35575a30ce",
+    "lease_expires_at": "2026-05-05T04:17:10.554401+00:00",
+    "metadata": {
+      "offer_count": 1,
+      "offer_id": "security-hot-runner:task_b2cd3c842157:1",
+      "rationale": "default orchestration and broad analysis stay on the hot path",
+      "risk_tier": "low",
+      "runner_id": "security-hot-runner",
+      "scheduler_lane": "hot-path",
+      "worker_lane": "hot-path"
+    },
+    "model_name": "gemma4:e4b",
+    "provider_route": "local_fast",
+    "role": "recon_worker",
+    "started_at": "2026-05-05T04:12:10.554406+00:00",
+    "status": "succeeded",
+    "task_id": "task_b2cd3c842157",
+    "trace_summary": "service discovery completed"
+  },
+  "summary": "service discovery completed",
+  "task": {
+    "attempts": 1,
+    "created_at": "2026-05-05T04:12:10.507985+00:00",
+    "evidence_refs": [],
+    "id": "task_b2cd3c842157",
+    "kind": "service_discovery",
+    "latest_run_id": "run_ad35575a30ce",
+    "max_attempts": 1,
+    "metadata": {
+      "autonomy_mode": "assisted",
+      "cold_path": false,
+      "provider_rationale": "default orchestration and broad analysis stay on the hot path"
+    },
+    "methodology": "web_app_core",
+    "parent_task_id": null,
+    "phase": "recon",
+    "priority": 88,
+    "provider_model": "gemma4:e4b",
+    "provider_route": "local_fast",
+    "required_capabilities": [
+      "tcp-service-discovery",
+      "service-identification"
+    ],
+    "requires_approval": false,
+    "risk_tier": "low",
+    "role": "recon_worker",
+    "session_id": "session_3f8091c8030d",
+    "status": "succeeded",
+    "summary": "Collect TCP service inventory evidence for pirate.htb.",
+    "target_id": "target_19956ec84d56",
+    "title": "Run bounded service discovery",
+    "updated_at": "2026-05-05T04:13:02.188603+00:00"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "content-discovery",
+  "version": "0.1.0",
+  "description": "Enumerate directories and content paths against approved HTTP targets.",
+  "capability_tags": ["content-discovery", "recon", "path-enumeration"],
+  "allowed_phases": ["recon"],
+  "runtime": "host",
+  "risk_tier": "moderate",
+  "side_effect_level": "read_only",
+  "required_secrets": [],
+  "input_schema": {"base_url": "string"},
+  "output_schema": {"paths": "array"},
+  "timeout_seconds": 180,
+  "retry_policy": {"max_attempts": 2},
+  "evidence_adapter": "content_discovery_results",
+  "sandbox_profile": "host-readonly-network",
+  "healthcheck": "content discovery tool available"
+}
+

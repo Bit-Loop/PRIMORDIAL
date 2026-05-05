@@ -1,0 +1,12 @@
+{
+	"extends": "@n8n/typescript-config/tsconfig.common.json",
+	"compilerOptions": {
+		"emitDecoratorMetadata": true,
+		"experimentalDecorators": true,
+		"strictPropertyInitialization": false,
+		"types": ["node", "jest"],
+		"tsBuildInfoFile": "dist/typecheck.tsbuildinfo"
+	},
+	"include": ["src/**/*.ts", "test/**/*.ts"],
+	"references": [{ "path": "../di/tsconfig.build.json" }]
+}

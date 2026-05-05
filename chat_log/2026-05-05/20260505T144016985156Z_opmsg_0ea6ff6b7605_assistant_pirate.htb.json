@@ -1,0 +1,34 @@
+{
+  "body": "**Facts**\n- Target `pirate.htb` is `hack_the_box` and in_scope=True.\n- Active operator-confirmed IP is `10.129.244.95`.\n- 9 recent evidence record(s) are historical for an older active-IP generation.\n- Recent task states: recon_scan:succeeded, service_discovery:succeeded, service_discovery:cancelled, service_discovery:cancelled, service_discovery:cancelled, service_discovery:cancelled, service_discovery:waiting, service_discovery:waiting\n- Registered primitives: ad-enumeration, behavior-review, caido-search, chain-review, claude-review, content-discovery, credentialed-access-check, discord-alert, dns-enumeration, finding-verification, http-probe, hypothesis-analysis, kerberos-attack-check, kerberos-user-discovery, memory-compactor, notion-sync, poc-applicability-validation, searchsploit-research, tcp-service-discovery\n\n**Blockers**\n- No stored evidence contains a user/root flag or flag-like token.\n- No verified findings or potential exploit paths are stored for this target.\n- Lab username/password are not configured, so credentialed SMB/WinRM verification cannot run.\n\n**Next Actions**\n- Run bounded TCP service discovery. Prerequisite: target is in scope. Confidence: 0.92.\n- Configure lab credentials before credentialed SMB/WinRM verification. Prerequisite: operator-provided username/password. Confidence: 0.72.",
+  "created_at": "2026-05-05T14:40:16.985156+00:00",
+  "id": "opmsg_0ea6ff6b7605",
+  "metadata": {
+    "elapsed_seconds": 6.959659033,
+    "guardrail_replaced_model_output": true,
+    "mode": "deterministic_state_answer",
+    "ok": true,
+    "route_model": "bjoernb/gemma4-e4b-think:latest",
+    "route_num_gpu": null
+  },
+  "model": "deterministic-state",
+  "role": "assistant",
+  "target": {
+    "created_at": "2026-05-05T02:04:46.452719+00:00",
+    "display_name": "HTB Pirate",
+    "handle": "pirate.htb",
+    "id": "target_19956ec84d56",
+    "in_scope": true,
+    "metadata": {
+      "active_ip": "10.129.244.95",
+      "active_ip_generation": 3,
+      "active_ip_source": "target_update",
+      "operator_confirmed_ip": "10.129.244.95",
+      "operator_confirmed_ip_at": "2026-05-05T14:36:25.399143+00:00",
+      "source": "gui_htb_update",
+      "stale_evidence_before": "2026-05-05T14:36:25.399151+00:00",
+      "target_kind": "htb_lab"
+    },
+    "profile": "hack_the_box",
+    "updated_at": "2026-05-05T14:36:25.399442+00:00"
+  }
+}

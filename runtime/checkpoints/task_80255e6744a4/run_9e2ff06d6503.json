@@ -1,0 +1,61 @@
+{
+  "run": {
+    "attempt_number": 1,
+    "cold_path": false,
+    "error": null,
+    "finished_at": "2026-05-05T04:16:21.628845+00:00",
+    "heartbeat_at": "2026-05-05T04:16:21.628847+00:00",
+    "id": "run_9e2ff06d6503",
+    "lease_expires_at": "2026-05-05T04:21:21.544383+00:00",
+    "metadata": {
+      "offer_count": 1,
+      "offer_id": "security-compact-runner:task_80255e6744a4:1",
+      "rationale": "cheap verifier checks should stay off the main GPU path",
+      "risk_tier": "low",
+      "runner_id": "security-compact-runner",
+      "scheduler_lane": "compact-path",
+      "worker_lane": "compact-path"
+    },
+    "model_name": "phi4-reasoning",
+    "provider_route": "local_compact",
+    "role": "behavior_verifier",
+    "started_at": "2026-05-05T04:16:21.544388+00:00",
+    "status": "succeeded",
+    "task_id": "task_80255e6744a4",
+    "trace_summary": "behavior verification complete"
+  },
+  "summary": "behavior verification complete",
+  "task": {
+    "attempts": 1,
+    "created_at": "2026-05-05T04:16:17.518729+00:00",
+    "evidence_refs": [],
+    "id": "task_80255e6744a4",
+    "kind": "verify_agent_behavior",
+    "latest_run_id": "run_9e2ff06d6503",
+    "max_attempts": 1,
+    "metadata": {
+      "autonomy_mode": "assisted",
+      "cold_path": false,
+      "provider_rationale": "cheap verifier checks should stay off the main GPU path"
+    },
+    "methodology": "web_app_core",
+    "parent_task_id": null,
+    "phase": "behavior_verification",
+    "priority": 75,
+    "provider_model": "phi4-reasoning",
+    "provider_route": "local_compact",
+    "required_capabilities": [
+      "trace-review",
+      "loop-detection"
+    ],
+    "requires_approval": false,
+    "risk_tier": "low",
+    "role": "behavior_verifier",
+    "session_id": "session_3f8091c8030d",
+    "status": "succeeded",
+    "summary": "multiple tasks failed or exhausted retries for one target",
+    "target_id": "target_19956ec84d56",
+    "title": "Review agent behavior",
+    "updated_at": "2026-05-05T04:16:21.634744+00:00"
+  }
+}

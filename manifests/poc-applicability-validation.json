@@ -1,0 +1,32 @@
+{
+  "name": "poc-applicability-validation",
+  "version": "0.1.0",
+  "description": "Safely classify retained public PoC references against exact target evidence, versions, foothold prerequisites, and policy gates without executing exploit code.",
+  "capability_tags": ["poc-applicability-validation", "poc-adaptation", "exploit-safety-review", "evidence-review"],
+  "allowed_phases": ["analysis"],
+  "runtime": "host",
+  "risk_tier": "moderate",
+  "side_effect_level": "read_only",
+  "required_secrets": [],
+  "input_schema": {
+    "target_id": "string",
+    "exploit_research_evidence": "array<object>",
+    "service_evidence": "array<object>"
+  },
+  "output_schema": {
+    "classified_candidates": "array<object>",
+    "ready_count": "integer",
+    "blocked_count": "integer",
+    "guardrails": "object"
+  },
+  "timeout_seconds": 60,
+  "retry_policy": {"max_attempts": 1},
+  "evidence_adapter": "poc_applicability_validation_results",
+  "sandbox_profile": "host-readonly",
+  "healthcheck": "built-in read-only classifier",
+  "metadata": {
+    "executes_pocs": false,
+    "writes_exploit_code": false,
+    "requires_exact_version_or_prerequisite_match": true
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "name": "kerberos-user-discovery",
+  "version": "0.1.0",
+  "description": "Discover AD/Kerberos user principals from anonymous LDAP/RPC evidence and bounded host-tool queries.",
+  "capability_tags": ["kerberos-user-discovery", "ldap-user-discovery", "principal-discovery", "ad-enumeration", "evidence-collection"],
+  "allowed_phases": ["recon"],
+  "runtime": "host",
+  "risk_tier": "moderate",
+  "side_effect_level": "read_only",
+  "required_secrets": [],
+  "input_schema": {"target_id": "string"},
+  "output_schema": {
+    "users": "array<object>",
+    "spn_candidates": "array<object>",
+    "command_results": "array<object>"
+  },
+  "timeout_seconds": 90,
+  "retry_policy": {"max_attempts": 1},
+  "evidence_adapter": "kerberos_user_discovery_results",
+  "sandbox_profile": "host-readonly-network",
+  "healthcheck": "ldapsearch/rpcclient available when AD user discovery is enabled",
+  "metadata": {"bundles": ["recon", "auth-session"], "profile_support": ["hack_the_box"]}
+}

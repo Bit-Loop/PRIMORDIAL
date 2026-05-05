@@ -1,0 +1,31 @@
+{
+  "name": "ad-enumeration",
+  "version": "0.1.0",
+  "description": "Run bounded anonymous SMB/LDAP/RPC enumeration against an in-scope HTB Active Directory-style host.",
+  "capability_tags": ["ad-enumeration", "smb-enumeration", "ldap-enumeration", "rpc-enumeration", "recon", "evidence-collection"],
+  "allowed_phases": ["recon"],
+  "runtime": "host",
+  "risk_tier": "moderate",
+  "side_effect_level": "read_only",
+  "required_secrets": [],
+  "input_schema": {
+    "target_id": "string",
+    "host": "string"
+  },
+  "output_schema": {
+    "ldap_rootdse": "object",
+    "smb_shares": "array<object>",
+    "rpc_users": "array<object>",
+    "command_results": "array<object>"
+  },
+  "timeout_seconds": 90,
+  "retry_policy": {"max_attempts": 1},
+  "evidence_adapter": "ad_enumeration_results",
+  "sandbox_profile": "host-readonly-network",
+  "healthcheck": "ldapsearch/smbclient/rpcclient available when AD enumeration is enabled",
+  "metadata": {
+    "default_scope": "hack_the_box",
+    "authentication": "anonymous_or_null_session",
+    "commands_are_shell_free": true
+  }
+}

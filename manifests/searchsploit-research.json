@@ -1,0 +1,31 @@
+{
+  "name": "searchsploit-research",
+  "version": "0.1.0",
+  "description": "Search local Exploit-DB with searchsploit, normalize candidate PoCs, and retain examples for gated exploit analysis.",
+  "capability_tags": ["exploit-research", "searchsploit", "poc-analysis", "evidence-collection"],
+  "allowed_phases": ["analysis"],
+  "runtime": "host",
+  "risk_tier": "moderate",
+  "side_effect_level": "read_only",
+  "required_secrets": [],
+  "input_schema": {
+    "target_id": "string",
+    "queries": "array<string>"
+  },
+  "output_schema": {
+    "queries": "array<string>",
+    "matches": "array<object>",
+    "suppressed_matches": "array<object>",
+    "examined_examples": "array<object>"
+  },
+  "timeout_seconds": 90,
+  "retry_policy": {"max_attempts": 1},
+  "evidence_adapter": "searchsploit_research_results",
+  "sandbox_profile": "host-readonly-network",
+  "healthcheck": "searchsploit available",
+  "metadata": {
+    "executes_pocs": false,
+    "suppresses_dos": true,
+    "example_limit": 4
+  }
+}

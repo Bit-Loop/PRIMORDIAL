@@ -1,0 +1,22 @@
+{
+  "body": "**Facts**\n- Target `pirate.htb` is `hack_the_box` and in_scope=True.\n- `Kerberos user discovery: pirate.htb`: Kerberos user discovery against 10.129.47.117 found 0 user principal(s) and 0 SPN candidate(s).\n- `Exploit research: pirate.htb`: Searchsploit research found 4 non-DoS candidate(s), suppressed 0 DoS/crash-oriented result(s), and retained 4 example excerpt(s): Microsoft Active Directory LDAP Server - 'Username' Enumeration, Microsoft Windows Server 2000 - Active Directory Remote Stack Overflow, Microsoft Exchange Active Directory Topology 15.0.847.40 - 'Service MSExchangeADTopology' Unquoted Service Path, Microsoft Exchange Active Directory Topology 15.02.1118.007 - 'Service MSExchangeADTopology' Unquoted Service Path.\n- `Web content discovery: pirate.htb`: Bounded web content discovery checked 2 base URL(s) with 420 words and found no interesting paths.\n- `DNS enumeration: pirate.htb`: DNS enumeration queried pirate.htb via 10.129.47.117; parsed 7 record(s). AXFR did not succeed.\n- `AD enumeration: pirate.htb`: Anonymous AD enumeration against 10.129.47.117 observed 6 LDAP naming context value(s), 0 SMB share candidate(s), and 0 RPC user candidate(s).\n- `TCP service discovery: pirate.htb`: TCP service discovery observed 28 open service(s): pirate.htb:53/dns, pirate.htb:80/http, pirate.htb:88/kerberos, pirate.htb:135/msrpc, pirate.htb:139/netbios-ssn, pirate.htb:389/ldap, pirate.htb:443/https, pirate.htb:445/smb, pirate.htb:464/kpasswd, pirate.htb:593/http-rpc-epmap, pirate.htb:636/ldaps, pirate.htb:3268/global-catalog, pirate.htb:3269/global-catalog-ssl, pirate.htb:5985/http, 10.129.47.117:53/dns, 10.129.47.117:80/http and 12 more.\n- Recent task states: recon_scan:succeeded, service_discovery:succeeded, dns_enumeration:succeeded, ad_enumeration:succeeded, web_content_discovery:succeeded, kerberos_user_discovery:succeeded, analyze_evidence:succeeded, exploit_research:succeeded\n- Registered primitives: ad-enumeration, behavior-review, caido-search, chain-review, claude-review, content-discovery, credentialed-access-check, discord-alert, dns-enumeration, finding-verification, http-probe, hypothesis-analysis, kerberos-attack-check, kerberos-user-discovery, memory-compactor, notion-sync, searchsploit-research, tcp-service-discovery\n\n**Potential Paths**\n- `PoC research candidates for gated synthesis`: Searchsploit returned non-DoS public exploit references. These are research candidates only; they require version validation, adaptation review, and policy approval before any execution. Confidence 0.70.\n- `Exploit research: pirate.htb` retained 4 non-DoS public exploit reference(s). These are potential paths until target-specific version/applicability evidence verifies them. Prerequisite: requires user shell or credentialed access before LPE verification.\n\n**Blockers**\n- No stored evidence contains a user/root flag or flag-like token.\n- Lab username/password are not configured, so credentialed SMB/WinRM verification cannot run.\n\n**Next Actions**\n- Validate public PoC applicability against exact service/version evidence. Prerequisite: retained non-DoS Searchsploit candidates. Confidence: 0.76.\n- Configure lab credentials before credentialed SMB/WinRM verification. Prerequisite: operator-provided username/password. Confidence: 0.72.\n- Defer local privilege-escalation candidate until user shell or credentialed access exists. Prerequisite: foothold not yet evidenced. Confidence: 0.54.",
+  "created_at": "2026-05-05T05:36:57.101153+00:00",
+  "id": "opmsg_cdb100ae3812",
+  "metadata": {
+    "mode": "deterministic_state_answer",
+    "ok": true,
+    "route_model": "deepseek-r1:8b"
+  },
+  "model": "deterministic-state",
+  "role": "assistant",
+  "target": {
+    "created_at": "2026-05-05T02:04:46.452719+00:00",
+    "display_name": "HTB Pirate",
+    "handle": "pirate.htb",
+    "id": "target_19956ec84d56",
+    "in_scope": true,
+    "metadata": {},
+    "profile": "hack_the_box",
+    "updated_at": "2026-05-05T05:33:28.716914+00:00"
+  }
+}

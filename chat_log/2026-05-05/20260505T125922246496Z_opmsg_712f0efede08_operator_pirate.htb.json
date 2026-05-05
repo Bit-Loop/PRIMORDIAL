@@ -1,0 +1,20 @@
+{
+  "body": "hat IP are you using for the targeT?",
+  "created_at": "2026-05-05T12:59:22.246496+00:00",
+  "id": "opmsg_712f0efede08",
+  "metadata": {
+    "target_reference": "pirate.htb"
+  },
+  "model": null,
+  "role": "operator",
+  "target": {
+    "created_at": "2026-05-05T02:04:46.452719+00:00",
+    "display_name": "HTB Pirate",
+    "handle": "pirate.htb",
+    "id": "target_19956ec84d56",
+    "in_scope": true,
+    "metadata": {},
+    "profile": "hack_the_box",
+    "updated_at": "2026-05-05T12:55:14.066612+00:00"
+  }
+}

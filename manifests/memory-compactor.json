@@ -1,0 +1,19 @@
+{
+  "name": "memory-compactor",
+  "version": "0.1.0",
+  "description": "Summarize notes, dedupe interests, and propose memory promotions.",
+  "capability_tags": ["memory-compaction", "semantic-promotion"],
+  "allowed_phases": ["memory_maintenance"],
+  "runtime": "host",
+  "risk_tier": "low",
+  "side_effect_level": "none",
+  "required_secrets": [],
+  "input_schema": {"target_id": "string"},
+  "output_schema": {"memory_actions": "array"},
+  "timeout_seconds": 60,
+  "retry_policy": {"max_attempts": 1},
+  "evidence_adapter": "memory_compaction_audit",
+  "sandbox_profile": "local-state-only",
+  "healthcheck": "local summarizer reachable"
+}
+

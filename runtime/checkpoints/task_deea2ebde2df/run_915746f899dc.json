@@ -1,0 +1,61 @@
+{
+  "run": {
+    "attempt_number": 1,
+    "cold_path": false,
+    "error": null,
+    "finished_at": "2026-05-05T14:34:56.677759+00:00",
+    "heartbeat_at": "2026-05-05T14:34:56.677777+00:00",
+    "id": "run_915746f899dc",
+    "lease_expires_at": "2026-05-05T14:38:26.417332+00:00",
+    "metadata": {
+      "offer_count": 1,
+      "offer_id": "security-compact-runner:task_deea2ebde2df:1",
+      "rationale": "cheap verifier checks should stay off the main GPU path",
+      "risk_tier": "low",
+      "runner_id": "security-compact-runner",
+      "scheduler_lane": "compact-path",
+      "worker_lane": "compact-path"
+    },
+    "model_name": "0xIbra/supergemma4-26b-uncensored-gguf-v2:q4_K_M",
+    "provider_route": "local_compact",
+    "role": "behavior_verifier",
+    "started_at": "2026-05-05T14:33:26.417383+00:00",
+    "status": "succeeded",
+    "task_id": "task_deea2ebde2df",
+    "trace_summary": "behavior verification complete"
+  },
+  "summary": "behavior verification complete",
+  "task": {
+    "attempts": 1,
+    "created_at": "2026-05-05T14:33:15.454510+00:00",
+    "evidence_refs": [],
+    "id": "task_deea2ebde2df",
+    "kind": "verify_agent_behavior",
+    "latest_run_id": "run_915746f899dc",
+    "max_attempts": 1,
+    "metadata": {
+      "autonomy_mode": "assisted",
+      "cold_path": false,
+      "provider_rationale": "cheap verifier checks should stay off the main GPU path"
+    },
+    "methodology": "web_app_core",
+    "parent_task_id": null,
+    "phase": "behavior_verification",
+    "priority": 75,
+    "provider_model": "0xIbra/supergemma4-26b-uncensored-gguf-v2:q4_K_M",
+    "provider_route": "local_compact",
+    "required_capabilities": [
+      "trace-review",
+      "loop-detection"
+    ],
+    "requires_approval": false,
+    "risk_tier": "low",
+    "role": "behavior_verifier",
+    "session_id": "session_da5392746375",
+    "status": "succeeded",
+    "summary": "duplicate active task pattern for kind=service_discovery",
+    "target_id": "target_19956ec84d56",
+    "title": "Review agent behavior",
+    "updated_at": "2026-05-05T14:34:56.684301+00:00"
+  }
+}

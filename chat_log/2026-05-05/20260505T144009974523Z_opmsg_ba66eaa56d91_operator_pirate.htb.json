@@ -1,0 +1,29 @@
+{
+  "body": "Whats going on?",
+  "created_at": "2026-05-05T14:40:09.974523+00:00",
+  "id": "opmsg_ba66eaa56d91",
+  "metadata": {
+    "target_reference": "pirate.htb"
+  },
+  "model": null,
+  "role": "operator",
+  "target": {
+    "created_at": "2026-05-05T02:04:46.452719+00:00",
+    "display_name": "HTB Pirate",
+    "handle": "pirate.htb",
+    "id": "target_19956ec84d56",
+    "in_scope": true,
+    "metadata": {
+      "active_ip": "10.129.244.95",
+      "active_ip_generation": 3,
+      "active_ip_source": "target_update",
+      "operator_confirmed_ip": "10.129.244.95",
+      "operator_confirmed_ip_at": "2026-05-05T14:36:25.399143+00:00",
+      "source": "gui_htb_update",
+      "stale_evidence_before": "2026-05-05T14:36:25.399151+00:00",
+      "target_kind": "htb_lab"
+    },
+    "profile": "hack_the_box",
+    "updated_at": "2026-05-05T14:36:25.399442+00:00"
+  }
+}

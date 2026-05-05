@@ -1,0 +1,20 @@
+{
+  "name": "finding-verification",
+  "version": "0.1.0",
+  "description": "Run bounded verification logic for a prioritized hypothesis.",
+  "capability_tags": ["finding-verification", "auth-analysis"],
+  "allowed_phases": ["exploitation"],
+  "runtime": "host",
+  "risk_tier": "high",
+  "side_effect_level": "read_only",
+  "required_secrets": [],
+  "input_schema": {"task_id": "string"},
+  "output_schema": {"verification": "object"},
+  "timeout_seconds": 120,
+  "retry_policy": {"max_attempts": 2},
+  "evidence_adapter": "verification_result",
+  "sandbox_profile": "restricted-network-readonly",
+  "healthcheck": "verification worker available",
+  "metadata": {"bundles": ["auth-session", "h1-safe-web"], "profile_support": ["hackerone", "hack_the_box"]}
+}
+

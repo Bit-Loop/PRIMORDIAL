@@ -1,0 +1,19 @@
+{
+  "name": "discord-alert",
+  "version": "0.1.0",
+  "description": "Send high-signal notifications to Discord.",
+  "capability_tags": ["discord-notify"],
+  "allowed_phases": ["notification"],
+  "runtime": "remote",
+  "risk_tier": "low",
+  "side_effect_level": "mutating",
+  "required_secrets": ["DISCORD_WEBHOOK_URL"],
+  "input_schema": {"message": "string"},
+  "output_schema": {"delivery_status": "string"},
+  "timeout_seconds": 30,
+  "retry_policy": {"max_attempts": 1},
+  "evidence_adapter": "notification_delivery",
+  "sandbox_profile": "discord-webhook",
+  "healthcheck": "discord webhook configured"
+}
+

@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "primordial"
+version = "0.1.0"
+description = "Control-plane-first TUI for authorized AI-assisted security workflows."
+readme = "README.md"
+requires-python = ">=3.12"
+license = {text = "Proprietary"}
+authors = [
+  {name = "Bitloop"}
+]
+dependencies = []
+
+[project.optional-dependencies]
+tui = ["textual>=0.61.0"]
+
+[project.scripts]
+primordial = "primordial.cli:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["primordial*"]
+
+[tool.setuptools.package-data]
+primordial = ["core/web/static/*"]

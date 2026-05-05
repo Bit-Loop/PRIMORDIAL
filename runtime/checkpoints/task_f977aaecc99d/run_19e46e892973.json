@@ -1,0 +1,61 @@
+{
+  "run": {
+    "attempt_number": 1,
+    "cold_path": false,
+    "error": null,
+    "finished_at": "2026-05-05T06:04:36.307182+00:00",
+    "heartbeat_at": "2026-05-05T06:04:36.307199+00:00",
+    "id": "run_19e46e892973",
+    "lease_expires_at": "2026-05-05T06:08:06.213656+00:00",
+    "metadata": {
+      "offer_count": 1,
+      "offer_id": "security-compact-runner:task_f977aaecc99d:1",
+      "rationale": "cheap verifier checks should stay off the main GPU path",
+      "risk_tier": "low",
+      "runner_id": "security-compact-runner",
+      "scheduler_lane": "compact-path",
+      "worker_lane": "compact-path"
+    },
+    "model_name": "phi4-reasoning",
+    "provider_route": "local_compact",
+    "role": "behavior_verifier",
+    "started_at": "2026-05-05T06:03:06.213660+00:00",
+    "status": "succeeded",
+    "task_id": "task_f977aaecc99d",
+    "trace_summary": "behavior verification complete"
+  },
+  "summary": "behavior verification complete",
+  "task": {
+    "attempts": 1,
+    "created_at": "2026-05-05T06:03:06.169244+00:00",
+    "evidence_refs": [],
+    "id": "task_f977aaecc99d",
+    "kind": "verify_agent_behavior",
+    "latest_run_id": "run_19e46e892973",
+    "max_attempts": 1,
+    "metadata": {
+      "autonomy_mode": "assisted",
+      "cold_path": false,
+      "provider_rationale": "cheap verifier checks should stay off the main GPU path"
+    },
+    "methodology": "web_app_core",
+    "parent_task_id": null,
+    "phase": "behavior_verification",
+    "priority": 75,
+    "provider_model": "phi4-reasoning",
+    "provider_route": "local_compact",
+    "required_capabilities": [
+      "trace-review",
+      "loop-detection"
+    ],
+    "requires_approval": false,
+    "risk_tier": "low",
+    "role": "behavior_verifier",
+    "session_id": "session_72988862a8ea",
+    "status": "succeeded",
+    "summary": "trace pattern repeated excessively: analyze_evidence:ai_review",
+    "target_id": null,
+    "title": "Review agent behavior",
+    "updated_at": "2026-05-05T06:04:36.315320+00:00"
+  }
+}

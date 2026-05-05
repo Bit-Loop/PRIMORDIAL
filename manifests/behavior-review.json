@@ -1,0 +1,19 @@
+{
+  "name": "behavior-review",
+  "version": "0.1.0",
+  "description": "Inspect task traces for loops, duplicate work, and unsupported claims.",
+  "capability_tags": ["trace-review", "loop-detection"],
+  "allowed_phases": ["behavior_verification"],
+  "runtime": "host",
+  "risk_tier": "low",
+  "side_effect_level": "none",
+  "required_secrets": [],
+  "input_schema": {"task_id": "string"},
+  "output_schema": {"signals": "array"},
+  "timeout_seconds": 60,
+  "retry_policy": {"max_attempts": 1},
+  "evidence_adapter": "behavior_review",
+  "sandbox_profile": "local-state-only",
+  "healthcheck": "behavior verifier available",
+  "metadata": {"bundles": ["verifier"], "profile_support": ["hackerone", "hack_the_box"]}
+}

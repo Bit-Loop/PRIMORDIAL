@@ -1,0 +1,65 @@
+{
+  "run": {
+    "attempt_number": 1,
+    "cold_path": false,
+    "error": null,
+    "finished_at": "2026-05-05T06:02:08.646700+00:00",
+    "heartbeat_at": "2026-05-05T06:02:08.646702+00:00",
+    "id": "run_c934bc52d7ca",
+    "lease_expires_at": "2026-05-05T06:06:50.826075+00:00",
+    "metadata": {
+      "offer_count": 1,
+      "offer_id": "security-hot-runner:task_22cf01bf3a21:1",
+      "rationale": "default orchestration and broad analysis stay on the hot path",
+      "risk_tier": "moderate",
+      "runner_id": "security-hot-runner",
+      "scheduler_lane": "hot-path",
+      "worker_lane": "hot-path"
+    },
+    "model_name": "gemma4:e4b",
+    "provider_route": "local_fast",
+    "role": "analysis_worker",
+    "started_at": "2026-05-05T06:01:50.826081+00:00",
+    "status": "succeeded",
+    "task_id": "task_22cf01bf3a21",
+    "trace_summary": "analysis completed"
+  },
+  "summary": "analysis completed",
+  "task": {
+    "attempts": 1,
+    "created_at": "2026-05-05T06:01:50.793116+00:00",
+    "evidence_refs": [],
+    "id": "task_22cf01bf3a21",
+    "kind": "analyze_evidence",
+    "latest_run_id": "run_c934bc52d7ca",
+    "max_attempts": 2,
+    "metadata": {
+      "ai_model": "gemma4:e4b",
+      "ai_processor": "gpu",
+      "ai_review_attempted": true,
+      "analysis_signature": "{\"blocked_or_failed_tasks\": [], \"evidence\": [\"evidence_00b8448a72c2\", \"evidence_95129decb131\", \"evidence_a5945d78555c\", \"evidence_a5c3fabc8937\", \"evidence_bf546d645ef4\", \"evidence_c56a08d25fdb\", \"evidence_ce9848b36f48\", \"evidence_e3efd682e2b4\", \"evidence_e9f9ce15d408\"], \"interests\": [\"interest_1399e777909e\", \"interest_1a8eb7d13e11\", \"interest_3505eeaca5fa\", \"interest_8555f062bad0\", \"interest_9006251bfaf1\", \"interest_a7d99ab278ba\", \"interest_bac7b9f5c2f4\", \"interest_ecb37a3540a3\", \"interest_fdbf23611aac\"], \"task_count\": 12}",
+      "autonomy_mode": "assisted",
+      "cold_path": false,
+      "provider_rationale": "default orchestration and broad analysis stay on the hot path"
+    },
+    "methodology": "web_app_core",
+    "parent_task_id": null,
+    "phase": "analysis",
+    "priority": 80,
+    "provider_model": "gemma4:e4b",
+    "provider_route": "local_fast",
+    "required_capabilities": [
+      "evidence-analysis",
+      "hypothesis-generation"
+    ],
+    "requires_approval": false,
+    "risk_tier": "moderate",
+    "role": "analysis_worker",
+    "session_id": "session_72988862a8ea",
+    "status": "succeeded",
+    "summary": "Cluster recon evidence and generate bounded hypotheses for pirate.htb.",
+    "target_id": "target_19956ec84d56",
+    "title": "Analyze accumulated evidence",
+    "updated_at": "2026-05-05T06:02:08.652861+00:00"
+  }
+}

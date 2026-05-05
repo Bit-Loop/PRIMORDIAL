@@ -1,0 +1,150 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+import os
+
+from primordial.core.domain.enums import AutonomyMode
+
+
+@dataclass(slots=True)
+class ModelTopology:
+    local_fast: str = "gemma4:e4b"
+    local_deep: str = "deepseek-r1:8b"
+    local_code: str = "qwen3-coder-next:q4_K_M"
+    local_compact: str = "phi4-reasoning"
+    local_compact_rich: str = "phi4-reasoning"
+    cold_review_primary: str = "gemma3:27b"
+    cold_review_secondary: str = "qwen2.5:32b"
+    remote_premium: str = "claude-sonnet-4"
+
+
+@dataclass(slots=True)
+class AutonomySettings:
+    mode: AutonomyMode = AutonomyMode.ASSISTED
+    allow_remote_premium: bool = False
+    allow_exploitative_actions: bool = False
+    allow_agent_safety_approval: bool = True
+    require_human_for_high_risk: bool = True
+    max_poc_timeout_seconds: int = 30
+    max_poc_requests: int = 20
+    max_chaining_fanout: int = 5
+    max_auto_retries: int = 2
+    context_budget_warn_ratio: float = 0.65
+    memory_light_interval_minutes: int = 10
+    memory_heavy_interval_minutes: int = 180
+    daily_remote_budget: float = 25.0
+    notification_cooldown_seconds: int = 300
+    hot_path_concurrency: int = 1
+    compact_path_concurrency: int = 2
+    cold_path_concurrency: int = 1
+    remote_premium_concurrency: int = 1
+    high_risk_concurrency: int = 1
+    defer_retry_seconds: int = 20
+
+
+@dataclass(slots=True)
+class AppConfig:
+    project_root: Path
+    runtime_dir: Path
+    database_path: Path
+    artifacts_dir: Path
+    chat_logs_dir: Path
+    checkpoints_dir: Path
+    crash_journal_path: Path
+    findings_dir: Path
+    notion_exports_dir: Path
+    exports_dir: Path
+    manifests_dir: Path
+    skills_dir: Path
+    secrets_dir: Path
+    credentials_path: Path
+    topology: ModelTopology = field(default_factory=ModelTopology)
+    autonomy: AutonomySettings = field(default_factory=AutonomySettings)
+
+    @classmethod
+    def from_env(cls, project_root: Path | None = None) -> "AppConfig":
+        root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
+        runtime_dir = Path(os.getenv("PRIMORDIAL_RUNTIME_DIR", root / "runtime")).resolve()
+        database_path = Path(
+            os.getenv("PRIMORDIAL_DB_PATH", runtime_dir / "primordial.db")
+        ).resolve()
+        artifacts_dir = Path(
+            os.getenv("PRIMORDIAL_ARTIFACTS_DIR", runtime_dir / "artifacts")
+        ).resolve()
+        chat_logs_dir = Path(
+            os.getenv("PRIMORDIAL_CHAT_LOGS_DIR", root / "chat_log")
+        ).resolve()
+        checkpoints_dir = Path(
+            os.getenv("PRIMORDIAL_CHECKPOINTS_DIR", runtime_dir / "checkpoints")
+        ).resolve()
+        crash_journal_path = Path(
+            os.getenv("PRIMORDIAL_CRASH_JOURNAL_PATH", runtime_dir / "crash.journal")
+        ).resolve()
+        findings_dir = Path(
+            os.getenv("PRIMORDIAL_FINDINGS_DIR", root / "findings")
+        ).resolve()
+        notion_exports_dir = Path(
+            os.getenv("PRIMORDIAL_NOTION_EXPORTS_DIR", findings_dir / "notion")
+        ).resolve()
+        exports_dir = Path(
+            os.getenv("PRIMORDIAL_EXPORTS_DIR", runtime_dir / "exports")
+        ).resolve()
+        manifests_dir = Path(
+            os.getenv("PRIMORDIAL_MANIFESTS_DIR", root / "manifests")
+        ).resolve()
+        skills_dir = Path(
+            os.getenv("PRIMORDIAL_SKILLS_DIR", root / "skills")
+        ).resolve()
+        secrets_dir = Path(
+            os.getenv("PRIMORDIAL_SECRETS_DIR", runtime_dir / "secrets")
+        ).resolve()
+        credentials_path = Path(
+            os.getenv("PRIMORDIAL_CREDENTIALS_PATH", secrets_dir / "credentials.json")
+        ).resolve()
+        autonomy_mode = AutonomyMode(
+            os.getenv("PRIMORDIAL_AUTONOMY_MODE", AutonomyMode.ASSISTED.value)
+        )
+        autonomy = AutonomySettings(
+            mode=autonomy_mode,
+            allow_remote_premium=_env_bool("PRIMORDIAL_ALLOW_REMOTE_PREMIUM", False),
+            allow_exploitative_actions=_env_bool("PRIMORDIAL_ALLOW_EXPLOITATIVE_ACTIONS", False),
+            allow_agent_safety_approval=_env_bool("PRIMORDIAL_ALLOW_AGENT_SAFETY_APPROVAL", True),
+        )
+        return cls(
+            project_root=root,
+            runtime_dir=runtime_dir,
+            database_path=database_path,
+            artifacts_dir=artifacts_dir,
+            chat_logs_dir=chat_logs_dir,
+            checkpoints_dir=checkpoints_dir,
+            crash_journal_path=crash_journal_path,
+            findings_dir=findings_dir,
+            notion_exports_dir=notion_exports_dir,
+            exports_dir=exports_dir,
+            manifests_dir=manifests_dir,
+            skills_dir=skills_dir,
+            secrets_dir=secrets_dir,
+            credentials_path=credentials_path,
+            autonomy=autonomy,
+        )
+
+    def ensure_directories(self) -> None:
+        self.runtime_dir.mkdir(parents=True, exist_ok=True)
+        self.artifacts_dir.mkdir(parents=True, exist_ok=True)
+        self.chat_logs_dir.mkdir(parents=True, exist_ok=True)
+        self.checkpoints_dir.mkdir(parents=True, exist_ok=True)
+        self.findings_dir.mkdir(parents=True, exist_ok=True)
+        self.notion_exports_dir.mkdir(parents=True, exist_ok=True)
+        self.exports_dir.mkdir(parents=True, exist_ok=True)
+        self.manifests_dir.mkdir(parents=True, exist_ok=True)
+        self.skills_dir.mkdir(parents=True, exist_ok=True)
+        self.secrets_dir.mkdir(parents=True, exist_ok=True)
+        self.secrets_dir.chmod(0o700)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}

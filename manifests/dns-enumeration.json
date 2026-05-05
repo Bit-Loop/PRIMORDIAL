@@ -1,0 +1,30 @@
+{
+  "name": "dns-enumeration",
+  "version": "0.1.0",
+  "description": "Run bounded DNS SOA/NS/SRV and AXFR checks against an in-scope lab DNS service.",
+  "capability_tags": ["dns-enumeration", "service-identification", "recon", "evidence-collection"],
+  "allowed_phases": ["recon"],
+  "runtime": "host",
+  "risk_tier": "low",
+  "side_effect_level": "read_only",
+  "required_secrets": [],
+  "input_schema": {
+    "target_id": "string",
+    "dns_server": "string",
+    "domain": "string"
+  },
+  "output_schema": {
+    "records": "array<object>",
+    "zone_transfer_success": "boolean",
+    "command_results": "array<object>"
+  },
+  "timeout_seconds": 60,
+  "retry_policy": {"max_attempts": 1},
+  "evidence_adapter": "dns_enumeration_results",
+  "sandbox_profile": "host-readonly-network",
+  "healthcheck": "dig available",
+  "metadata": {
+    "default_scope": "hack_the_box",
+    "zone_transfer_check": true
+  }
+}

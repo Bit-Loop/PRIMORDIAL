@@ -1,0 +1,19 @@
+{
+  "name": "claude-review",
+  "version": "0.1.0",
+  "description": "Selective premium review for subtle reasoning, exploit synthesis, or dispute resolution.",
+  "capability_tags": ["premium-review", "exploit-synthesis"],
+  "allowed_phases": ["analysis", "exploitation", "chaining"],
+  "runtime": "remote",
+  "risk_tier": "moderate",
+  "side_effect_level": "none",
+  "required_secrets": ["ANTHROPIC_API_KEY"],
+  "input_schema": {"package": "object"},
+  "output_schema": {"review": "object"},
+  "timeout_seconds": 180,
+  "retry_policy": {"max_attempts": 1},
+  "evidence_adapter": "premium_review_result",
+  "sandbox_profile": "anthropic-api",
+  "healthcheck": "anthropic credentials configured"
+}
+

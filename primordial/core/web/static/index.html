@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Primordial Control Plane</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Remote Controller</p>
+          <h1>Primordial Control Plane</h1>
+          <p class="lede">
+            HTML5 console for runtime control, audit review, and approval handling.
+          </p>
+        </div>
+        <div class="hero-status">
+          <span id="health-pill" class="pill">checking</span>
+          <p id="runtime-meta" class="muted"></p>
+        </div>
+      </header>
+
+      <main class="layout">
+        <section class="panel controls-panel">
+          <div class="panel-head">
+            <h2>Controls</h2>
+            <button id="refresh-button" class="ghost-button" type="button">Refresh</button>
+          </div>
+          <div class="controls-grid">
+            <label class="field">
+              <span>Max Executions</span>
+              <input id="max-executions" type="number" min="1" value="3" />
+            </label>
+            <label class="field">
+              <span>Execution Mode</span>
+              <select id="execution-mode">
+                <option value="tick">Tick mode</option>
+                <option value="continuous">Continuous/autonomous</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Continuous Interval</span>
+              <input id="continuous-interval" type="number" min="2" value="10" />
+            </label>
+            <button id="mode-toggle-button" class="ghost-button" type="button">Enable Continuous Mode</button>
+            <button id="tick-button" type="button">Run Tick</button>
+            <button id="compact-button" type="button">Compact Memory</button>
+            <button id="queues-button" type="button">Process Queues</button>
+            <button id="warm-models-button" class="ghost-button" type="button">Warm Models</button>
+            <button id="clear-models-button" class="ghost-button" type="button">Clear Models</button>
+            <button id="stop-work-button" class="danger-button" type="button">Stop Work</button>
+          </div>
+          <pre id="action-log" class="action-log">Awaiting operator action.</pre>
+        </section>
+
+        <section class="panel current-work-panel">
+          <div class="panel-head">
+            <h2>Current Work</h2>
+            <span id="current-work-summary" class="muted">checking</span>
+          </div>
+          <div id="current-work-list" class="work-status-grid"></div>
+        </section>
+
+        <section class="panel counts-panel">
+          <div class="panel-head">
+            <h2>Counts</h2>
+            <span class="muted">Audit surface</span>
+          </div>
+          <div id="counts-grid" class="counts-grid"></div>
+        </section>
+
+        <section class="panel credentials-panel">
+          <div class="panel-head">
+            <h2>Credentials</h2>
+            <span class="muted">Integration and lab secrets stay in the local credential store.</span>
+          </div>
+          <div class="credentials-grid">
+            <form id="notion-form" class="credential-form">
+              <h3>Notion</h3>
+              <p class="form-note">Publishes readable per-target notes, findings, and agent guidance into Notion. Local structured storage remains source of truth.</p>
+              <label class="field">
+                <span>API Key</span>
+                <input id="notion-api-key" type="password" autocomplete="off" spellcheck="false" />
+              </label>
+              <label class="field">
+                <span>Parent Page ID</span>
+                <input id="notion-parent-page-id" type="text" autocomplete="off" spellcheck="false" />
+              </label>
+              <label class="field">
+                <span>API Version</span>
+                <input id="notion-version" type="text" placeholder="2022-06-28" />
+              </label>
+              <div class="approval-actions">
+                <button type="submit">Save Notion</button>
+                <button id="clear-notion-button" class="ghost-button" type="button">Clear Notion</button>
+              </div>
+            </form>
+            <form id="discord-form" class="credential-form">
+              <h3>Discord</h3>
+              <p class="form-note">Sends high-signal alerts only: approvals, likely findings, PoC research events, and repeated workflow failures.</p>
+              <label class="field">
+                <span>Webhook URL</span>
+                <input id="discord-webhook-url" type="password" autocomplete="off" spellcheck="false" />
+              </label>
+              <div class="approval-actions">
+                <button type="submit">Save Discord</button>
+                <button id="clear-discord-button" class="ghost-button" type="button">Clear Discord</button>
+              </div>
+            </form>
+            <form id="lab-form" class="credential-form">
+              <h3>Lab / HTB</h3>
+              <p class="form-note">Stores operator-provided lab credentials for bounded SMB/WinRM checks and flag verification. Leave blank until intentionally provided.</p>
+              <label class="field">
+                <span>Username</span>
+                <input id="lab-username" type="text" autocomplete="off" spellcheck="false" />
+              </label>
+              <label class="field">
+                <span>Password</span>
+                <input id="lab-password" type="password" autocomplete="off" spellcheck="false" />
+              </label>
+              <label class="field">
+                <span>Domain</span>
+                <input id="lab-domain" type="text" autocomplete="off" spellcheck="false" placeholder="optional" />
+              </label>
+              <div class="approval-actions">
+                <button type="submit">Save Lab</button>
+                <button id="clear-lab-button" class="ghost-button" type="button">Clear Lab</button>
+              </div>
+            </form>
+            <form id="caido-form" class="credential-form">
+              <h3>Caido</h3>
+              <p class="form-note">Connects to local Caido GraphQL for HTTP traffic, replays, findings, and web-testing evidence references.</p>
+              <label class="field">
+                <span>GraphQL URL</span>
+                <input id="caido-graphql-url" type="url" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:8080/graphql" />
+              </label>
+              <label class="field">
+                <span>API Token</span>
+                <input id="caido-api-token" type="password" autocomplete="off" spellcheck="false" />
+              </label>
+              <div class="approval-actions">
+                <button type="submit">Save Caido</button>
+                <button id="clear-caido-button" class="ghost-button" type="button">Clear Caido</button>
+                <button id="check-caido-button" class="ghost-button" type="button">Check Caido</button>
+              </div>
+            </form>
+            <div id="credentials-status" class="record-grid"></div>
+          </div>
+        </section>
+
+        <section class="panel counts-panel">
+          <div class="panel-head">
+            <h2>Integrations</h2>
+            <span class="muted">Live adapter status and loaded runtime skills</span>
+          </div>
+          <div id="integration-status" class="record-grid"></div>
+        </section>
+
+        <section class="panel credentials-panel">
+          <div class="panel-head">
+            <h2>Model Roles</h2>
+            <span class="muted">Select downloaded Ollama models for each runtime lane.</span>
+          </div>
+          <form id="models-form" class="credentials-grid"></form>
+        </section>
+
+        <section class="panel chat-panel">
+          <div class="panel-head">
+            <h2>Operator AI</h2>
+            <span class="muted">Bounded runtime Q&A via the local-deep model</span>
+          </div>
+          <form id="chat-form" class="chat-form">
+            <label class="field">
+              <span>Question or Guidance</span>
+              <textarea
+                id="chat-message"
+                rows="4"
+                placeholder="Ask what Primordial is doing, summarize target context, or record operator guidance."
+              ></textarea>
+            </label>
+            <label class="field">
+              <span>Target Focus</span>
+              <input id="chat-target" type="text" placeholder="pirate.htb" />
+            </label>
+            <button type="submit">Ask Local AI</button>
+          </form>
+          <div id="chat-messages" class="chat-messages"></div>
+        </section>
+
+        <section class="panel chat-panel">
+          <div class="panel-head">
+            <h2>Tips & Guidance</h2>
+            <span class="muted">Durable operator notes for agents, stored per target.</span>
+          </div>
+          <p class="form-note">
+            General tips: use tick mode for controlled work, continuous mode for bounded autonomous loops,
+            keep target scope explicit, and save durable agent instructions here instead of relying on chat history.
+          </p>
+          <form id="guidance-form" class="chat-form">
+            <label class="field">
+              <span>Guidance Target</span>
+              <input id="guidance-target" type="text" placeholder="pirate.htb" />
+            </label>
+            <label class="field">
+              <span>Program Guidance, Feedback, and General Notes</span>
+              <textarea
+                id="guidance-body"
+                rows="6"
+                placeholder="Add methodology guidance, things to avoid, target-specific notes, or feedback for future agent runs."
+              ></textarea>
+            </label>
+            <div class="approval-actions">
+              <button id="load-guidance-button" class="ghost-button" type="button">Load Guidance</button>
+              <button type="submit">Save Guidance</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="panel scope-panel">
+          <div class="panel-head">
+            <h2>Scope</h2>
+            <span class="muted">Current targets and in-scope assets</span>
+          </div>
+          <form id="target-form" class="target-form">
+            <label class="field">
+              <span>Handle</span>
+              <input id="target-handle" type="text" placeholder="pirate.htb" />
+            </label>
+            <label class="field">
+              <span>Display Name</span>
+              <input id="target-display-name" type="text" placeholder="Pirate HTB" />
+            </label>
+            <label class="field">
+              <span>Profile</span>
+              <select id="target-profile">
+                <option value="hack_the_box">Hack The Box</option>
+                <option value="hackerone">HackerOne</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Assets</span>
+              <input id="target-assets" type="text" placeholder="pirate.htb, 10.129.47.117" />
+            </label>
+            <label class="field">
+              <span>Active IP</span>
+              <input id="target-active-ip" type="text" placeholder="10.129.244.95" />
+            </label>
+            <button id="target-submit" type="submit">Add Or Update Target</button>
+            <button id="htb-target-update" class="ghost-button" type="button">Update HTB Target</button>
+            <p class="form-note">Update HTB Target stores the active IP, scope assets, and target metadata used by future orchestration ticks.</p>
+          </form>
+          <form id="scope-import-form" class="target-form">
+            <label class="field">
+              <span>Import Profile</span>
+              <select id="scope-import-profile">
+                <option value="hack_the_box">Hack The Box</option>
+                <option value="hackerone">HackerOne</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Scope File</span>
+              <input id="scope-import-file" type="file" accept=".json,.txt,.scope,text/plain,application/json" />
+            </label>
+            <label class="field wide-field">
+              <span>Scope JSON or one asset per line</span>
+              <textarea id="scope-import-text" rows="4" placeholder='{"profile":"hack_the_box","targets":[{"handle":"pirate.htb","assets":["pirate.htb","10.129.47.117"]}]}'></textarea>
+            </label>
+            <button id="scope-import-submit" class="ghost-button" type="submit">Import Scope</button>
+          </form>
+          <div id="scope-cards" class="scope-cards"></div>
+        </section>
+
+        <section class="panel tasks-panel">
+          <div class="panel-head">
+            <h2>Tasks</h2>
+            <span class="muted">Click a row to inspect execution detail.</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Status</th>
+                  <th>Kind</th>
+                  <th>Route</th>
+                  <th>Model</th>
+                  <th>Title</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="tasks-body"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel detail-panel">
+          <div class="panel-head">
+            <h2>Task Detail</h2>
+            <span id="detail-caption" class="muted">No task selected.</span>
+          </div>
+          <div id="detail-body" class="detail-body">
+            <p class="muted">Select a task to inspect runs, traces, checkpoints, and handoffs.</p>
+          </div>
+        </section>
+
+        <section class="panel audit-panel">
+          <div class="panel-head">
+            <h2>Recent Events</h2>
+            <span class="muted">Control-plane audit stream</span>
+          </div>
+          <ul id="events-list" class="log-list"></ul>
+        </section>
+
+        <section class="panel audit-panel">
+          <div class="panel-head">
+            <h2>Notifications</h2>
+            <span class="muted">High-signal delivery queue</span>
+          </div>
+          <ul id="notifications-list" class="log-list"></ul>
+        </section>
+
+        <section class="panel audit-panel">
+          <div class="panel-head">
+            <h2>Sync Jobs</h2>
+            <span class="muted">External publishing state</span>
+          </div>
+          <ul id="sync-jobs-list" class="log-list"></ul>
+        </section>
+
+        <section class="panel audit-panel">
+          <div class="panel-head">
+            <h2>Traces</h2>
+            <span class="muted">Agent behavior summaries</span>
+          </div>
+          <ul id="traces-list" class="log-list"></ul>
+        </section>
+
+        <section class="panel audit-panel">
+          <div class="panel-head">
+            <h2>Checkpoints</h2>
+            <span class="muted">Replayable state snapshots</span>
+          </div>
+          <ul id="checkpoints-list" class="log-list"></ul>
+        </section>
+
+        <section class="panel audit-panel">
+          <div class="panel-head">
+            <h2>Runtime Signals</h2>
+            <span class="muted">In-memory event bus</span>
+          </div>
+          <ul id="signals-list" class="log-list"></ul>
+        </section>
+
+        <section class="panel records-panel">
+          <div class="panel-head">
+            <h2>Evidence</h2>
+            <span class="muted">Evidence-backed observations</span>
+          </div>
+          <div id="evidence-list" class="record-grid"></div>
+        </section>
+
+        <section class="panel records-panel">
+          <div class="panel-head">
+            <h2>Notes</h2>
+            <span class="muted">Compacted operator context</span>
+          </div>
+          <div id="notes-list" class="record-grid"></div>
+        </section>
+
+        <section class="panel records-panel">
+          <div class="panel-head">
+            <h2>Interests</h2>
+            <span class="muted">Hypotheses and revisit candidates</span>
+          </div>
+          <div id="interests-list" class="record-grid"></div>
+        </section>
+
+        <section class="panel records-panel">
+          <div class="panel-head">
+            <h2>Findings</h2>
+            <span class="muted">Verified or partial finding candidates</span>
+          </div>
+          <div id="findings-list" class="record-grid"></div>
+        </section>
+
+        <section class="panel records-panel">
+          <div class="panel-head">
+            <h2>Memory</h2>
+            <span class="muted">Working, episodic, and semantic memory</span>
+          </div>
+          <div id="memory-list" class="record-grid"></div>
+        </section>
+
+        <section class="panel records-panel">
+          <div class="panel-head">
+            <h2>Artifacts</h2>
+            <span class="muted">Filesystem-backed raw outputs</span>
+          </div>
+          <div id="artifacts-list" class="record-grid"></div>
+        </section>
+
+        <section class="panel records-panel">
+          <div class="panel-head">
+            <h2>Primitives</h2>
+            <span class="muted">Approved capability substrate</span>
+          </div>
+          <div id="primitives-list" class="record-grid"></div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>

@@ -1,0 +1,19 @@
+{
+  "name": "http-probe",
+  "version": "0.1.0",
+  "description": "Resolve targets and probe HTTP(S) reachability for in-scope assets.",
+  "capability_tags": ["http-probe", "recon", "evidence-collection"],
+  "allowed_phases": ["recon"],
+  "runtime": "host",
+  "risk_tier": "low",
+  "side_effect_level": "read_only",
+  "required_secrets": [],
+  "input_schema": {"target": "string"},
+  "output_schema": {"live_endpoints": "array"},
+  "timeout_seconds": 90,
+  "retry_policy": {"max_attempts": 2},
+  "evidence_adapter": "http_probe_results",
+  "sandbox_profile": "host-readonly-network",
+  "healthcheck": "probe binary available"
+}
+

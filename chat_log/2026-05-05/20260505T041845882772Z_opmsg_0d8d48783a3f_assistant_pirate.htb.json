@@ -1,0 +1,21 @@
+{
+  "body": "AI response failed: Ollama is not reachable at http://127.0.0.1:11434: <urlopen error [Errno 1] Operation not permitted>",
+  "created_at": "2026-05-05T04:18:45.882772+00:00",
+  "id": "opmsg_0d8d48783a3f",
+  "metadata": {
+    "error": "Ollama is not reachable at http://127.0.0.1:11434: <urlopen error [Errno 1] Operation not permitted>",
+    "ok": false
+  },
+  "model": "gemma4:e4b",
+  "role": "assistant",
+  "target": {
+    "created_at": "2026-05-05T02:04:46.452719+00:00",
+    "display_name": "Pirate HTB",
+    "handle": "pirate.htb",
+    "id": "target_19956ec84d56",
+    "in_scope": true,
+    "metadata": {},
+    "profile": "hack_the_box",
+    "updated_at": "2026-05-05T02:04:46.452719+00:00"
+  }
+}
