@@ -147,6 +147,7 @@ class PrimordialLauncher:
         self._install_target_warning_traces()
         self._poll_queue()
         self._poll_current_work()
+        self._poll_agent_monitor()
         self._poll_ai_thinking()
         self._poll_execution_mode()
         self.root.protocol("WM_DELETE_WINDOW", self._close)
@@ -812,13 +813,22 @@ class PrimordialLauncher:
                 in_scope=True,
                 metadata={"target_kind": "htb_lab", "source": "gui_start_work"},
             )
-            tick_summary = self._run_ticks_sync(
-                cycles=int(config["cycles"]),
-                max_executions=int(config["max_executions"]),
-            )
+            mode = self.runtime.execution_mode_payload()
+            if str(mode["mode"]) == "continuous":
+                report = self.runtime.run_tick(max_executions=int(config["max_executions"]))
+                tick_summary = (
+                    f"Continuous mode armed at {int(mode['interval_seconds'])}s. "
+                    f"Immediate tick: created={len(report.created_tasks)} completed={len(report.completed_runs)}."
+                )
+            else:
+                tick_summary = self._run_ticks_sync(
+                    cycles=int(config["cycles"]),
+                    max_executions=int(config["max_executions"]),
+                )
             self.runtime.sync_findings_context_exports()
             status = self._status_snapshot_text()
         self._queue.put(("hydrate_target", ""))
+        self._queue.put(("refresh_tabs", ""))
         return f"{tick_summary}\n\n{status}"
 
     def _update_htb_target(self) -> None:
@@ -1491,6 +1501,11 @@ class PrimordialLauncher:
                 task.id: task
                 for task in self.runtime.store.list_tasks(limit=500)
             }
+            model_runs = [
+                item
+                for item in self.runtime.store.list_task_runs(limit=160)
+                if item.model_name and self._is_after_thinking_clear(item.started_at)
+            ]
             ai_notes = [
                 item
                 for item in self.runtime.store.list_notes(limit=200)
@@ -1513,6 +1528,15 @@ class PrimordialLauncher:
                 if item.role == "assistant"
                 and item.model
                 and item.model != "deterministic-state"
+                and self._is_after_thinking_clear(item.created_at)
+            ]
+            ai_failure_events = [
+                item
+                for item in self.runtime.store.list_events(limit=250)
+                if (
+                    "Worker AI generation unavailable" in item.summary
+                    or "Operator state AI review unavailable" in item.summary
+                )
                 and self._is_after_thinking_clear(item.created_at)
             ]
         lines = [
@@ -1549,6 +1573,28 @@ class PrimordialLauncher:
         else:
             lines.append("No autonomous worker AI reviews in the current visible window.")
 
+        lines.append("\nRecent Model Activity")
+        if model_runs:
+            for run in model_runs[:20]:
+                task = task_map.get(str(run.task_id))
+                processor = self._processor_for_task(task, processor_map)
+                route = run.provider_route.value
+                lines.append(f"\n{separator}")
+                lines.append("source=model-task-run")
+                lines.append(f"speaker={run.role.value}")
+                lines.append(f"model={run.model_name}")
+                lines.append(f"processor={processor}")
+                lines.append(f"route={route}")
+                lines.append(f"status={run.status.value}")
+                lines.append(f"task={run.task_id}")
+                lines.append(f"time={run.started_at.isoformat()}")
+                if task:
+                    lines.append(f"talking_about={task.title}")
+                lines.append(separator)
+                lines.append(run.trace_summary or run.error or "Model-backed task run completed without a detailed AI review note.")
+        else:
+            lines.append("No recent model-backed task runs in the current visible window.")
+
         lines.append("\nAI Review Traces")
         if ai_traces:
             for trace in ai_traces:
@@ -1571,6 +1617,33 @@ class PrimordialLauncher:
                 lines.append(trace.summary)
         else:
             lines.append("No AI review traces in the current visible window.")
+
+        lines.append("\nAI Review Failures / Timeouts")
+        if ai_failure_events:
+            for event in ai_failure_events[:20]:
+                task = task_map.get(str(event.task_id)) if event.task_id else None
+                model = event.metadata.get("model") if isinstance(event.metadata, dict) else None
+                processor = self._processor_for_task(task, processor_map)
+                route = task.provider_route.value if task and task.provider_route else "unknown-route"
+                speaker = task.role.value if task else "Primordial AI"
+                lines.append(f"\n{separator}")
+                lines.append("source=ai-failure-event")
+                lines.append(f"speaker={speaker}")
+                lines.append(f"model={model or 'unknown-model'}")
+                lines.append(f"processor={processor}")
+                lines.append(f"route={route}")
+                lines.append(f"task={event.task_id or 'none'}")
+                lines.append(f"time={event.created_at.isoformat()}")
+                if task:
+                    lines.append(f"talking_about={task.title}")
+                lines.append(separator)
+                lines.append(event.summary)
+                if event.metadata:
+                    error_text = event.metadata.get("error")
+                    if error_text:
+                        lines.append(f"error={error_text}")
+        else:
+            lines.append("No AI review failure or timeout events in the current visible window.")
 
         lines.append("\nOperator Local-Model Answers")
         if model_messages:
@@ -1776,6 +1849,14 @@ class PrimordialLauncher:
         if not self._closed:
             self.root.after(2000, self._poll_current_work)
 
+    def _poll_agent_monitor(self) -> None:
+        try:
+            self._refresh_agent_monitor()
+        except tk.TclError:
+            return
+        if not self._closed:
+            self.root.after(3000, self._poll_agent_monitor)
+
     def _poll_ai_thinking(self) -> None:
         try:
             if self.ai_thinking_auto_var.get():
@@ -1833,11 +1914,7 @@ class PrimordialLauncher:
                 if line_no < line_count
                 else ""
             )
-            if current == "-------------------" and next_line == "source=autonomous-worker-review":
-                return max(speaker_line, line_no - 1)
-            if current == "-------------------" and next_line == "source=agent-trace":
-                return max(speaker_line, line_no - 1)
-            if current == "-------------------" and next_line == "source=operator-chat-assistant":
+            if current == "-------------------" and next_line.startswith("source="):
                 return max(speaker_line, line_no - 1)
             line_no += 1
         return line_count

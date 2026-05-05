@@ -15,6 +15,7 @@ from primordial.core.domain.enums import (
     RiskTier,
     ScopeProfile,
     TaskKind,
+    TaskRunStatus,
     TaskStatus,
     VerificationStatus,
 )
@@ -234,6 +235,32 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(methodology_state.get("subphase"), "bootstrap")
         self.assertTrue(methodology_state.get("candidate_actions"))
         self.assertEqual(methodology_state.get("planner_version"), 2)
+
+    def test_broker_execution_exception_is_finalized_instead_of_leaking_running_state(self) -> None:
+        task = Task(
+            target_id=self.target.id,
+            phase=MethodologyPhase.RECON,
+            kind=TaskKind.RECON_SCAN,
+            title="Crashy recon",
+            summary="Broker execution should be finalized on exception",
+            role=AgentRole.RECON_WORKER,
+            risk_tier=RiskTier.LOW,
+            status=TaskStatus.PENDING,
+        )
+        self.runtime.store.insert_task(task)
+        report = OrchestrationReport()
+
+        with patch.object(self.runtime.worker_broker, "execute", side_effect=RuntimeError("boom")):
+            self.runtime.workflow._execute_ready_tasks(report, max_executions=1)
+
+        refreshed_task = self.runtime.store.get_task(task.id)
+        latest_run = next(run for run in self.runtime.store.list_task_runs(limit=20) if run.task_id == task.id)
+
+        self.assertIn(refreshed_task.status, {TaskStatus.PENDING, TaskStatus.FAILED})
+        self.assertNotEqual(refreshed_task.status, TaskStatus.RUNNING)
+        self.assertEqual(latest_run.status, TaskRunStatus.FAILED)
+        self.assertIsNotNone(latest_run.finished_at)
+        self.assertIn("boom", latest_run.error or "")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,10 @@
 # HTB Pirate Evidence Index
 
-Generated: 2026-05-05T16:25:11.898000+00:00
+Generated: 2026-05-05T16:45:43.657442+00:00
 
+- `evidence_1fdeeefec3c9` TCP service discovery: pirate.htb: TCP service discovery observed 14 open service(s): 10.129.244.95:53/domain, 10.129.244.95:80/http, 10.129.244.95:88/kerberos-sec, 10.129.244.95:135/msrpc, 10.129.244.95:139/netbios-ssn, 10.129.244.95:389/ldap, 10.129.244.95:443/https, 10.129.244.95:445/microsoft-ds, 10.129.244.95:464/kpasswd5, 10.129.244.95:593/ncacn_http, 10.129.244.95:636/ldap, 10.129.244.95:3268/ldap, 10.129.244.95:3269/ldap, 10.129.244.95:5985/http.
+- `evidence_c0ac9f0d78ce` Recon: http://10.129.244.95/: HTTP probe returned 200 for http://10.129.244.95/ with content-type text/html. title='IIS Windows Server'
+- `evidence_4f1e686fe6fc` Recon: http://10.129.244.95/: HTTP probe returned 200 for http://10.129.244.95/ with content-type text/html. title='IIS Windows Server'
 - `evidence_bf546d645ef4` Kerberos user discovery: pirate.htb: Kerberos user discovery against 10.129.47.117 found 0 user principal(s) and 0 SPN candidate(s).
 - `evidence_e3efd682e2b4` Exploit research: pirate.htb: Searchsploit research found 4 non-DoS candidate(s), suppressed 0 DoS/crash-oriented result(s), and retained 4 example excerpt(s): Microsoft Active Directory LDAP Server - 'Username' Enumeration, Microsoft Windows Server 2000 - Active Directory Remote Stack Overflow, Microsoft Exchange Active Directory Topology 15.0.847.40 - 'Service MSExchangeADTopology' Unquoted Service Path, Microsoft Exchange Active Directory Topology 15.02.1118.007 - 'Service MSExchangeADTopology' Unquoted Service Path.
 - `evidence_c56a08d25fdb` Web content discovery: pirate.htb: Bounded web content discovery checked 2 base URL(s) with 420 words and found no interesting paths.

@@ -30,6 +30,7 @@ from primordial.core.domain.models import (
     Target,
     TargetMethodologyState,
     Task,
+    TaskExecutionResult,
     TaskRun,
     utc_now,
 )
@@ -73,6 +74,8 @@ class PlannedTargetAction:
 
 
 class WorkflowOrchestrator:
+    STALE_RUN_MAX_AGE_SECONDS = 3600
+
     def __init__(
         self,
         store: RuntimeStore,
@@ -105,8 +108,58 @@ class WorkflowOrchestrator:
         self.credentials_status_loader = credentials_status_loader
         self.event_bus = event_bus
 
+    def preview_target_state(self, target: Target) -> TargetMethodologyState:
+        return self._evaluate_target_methodology_state(target)
+
+    def recover_stale_execution_state(self, *, limit: int = 500) -> int:
+        recovered = 0
+        now = utc_now()
+        tasks_by_id = {task.id: task for task in self.store.list_tasks(limit=limit)}
+        for run in self.store.list_task_runs(limit=limit):
+            if run.status not in {TaskRunStatus.CLAIMED, TaskRunStatus.RUNNING} or run.finished_at is not None:
+                continue
+            task = tasks_by_id.get(run.task_id)
+            reason = self._stale_run_reason(task, run, now)
+            if reason is None:
+                continue
+            run.status = TaskRunStatus.CANCELLED
+            run.error = f"recovered stale execution state: {reason}"
+            run.finished_at = now
+            run.heartbeat_at = now
+            run.metadata["recovered_stale_execution"] = True
+            run.metadata["recovery_reason"] = reason
+            self.store.insert_task_run(run)
+            if task is not None:
+                task.metadata["recovered_stale_execution"] = True
+                task.metadata["recovery_reason"] = reason
+                if task.status == TaskStatus.RUNNING:
+                    task.status = TaskStatus.PENDING if task.attempts < task.max_attempts else TaskStatus.FAILED
+                task.updated_at = now
+                self.store.insert_task(task)
+            self.store.insert_trace(
+                AgentTrace(
+                    task_id=run.task_id,
+                    role=task.role if task is not None else AgentRole.ORCHESTRATOR,
+                    status="failed",
+                    summary=f"Recovered stale execution state: {reason}",
+                    metadata={"recovered_stale_execution": True, "recovery_reason": reason},
+                )
+            )
+            self.store.insert_event(
+                EventRecord(
+                    type=EventType.TASK_FAILED,
+                    summary=f"Recovered stale execution state for {task.title if task else run.task_id}",
+                    target_id=task.target_id if task is not None else None,
+                    task_id=run.task_id,
+                    metadata={"reason": reason, "recovered_stale_execution": True},
+                )
+            )
+            recovered += 1
+        return recovered
+
     def tick(self, max_executions: int = 3) -> OrchestrationReport:
         report = OrchestrationReport()
+        self.recover_stale_execution_state(limit=500)
         self.resume_tracker.resume_due_tasks(limit=200)
         targets = self.store.list_targets()
         active_session = self.store.get_active_session()
@@ -587,6 +640,17 @@ class WorkflowOrchestrator:
         )
         self.store.insert_event(event)
         report.events.append(event)
+
+    def _stale_run_reason(self, task: Task | None, run: TaskRun, now) -> str | None:
+        if task is None:
+            return "task record is missing"
+        if task.status != TaskStatus.RUNNING:
+            return f"task status is {task.status.value}"
+        last_seen = run.heartbeat_at or run.started_at
+        age_seconds = (now - last_seen).total_seconds()
+        if age_seconds > self.STALE_RUN_MAX_AGE_SECONDS:
+            return f"no execution heartbeat for {int(age_seconds)}s"
+        return None
 
     def _target_has_current_generation_evidence(self, target: Target) -> bool:
         return bool(self._current_generation_evidence(target, limit=200))
@@ -1248,20 +1312,23 @@ class WorkflowOrchestrator:
                         "runner_id": dispatch.runner_id,
                     },
                 )
-            result = self.worker_broker.execute(dispatch, task, context)
-            if result is None:
-                run.status = TaskRunStatus.CANCELLED
-                run.error = "worker assignment vanished before execution"
-                run.finished_at = utc_now()
-                self.store.insert_task_run(run)
-                self.resume_tracker.defer_task(
-                    task,
-                    "worker assignment vanished before execution",
-                    delay_seconds=self.autonomy.defer_retry_seconds,
-                    metadata={"runner_id": dispatch.runner_id, "lane": dispatch.lane},
-                )
-                continue
-            self._persist_execution_result(task, run, result, report)
+            try:
+                result = self.worker_broker.execute(dispatch, task, context)
+                if result is None:
+                    run.status = TaskRunStatus.CANCELLED
+                    run.error = "worker assignment vanished before execution"
+                    run.finished_at = utc_now()
+                    self.store.insert_task_run(run)
+                    self.resume_tracker.defer_task(
+                        task,
+                        "worker assignment vanished before execution",
+                        delay_seconds=self.autonomy.defer_retry_seconds,
+                        metadata={"runner_id": dispatch.runner_id, "lane": dispatch.lane},
+                    )
+                    continue
+                self._persist_execution_result(task, run, result, report)
+            except Exception as exc:  # noqa: BLE001 - finalize brokered runs even when execution crashes
+                self._persist_execution_exception(task, run, exc, report)
 
     def _persist_execution_result(self, task: Task, run: TaskRun, result, report: OrchestrationReport) -> None:
         for trace in result.traces:
@@ -1422,6 +1489,52 @@ class WorkflowOrchestrator:
                     "success": result.success,
                 },
             )
+        report.completed_runs.append(run)
+
+    def _persist_execution_exception(
+        self,
+        task: Task,
+        run: TaskRun,
+        exc: Exception,
+        report: OrchestrationReport,
+    ) -> None:
+        now = utc_now()
+        task.attempts += 1
+        task.status = TaskStatus.PENDING if task.attempts < task.max_attempts else TaskStatus.FAILED
+        task.updated_at = now
+        task.metadata["execution_exception"] = str(exc)
+        run.status = TaskRunStatus.FAILED
+        run.error = str(exc)
+        run.trace_summary = f"execution crashed: {exc}"
+        run.finished_at = now
+        run.heartbeat_at = now
+        run.metadata["execution_exception"] = True
+        self.store.insert_trace(
+            AgentTrace(
+                task_id=task.id,
+                role=task.role,
+                status="failed",
+                summary=f"Execution crashed before result persistence: {exc}",
+                metadata={"execution_exception": True, "error": str(exc), "model": task.provider_model},
+            )
+        )
+        self.store.insert_task_run(run)
+        self.store.insert_task(task)
+        self._write_checkpoint(
+            task,
+            run,
+            summary="execution exception checkpoint",
+            payload={"task": task.as_payload(), "run": run.as_payload(), "error": str(exc)},
+        )
+        event = EventRecord(
+            type=EventType.TASK_FAILED,
+            summary=f"Execution crashed: {task.title}",
+            target_id=task.target_id,
+            task_id=task.id,
+            metadata={"error": str(exc), "execution_exception": True},
+        )
+        self.store.insert_event(event)
+        report.events.append(event)
         report.completed_runs.append(run)
 
     def _annotate_result_metadata(self, task: Task, metadata: dict[str, object]) -> None:

@@ -62,6 +62,8 @@ class PrimordialRuntime:
     EXECUTION_MODE_INTERVAL_SETTING = "execution_mode_interval_seconds"
     EXECUTION_MODES = {"tick", "continuous"}
     DEFAULT_EXECUTION_INTERVAL_SECONDS = 30
+    WORKER_AI_TIMEOUT_SECONDS_GPU = 120
+    WORKER_AI_TIMEOUT_SECONDS_CPU = 300
     SCOPE_PROFILE_PRESETS_SETTING = "scope_profile_presets"
 
     MODEL_ROLE_CONFIG = {
@@ -166,6 +168,7 @@ class PrimordialRuntime:
                 )
             )
         self._recover_runtime_state()
+        self.repair_execution_state()
         for target in self.store.list_targets():
             self.findings_context.ensure_target(target)
         self.store.insert_event(
@@ -310,6 +313,11 @@ class PrimordialRuntime:
         report = self.workflow.tick(max_executions=max_executions)
         self.process_external_queues()
         return report
+
+    def repair_execution_state(self) -> dict[str, int]:
+        recovered_runs = self.workflow.recover_stale_execution_state(limit=500)
+        resumed_tasks = self.resume_tracker.resume_due_tasks(limit=200)
+        return {"recovered_runs": recovered_runs, "resumed_tasks": resumed_tasks}
 
     def execution_mode_payload(self) -> dict[str, object]:
         mode = str(self.store.get_setting(self.EXECUTION_MODE_SETTING, "tick")).strip().lower()
@@ -604,6 +612,7 @@ class PrimordialRuntime:
         return payload
 
     def work_status_payload(self, *, limit: int = 8) -> dict[str, object]:
+        self.repair_execution_state()
         tasks = self.store.list_tasks(limit=500)
         runs = self.store.list_task_runs(limit=200)
         targets = {target.id: target for target in self.store.list_targets()}
@@ -685,8 +694,8 @@ class PrimordialRuntime:
         blockers = self._work_status_blockers()
         target_states = []
         for target in targets.values():
-            state = target.metadata.get("methodology_state", {})
-            if not isinstance(state, dict):
+            state = self._live_methodology_state_payload(target)
+            if not state:
                 continue
             target_states.append(
                 {
@@ -920,6 +929,7 @@ class PrimordialRuntime:
         }
 
     def ask_operator_ai(self, message: str, *, target: str | None = None) -> dict[str, object]:
+        self.repair_execution_state()
         question = message.strip()
         if not question:
             raise ValueError("message is required")
@@ -1507,6 +1517,13 @@ class PrimordialRuntime:
     def _processor_num_gpu(self, processor: str) -> int | None:
         return 0 if processor == "cpu" else None
 
+    def _ollama_timeout_seconds_for_processor(self, processor: str) -> int:
+        return (
+            self.WORKER_AI_TIMEOUT_SECONDS_CPU
+            if processor == "cpu"
+            else self.WORKER_AI_TIMEOUT_SECONDS_GPU
+        )
+
     def _worker_ai_generate(
         self,
         task: Task,
@@ -1518,6 +1535,7 @@ class PrimordialRuntime:
             return None
         model = task.provider_model or self.router.select_route(task).model_name
         role = self._model_role_for_route(task.provider_route)
+        processor = self._current_model_role_processors().get(role or "", "gpu") if role else "gpu"
         num_gpu = self._role_num_gpu(role) if role else None
         try:
             response = self.ollama.generate(
@@ -1527,6 +1545,7 @@ class PrimordialRuntime:
                 temperature=temperature,
                 num_gpu=num_gpu,
                 keep_alive="2h",
+                timeout_seconds=self._ollama_timeout_seconds_for_processor(processor),
             )
         except Exception as exc:  # noqa: BLE001 - worker AI is opportunistic and must not stall autonomy
             self.store.insert_event(
@@ -1544,7 +1563,7 @@ class PrimordialRuntime:
             "text": response.text,
             "elapsed_seconds": response.elapsed_seconds,
             "num_gpu": num_gpu,
-            "processor": "cpu" if num_gpu == 0 else "gpu",
+            "processor": processor,
         }
 
     def _operator_state_ai_review(
@@ -1572,6 +1591,7 @@ class PrimordialRuntime:
             "Use current-generation records only for target claims."
         )
         try:
+            processor = "cpu" if route_num_gpu == 0 else "gpu"
             response = self.ollama.generate(
                 model=route_model,
                 system=system,
@@ -1579,6 +1599,7 @@ class PrimordialRuntime:
                 temperature=0.15,
                 num_gpu=route_num_gpu,
                 keep_alive="2h",
+                timeout_seconds=self._ollama_timeout_seconds_for_processor(processor),
             )
         except Exception as exc:  # noqa: BLE001 - deterministic state remains available when local review fails
             self.store.insert_event(
@@ -1875,7 +1896,7 @@ class PrimordialRuntime:
                 lines.append(
                     f"Active IP: {target.metadata.get('active_ip')} generation={target.metadata.get('active_ip_generation')}"
                 )
-            methodology_state = target.metadata.get("methodology_state", {})
+            methodology_state = self._live_methodology_state_payload(target)
             if isinstance(methodology_state, dict) and methodology_state:
                 lines.append(
                     "Methodology state: "
@@ -1928,6 +1949,18 @@ class PrimordialRuntime:
         primitive_names = ", ".join(sorted(primitive.name for primitive in primitives))
         lines.append(f"Registered primitives: {primitive_names}")
         return "\n".join(lines)
+
+    def _live_methodology_state_payload(self, target: Target | None) -> dict[str, object]:
+        if target is None:
+            return {}
+        try:
+            state = self.workflow.preview_target_state(target)
+        except Exception:  # noqa: BLE001 - status surfaces must degrade safely
+            cached = target.metadata.get("methodology_state", {})
+            return cached if isinstance(cached, dict) else {}
+        payload = state.as_payload()
+        payload["planner_version"] = 2
+        return payload
 
     def _target_active_generation(self, target: Target | None) -> str | None:
         if target is None or target.metadata.get("active_ip_generation") is None:
@@ -2021,11 +2054,13 @@ class PrimordialRuntime:
         )
         next_actions = self._deterministic_next_actions(current_evidence, interests, findings, capabilities)
         capability_gaps = self._deterministic_capability_gaps(current_evidence, evidence_kinds, capabilities)
-        methodology_state = target.metadata.get("methodology_state", {}) if target else {}
+        methodology_state = self._live_methodology_state_payload(target) if target else {}
+        derived_next_actions = list(next_actions)
         if isinstance(methodology_state, dict):
             planned_actions = methodology_state.get("candidate_actions", [])
             if isinstance(planned_actions, list) and planned_actions:
-                next_actions = []
+                merged_actions: list[str] = []
+                seen_actions: set[str] = set()
                 for item in planned_actions[:5]:
                     if not isinstance(item, dict):
                         continue
@@ -2040,7 +2075,18 @@ class PrimordialRuntime:
                         line += f" Confidence: {float(confidence):.2f}."
                     if reason:
                         line += f" Reason: {reason}"
-                    next_actions.append(line.strip())
+                    normalized = line.strip()
+                    lowered = normalized.lower()
+                    if lowered not in seen_actions:
+                        merged_actions.append(normalized)
+                        seen_actions.add(lowered)
+                for action in derived_next_actions:
+                    lowered = action.lower()
+                    if lowered in seen_actions:
+                        continue
+                    merged_actions.append(action)
+                    seen_actions.add(lowered)
+                next_actions = merged_actions[:6]
 
         facts = []
         if target:

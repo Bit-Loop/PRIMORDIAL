@@ -43,6 +43,7 @@ class OllamaClient:
         num_ctx: int = 8192,
         num_gpu: int | None = None,
         keep_alive: str | None = None,
+        timeout_seconds: int | None = None,
     ) -> OllamaResponse:
         payload = {
             "model": model,
@@ -58,7 +59,7 @@ class OllamaClient:
             payload["options"]["num_gpu"] = num_gpu
         if keep_alive:
             payload["keep_alive"] = keep_alive
-        data = self._post_generate(payload)
+        data = self._post_generate(payload, timeout_seconds=timeout_seconds)
         text = str(data.get("response", "")).strip()
         if not text:
             raise RuntimeError("Ollama returned an empty response")
@@ -151,7 +152,7 @@ class OllamaClient:
         except Exception:
             return False
 
-    def _post_generate(self, payload: dict[str, object]) -> dict[str, object]:
+    def _post_generate(self, payload: dict[str, object], *, timeout_seconds: int | None = None) -> dict[str, object]:
         body = json.dumps(payload).encode("utf-8")
         req = request.Request(
             f"{self.base_url}/api/generate",
@@ -160,7 +161,7 @@ class OllamaClient:
             headers={"Content-Type": "application/json", "Accept": "application/json"},
         )
         try:
-            with request.urlopen(req, timeout=self.timeout_seconds) as response:
+            with request.urlopen(req, timeout=timeout_seconds or self.timeout_seconds) as response:
                 data = json.loads(response.read().decode("utf-8"))
         except error.URLError as exc:
             raise RuntimeError(f"Ollama is not reachable at {self.base_url}: {exc}") from exc

@@ -12,11 +12,15 @@ from primordial.core.domain.enums import (
     EvidenceType,
     MethodologyPhase,
     NotificationChannel,
+    RiskTier,
     ScopeProfile,
     TaskKind,
+    TaskRunStatus,
+    TaskStatus,
     VerificationStatus,
 )
 from primordial.core.domain.models import EvidenceRecord, Task
+from primordial.core.domain.models import TaskRun
 from primordial.runtime import PrimordialRuntime
 from tests.support import build_probe_fixture, write_scope_file
 
@@ -41,6 +45,58 @@ class RuntimeIntegrationTests(unittest.TestCase):
                 payload["interval_seconds"],
                 PrimordialRuntime.DEFAULT_EXECUTION_INTERVAL_SECONDS,
             )
+            runtime.shutdown()
+
+    def test_work_status_repairs_stale_active_run_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = AppConfig.from_env(project_root=root)
+            config.manifests_dir = MANIFESTS_DIR
+            config.ensure_directories()
+            scope_path = write_scope_file(
+                root,
+                targets=[
+                    {
+                        "handle": "pirate.htb",
+                        "display_name": "Pirate Fixture",
+                        "in_scope": True,
+                        "assets": [{"asset": "http://pirate.htb/", "asset_type": "webapp"}],
+                    }
+                ],
+            )
+            runtime = PrimordialRuntime(config)
+            runtime.initialize()
+            runtime.import_scope(scope_path, ScopeProfile.HACK_THE_BOX)
+            target = runtime.store.list_targets()[0]
+            task = Task(
+                target_id=target.id,
+                phase=MethodologyPhase.ANALYSIS,
+                kind=TaskKind.ANALYZE_EVIDENCE,
+                title="Analyze accumulated evidence",
+                summary="Synthetic stale execution fixture",
+                role=AgentRole.ANALYSIS_WORKER,
+                risk_tier=RiskTier.LOW,
+                status=TaskStatus.CANCELLED,
+            )
+            runtime.store.insert_task(task)
+            run = TaskRun(
+                task_id=task.id,
+                attempt_number=1,
+                role=task.role,
+                provider_route=task.provider_route or runtime.router.select_route(task).route,
+                model_name=task.provider_model or runtime.router.select_route(task).model_name,
+                status=TaskRunStatus.RUNNING,
+                trace_summary="task claimed for brokered execution",
+            )
+            runtime.store.insert_task_run(run)
+
+            payload = runtime.work_status_payload()
+            repaired_run = next(item for item in runtime.store.list_task_runs(limit=20) if item.id == run.id)
+
+            self.assertFalse(any(item["task_id"] == task.id for item in payload["active"]))
+            self.assertEqual(repaired_run.status, TaskRunStatus.CANCELLED)
+            self.assertIsNotNone(repaired_run.finished_at)
+            self.assertIn("recovered stale execution state", repaired_run.error or "")
             runtime.shutdown()
 
     def test_real_recon_creates_evidence_and_artifacts(self) -> None:
