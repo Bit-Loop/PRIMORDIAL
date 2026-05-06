@@ -59,3 +59,5 @@ Thumbs.db
 runtime/crash.journal
 *.log
 docs/HUMAN_CHANGE_GUIDE.md
+claude-instructions.md
+CLAUDE.md

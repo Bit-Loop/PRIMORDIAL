@@ -200,7 +200,7 @@ Core entities likely include:
 - A compaction layer updates interests and keeps context small
 - Higher-value unresolved tasks can be escalated to Claude agents
 
-## 10. Initial Local Model Strategy
+## 10. Initial Local Model Strategy (note we are using stronger and better models)
 
 - Default topology:
   - One GPU-backed planner/reasoner
@@ -303,7 +303,7 @@ These are planning estimates and must be validated against the chosen runtime, q
 
 - Additional CPU-resident reviewer tier made possible by `92GB` RAM: CPU potentially loadable with strong quantization and careful cache control, but expected to be very slow
 
-### 11.3 Hot Path vs Cold Path
+### 11.3 Hot Path vs Cold Path  (important)
 
 - `Hot path`
   - continuous orchestration
@@ -328,9 +328,9 @@ These are planning estimates and must be validated against the chosen runtime, q
 
 The vulnerability chaining worker should usually be warm but not continuously active; trigger it only when evidence density or relationship signals exceed thresholds.
 
-### 11.4 Claude Escalation Policy
+### 11.4 Escalation Policy
 
-- Escalate to Claude when:
+- Escalate to Claude or GPT 5.5 when:
   - candidate findings hinge on subtle authorization or business-logic interpretation
   - local models disagree materially
   - evidence spans many artifacts and requires long-horizon synthesis

@@ -677,6 +677,142 @@ class PrimordialRuntime:
         )
         return updated
 
+    def replace_target_scope_assets(
+        self,
+        *,
+        handle: str,
+        display_name: str,
+        profile: ScopeProfile,
+        in_scope: bool,
+        active_ip: str | None,
+        asset_rows: list[dict[str, object]],
+    ) -> Target:
+        """Replace all scope assets for a target atomically.
+
+        Each row in asset_rows must contain: asset (str), asset_type (str),
+        and optionally ports (str, default "*") and scope_rule (str, default "allow").
+        Updating the active IP may create a new generation if the IP changes.
+        No ticks are triggered — caller is responsible for orchestration.
+        """
+        existing = self.store.get_target_by_handle(handle, profile)
+        if existing is None:
+            target = self.register_target(
+                handle=handle,
+                display_name=display_name or handle,
+                profile=profile,
+                in_scope=in_scope,
+                assets=[],
+                emit_event=False,
+            )
+        else:
+            target = existing
+            target.display_name = display_name or target.display_name
+            target.in_scope = in_scope
+            target.updated_at = utc_now()
+            self.store.insert_target(target)
+
+        self.store.delete_scope_assets_for_target(target.id)
+
+        for row in asset_rows:
+            raw_asset = str(row["asset"]).strip()
+            if not raw_asset:
+                continue
+            asset_type = str(row.get("asset_type") or self._infer_asset_type(raw_asset))
+            meta: dict[str, object] = {
+                "ports": str(row.get("ports") or "*"),
+                "scope_rule": str(row.get("scope_rule") or "allow"),
+                "operator_managed": True,
+            }
+            self.store.insert_scope_asset(
+                ScopeAsset(
+                    target_id=target.id,
+                    asset=raw_asset,
+                    asset_type=asset_type,
+                    metadata=meta,
+                )
+            )
+
+        if active_ip:
+            target = self.set_target_active_ip(target, active_ip, source="scope_editor")
+
+        self.findings_context.ensure_target(target)
+        self.store.insert_event(
+            EventRecord(
+                type=EventType.SCOPE_UPDATED,
+                summary=f"Scope assets replaced for {target.handle}: {len(asset_rows)} asset(s)",
+                target_id=target.id,
+                metadata={"asset_count": len(asset_rows), "profile": profile.value},
+            )
+        )
+        return target
+
+    def diagnose_payload(self) -> dict[str, object]:
+        """Return a human-readable diagnostic snapshot for operator troubleshooting."""
+        from primordial.core.domain.enums import TaskStatus, TaskRunStatus
+
+        tasks = self.store.list_tasks(limit=200)
+        runs = self.store.list_task_runs(limit=50)
+        targets = self.store.list_targets()
+        mode = self.execution_mode_payload()
+        models = self.models_payload()
+
+        status_counts: dict[str, int] = {}
+        for task in tasks:
+            key = task.status.value
+            status_counts[key] = status_counts.get(key, 0) + 1
+
+        active_runs = [r for r in runs if r.status in {TaskRunStatus.CLAIMED, TaskRunStatus.RUNNING} and r.finished_at is None]
+        failed_recent = [r for r in runs if r.status in {TaskRunStatus.FAILED, TaskRunStatus.TIMED_OUT}][:5]
+
+        pending_approvals = [t for t in tasks if t.status == TaskStatus.NEEDS_APPROVAL]
+        stuck_running = [t for t in tasks if t.status == TaskStatus.RUNNING]
+
+        ollama_ok = False
+        ollama_error = ""
+        try:
+            import urllib.request
+            with urllib.request.urlopen("http://127.0.0.1:11434/api/tags", timeout=3) as resp:
+                ollama_ok = resp.status == 200
+        except Exception as exc:  # noqa: BLE001
+            ollama_error = str(exc)
+
+        lines = [
+            "=== Primordial System Diagnostics ===",
+            f"Ollama reachable: {'yes' if ollama_ok else f'NO - {ollama_error}'}",
+            f"Execution mode: {mode['mode']} (interval: {mode['interval_seconds']}s)",
+            f"Targets: {len(targets)}  |  Tasks total: {len(tasks)}",
+            f"Task status breakdown: {status_counts}",
+        ]
+        if active_runs:
+            lines.append(f"Active runs ({len(active_runs)}):")
+            for r in active_runs:
+                age = (utc_now() - r.started_at).total_seconds()
+                lines.append(f"  - {r.role.value} | {r.model_name} | {r.status.value} | running {age:.0f}s")
+        else:
+            lines.append("Active runs: none")
+        if pending_approvals:
+            lines.append(f"Awaiting approval ({len(pending_approvals)}):")
+            for t in pending_approvals[:5]:
+                lines.append(f"  - [{t.id}] {t.title}")
+        if stuck_running:
+            lines.append(f"Tasks stuck in RUNNING state (no active run): {len(stuck_running)}")
+            lines.append("  -> Run 'repair_execution_state' or restart to recover")
+        if failed_recent:
+            lines.append("Recent failures:")
+            for r in failed_recent:
+                lines.append(f"  - {r.role.value} | {r.model_name} | {r.error or 'no error recorded'}")
+        roles = models.get("roles", [])
+        lines.append("Model routes:")
+        for role in roles:
+            if isinstance(role, dict):
+                lines.append(f"  {role.get('role')}: {role.get('selected_model')} ({role.get('processor')})")
+        if not targets:
+            lines.append("WARNING: No targets configured — ticks will produce no tasks until scope is added")
+        for target in targets:
+            assets = self.store.list_scope_assets(target.id)
+            lines.append(f"Target '{target.handle}': {len(assets)} scope asset(s) | active_ip={target.metadata.get('active_ip') or 'not set'}")
+        return {"lines": lines, "summary": "\n".join(lines)}
+
     def remove_target(self, handle: str, profile: ScopeProfile | None = None) -> dict[str, object]:
         target = self.store.get_target_by_handle(handle, profile)
         if target is None:

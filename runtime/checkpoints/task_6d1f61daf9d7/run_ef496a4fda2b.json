@@ -1,0 +1,135 @@
+{
+  "run": {
+    "attempt_number": 1,
+    "cold_path": true,
+    "error": null,
+    "finished_at": "2026-05-06T05:20:44.579047+00:00",
+    "heartbeat_at": "2026-05-06T05:20:44.579060+00:00",
+    "id": "run_ef496a4fda2b",
+    "lease_expires_at": "2026-05-06T05:23:05.583596+00:00",
+    "metadata": {
+      "offer_count": 1,
+      "offer_id": "security-code-runner:task_6d1f61daf9d7:1",
+      "rationale": "mission-critical code and exploit-oriented work should use the slower cold CPU lane so it does not compete with the GPU hot-path orchestrator",
+      "risk_tier": "moderate",
+      "runner_id": "security-code-runner",
+      "scheduler_lane": "cold-path",
+      "suitability_score": 158,
+      "worker_contract": "code_cpu_contract",
+      "worker_lane": "cold-path"
+    },
+    "model_name": "qwen3-coder-next:q4_K_M",
+    "provider_route": "cold_review",
+    "role": "code_worker",
+    "started_at": "2026-05-06T05:18:05.583601+00:00",
+    "status": "succeeded",
+    "task_id": "task_6d1f61daf9d7",
+    "trace_summary": "PoC applicability validation completed"
+  },
+  "summary": "PoC applicability validation completed",
+  "task": {
+    "attempts": 1,
+    "created_at": "2026-05-06T05:18:03.898741+00:00",
+    "evidence_refs": [],
+    "id": "task_6d1f61daf9d7",
+    "kind": "poc_applicability_validation",
+    "latest_run_id": "run_ef496a4fda2b",
+    "max_attempts": 1,
+    "metadata": {
+      "active_ip": "10.129.48.145",
+      "active_ip_generation": "6",
+      "ai_model": "qwen3-coder-next:q4_K_M",
+      "ai_processor": "cpu",
+      "ai_proposal": {
+        "blocked_reasons": [
+          "No evidence of vulnerable LDAP error responses or misconfigured ACLs enabling enumeration",
+          "Kerberos user discovery returned 0 users, suggesting either no users exist or enumeration is blocked",
+          "No version or patch level for AD/LDAP service is available to confirm EDB 32586 relevance",
+          "No authenticated or low-priv credentials available for bounded LDAP enumeration",
+          "Web content discovery found no AD-facing endpoints"
+        ],
+        "candidate_actions": [
+          {
+            "confidence": 0.72,
+            "primitive_hint": "ldap_bind, ldap_search, ldap_error_interpretation",
+            "rationale": "EDB 32586 relies on distinguishable error responses (e.g., 'no such object' vs 'invalid credentials') to enumerate users. Confirming whether the LDAP service returns such distinguishable errors is required before PoC applicability.",
+            "title": "Validate LDAP bind policy and error verbosity"
+          },
+          {
+            "confidence": 0.68,
+            "primitive_hint": "ldap_bind_with_creds, ldap_search",
+            "rationale": "EDB 32586-style enumeration is more reliably performed with minimal privileges (e.g., guest or low-priv bind). If credentials exist, this is safer and more deterministic than unauthenticated attempts.",
+            "title": "Perform bounded LDAP enumeration with authenticated bind (if credentials available)"
+          },
+          {
+            "confidence": 0.58,
+            "primitive_hint": "web_crawl, http_get, path_discovery",
+            "rationale": "Some username enumeration PoCs target web frontends (e.g., OWA, ADFS) rather than raw LDAP. Web content discovery so far found no paths, but deeper IIS-specific wordlists may be needed.",
+            "title": "Cross-check IIS paths for AD-related endpoints (e.g., /adfs, /owa, /rpc) that may expose enumeration vectors"
+          }
+        ],
+        "capability_gaps": [
+          "LDAP rootDSE query with extended controls (e.g., supportedCapabilities) to infer AD version",
+          "LDAP error code interpretation (e.g., 0x525 vs 0x52e vs 0x530)",
+          "Authenticated LDAP enumeration with minimal privileges (e.g., guest bind)",
+          "IIS-specific AD endpoint discovery (e.g., /adfs, /owa, /rpc, /autodiscover)"
+        ],
+        "confidence": 0.42,
+        "evidence_refs": [
+          "evidence_5179c46c4cee",
+          "evidence_bdb0a82055ac",
+          "evidence_8e18ef9f486a",
+          "evidence_00848c0a26e5"
+        ],
+        "facts": [
+          "Target pirate.htb (10.129.48.145) hosts Microsoft Active Directory LDAP on ports 389/636/3268/3269, confirmed via banners and AD enumeration evidence.",
+          "Kerberos user discovery attempt (evidence_5179c46c4cee) returned 0 user principal(s) and 0 SPN candidate(s), indicating no successful enumeration.",
+          "Anonymous AD enumeration (evidence_bdb0a82055ac) observed 6 LDAP naming contexts but 0 SMB shares or RPC users, limiting attack surface.",
+          "HTTP service (port 80) is IIS 10.0, no interesting paths discovered (evidence_8e18ef9f486a).",
+          "DNS enumeration (evidence_bcc596da15ac) found 5 records but AXFR failed, no additional hostnames identified.",
+          "Searchsploit returned 1 non-DoS candidate (EDB 32586) for AD LDAP username enumeration, but no version-specific validation was performed.",
+          "No evidence of vulnerable LDAP bind behavior (e.g., unauthenticated bind allowed), extended error codes, or misconfigured ACLs enabling enumeration."
+        ],
+        "required_primitives": [
+          "ldap_error_interpretation",
+          "ldap_bind_with_creds",
+          "ldap_search_with_filter",
+          "http_get_with_error_analysis"
+        ],
+        "stop_conditions": [
+          "Do not attempt unauthenticated LDAP enumeration if error responses are not distinguishable",
+          "Do not proceed with PoC execution without bounded version validation (e.g., via banner parsing or LDAP rootDSE query)",
+          "Do not perform brute-force or fuzzing-based enumeration without explicit bounded scope and rate-limiting controls",
+          "Do not execute any PoC without policy approval and credential minimization review"
+        ],
+        "summary": "Public PoC (EDB 32586) for AD LDAP username enumeration is technically applicable in principle due to AD/LDAP services being present, but lacks version/configuration validation, requires authenticated or pre-authentication context, and has no evidence of exploitable misconfiguration or vulnerable banner. Current recon shows no user enumeration success and no exposed vulnerable endpoints."
+      },
+      "ai_review_attempted": true,
+      "ai_review_status": "completed",
+      "autonomy_mode": "assisted",
+      "cold_path": true,
+      "provider_rationale": "mission-critical code and exploit-oriented work should use the slower cold CPU lane so it does not compete with the GPU hot-path orchestrator",
+      "worker_contract": "code_cpu_contract"
+    },
+    "methodology": "web_app_core",
+    "parent_task_id": null,
+    "phase": "analysis",
+    "priority": 77,
+    "provider_model": "qwen3-coder-next:q4_K_M",
+    "provider_route": "cold_review",
+    "required_capabilities": [
+      "poc-applicability-validation",
+      "poc-adaptation",
+      "exploit-safety-review"
+    ],
+    "requires_approval": false,
+    "risk_tier": "moderate",
+    "role": "code_worker",
+    "session_id": "session_1af6142eb1f7",
+    "status": "succeeded",
+    "summary": "Classify retained public exploit references against exact service/version evidence, foothold prerequisites, and policy gates for pirate.htb.",
+    "target_id": "target_19956ec84d56",
+    "title": "Validate public PoC applicability",
+    "updated_at": "2026-05-06T05:20:44.590978+00:00"
+  }
+}

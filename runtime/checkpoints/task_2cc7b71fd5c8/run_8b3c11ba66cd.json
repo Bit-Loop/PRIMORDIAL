@@ -1,0 +1,66 @@
+{
+  "run": {
+    "attempt_number": 1,
+    "cold_path": false,
+    "error": null,
+    "finished_at": "2026-05-06T04:52:48.233010+00:00",
+    "heartbeat_at": "2026-05-06T04:52:48.233012+00:00",
+    "id": "run_8b3c11ba66cd",
+    "lease_expires_at": "2026-05-06T04:57:10.627894+00:00",
+    "metadata": {
+      "offer_count": 1,
+      "offer_id": "security-analysis-runner:task_2cc7b71fd5c8:1",
+      "rationale": "default orchestration and broad analysis stay on the hot path",
+      "risk_tier": "low",
+      "runner_id": "security-analysis-runner",
+      "scheduler_lane": "hot-path",
+      "suitability_score": 147,
+      "worker_contract": "analysis_hot_contract",
+      "worker_lane": "hot-path"
+    },
+    "model_name": "gemma4:e4b",
+    "provider_route": "local_fast",
+    "role": "recon_worker",
+    "started_at": "2026-05-06T04:52:10.627900+00:00",
+    "status": "succeeded",
+    "task_id": "task_2cc7b71fd5c8",
+    "trace_summary": "service discovery completed"
+  },
+  "summary": "service discovery completed",
+  "task": {
+    "attempts": 1,
+    "created_at": "2026-05-06T04:51:54.773881+00:00",
+    "evidence_refs": [],
+    "id": "task_2cc7b71fd5c8",
+    "kind": "service_discovery",
+    "latest_run_id": "run_8b3c11ba66cd",
+    "max_attempts": 1,
+    "metadata": {
+      "active_ip": "10.129.48.145",
+      "active_ip_generation": "6",
+      "autonomy_mode": "assisted",
+      "cold_path": false,
+      "provider_rationale": "default orchestration and broad analysis stay on the hot path",
+      "worker_contract": "analysis_hot_contract"
+    },
+    "methodology": "web_app_core",
+    "parent_task_id": null,
+    "phase": "recon",
+    "priority": 88,
+    "provider_model": "gemma4:e4b",
+    "provider_route": "local_fast",
+    "required_capabilities": [
+      "tcp-service-discovery",
+      "service-identification"
+    ],
+    "requires_approval": false,
+    "risk_tier": "low",
+    "role": "recon_worker",
+    "session_id": "session_1af6142eb1f7",
+    "status": "succeeded",
+    "summary": "Collect TCP service inventory evidence for pirate.htb.",
+    "target_id": "target_19956ec84d56",
+    "title": "Run bounded service discovery",
+    "updated_at": "2026-05-06T04:52:48.238814+00:00"
+  }
+}

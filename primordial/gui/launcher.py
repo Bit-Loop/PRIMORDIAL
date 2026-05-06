@@ -82,14 +82,15 @@ class PrimordialLauncher:
         self._configure_solarized_dark_theme()
         self.host_var = tk.StringVar(value="127.0.0.1")
         self.port_var = tk.IntVar(value=1337)
-        self.target_var = tk.StringVar(value="pirate.htb")
-        self.ip_var = tk.StringVar(value="10.129.47.117")
-        self.title_var = tk.StringVar(value="HTB Pirate Session")
+        # scope_handle_var / scope_active_ip_var are canonical; target_var / ip_var are aliases
         self.scope_handle_var = tk.StringVar(value="pirate.htb")
+        self.target_var = self.scope_handle_var
+        self.scope_active_ip_var = tk.StringVar(value="10.129.47.117")
+        self.ip_var = self.scope_active_ip_var
+        self.title_var = tk.StringVar(value="HTB Pirate Session")
         self.scope_display_name_var = tk.StringVar(value="HTB Pirate")
         self.scope_profile_var = tk.StringVar(value=ScopeProfile.HACK_THE_BOX.value)
-        self.scope_assets_var = tk.StringVar(value="pirate.htb, 10.129.47.117")
-        self.scope_active_ip_var = tk.StringVar()
+        self.scope_assets_var = tk.StringVar(value="")
         self.scope_in_scope_var = tk.BooleanVar(value=True)
         self.scope_profile_id_var = tk.StringVar()
         self.scope_profile_label_var = tk.StringVar()
@@ -105,8 +106,11 @@ class PrimordialLauncher:
         self.gpu_load_var = tk.StringVar(value="GPU: sampling")
         self.runtime_tuning_status_var = tk.StringVar(value="Runtime tuning: defaults")
         self.target_persistence_status_var = tk.StringVar(value="Active target: not loaded")
-        self.htb_ip_warning_var = tk.StringVar()
-        self.scope_ip_warning_var = tk.StringVar()
+        self.scope_status_var = tk.StringVar(value="")
+        self.htb_ip_warning_var = self.scope_status_var
+        self.scope_ip_warning_var = self.scope_status_var
+        self.scope_assets_tree: ttk.Treeview | None = None
+        self._scope_asset_rows: list[dict] = []
         self.execution_mode_var = tk.StringVar(value="tick")
         self.execution_toggle_text_var = tk.StringVar(value="Enable Continuous Mode")
         self.execution_mode_status_var = tk.StringVar(value="Execution mode: tick")
@@ -142,6 +146,9 @@ class PrimordialLauncher:
         self.ai_thinking_auto_var = tk.BooleanVar(value=True)
         self.ai_thinking_interval_var = tk.IntVar(value=5)
         self._ai_thinking_clear_after: datetime | None = None
+        self.agent_monitor_auto_var = tk.BooleanVar(value=True)
+        self.agent_monitor_interval_var = tk.IntVar(value=5)
+        self._agent_monitor_clear_after: datetime | None = None
         self._closed = False
         self._web_server: WebConsoleThread | None = None
         self._queue: Queue[tuple[str, object]] = Queue()
@@ -149,6 +156,9 @@ class PrimordialLauncher:
         self._stop_requested = Event()
         self._continuous_tick_running = False
         self._system_status_refresh_running = False
+        self._agent_monitor_refresh_running = False
+        self._ai_thinking_refresh_running = False
+        self._chat_refresh_running = False
         self._applied_execution_interval_seconds = PrimordialRuntime.DEFAULT_EXECUTION_INTERVAL_SECONDS
         self._execution_mode_after_id: str | None = None
         self._operation_seq = 0
@@ -384,49 +394,7 @@ class PrimordialLauncher:
         ttk.Button(server_frame, text="Open Browser", command=self._open_browser).grid(row=0, column=5, padx=6)
         ttk.Button(server_frame, text="Stop Web Server", command=self._stop_web_server).grid(row=0, column=6, padx=6)
 
-        target_frame = ttk.LabelFrame(root, text="HTB Target", padding=10)
-        target_frame.pack(fill=tk.X, pady=8)
-        ttk.Label(target_frame, text="Session title").grid(row=0, column=0, sticky=tk.W)
-        ttk.Entry(target_frame, textvariable=self.title_var, width=34).grid(row=0, column=1, sticky=tk.W, padx=6)
-        ttk.Label(target_frame, text="Handle").grid(row=1, column=0, sticky=tk.W, pady=(8, 0))
-        ttk.Entry(target_frame, textvariable=self.target_var, width=34).grid(row=1, column=1, sticky=tk.W, padx=6, pady=(8, 0))
-        ttk.Label(target_frame, text="IP").grid(row=1, column=2, sticky=tk.W, pady=(8, 0))
-        ttk.Entry(target_frame, textvariable=self.ip_var, width=18).grid(row=1, column=3, sticky=tk.W, padx=6, pady=(8, 0))
-        ttk.Button(target_frame, text="Update HTB Target", command=self._update_htb_target).grid(row=1, column=4, sticky=tk.W, padx=6, pady=(8, 0))
-        ttk.Label(target_frame, textvariable=self.target_persistence_status_var, foreground=SOLARIZED["cyan"]).grid(
-            row=2, column=0, columnspan=5, sticky=tk.W, pady=(8, 0)
-        )
-        ttk.Label(target_frame, textvariable=self.htb_ip_warning_var, foreground=SOLARIZED["orange"]).grid(
-            row=3, column=0, columnspan=5, sticky=tk.W, pady=(4, 0)
-        )
-
-        scope_frame = ttk.LabelFrame(root, text="Scope Management", padding=10)
-        scope_frame.pack(fill=tk.X, pady=8)
-        ttk.Label(scope_frame, text="Handle").grid(row=0, column=0, sticky=tk.W)
-        ttk.Entry(scope_frame, textvariable=self.scope_handle_var, width=24).grid(row=0, column=1, sticky=tk.W, padx=6)
-        ttk.Label(scope_frame, text="Display Name").grid(row=0, column=2, sticky=tk.W)
-        ttk.Entry(scope_frame, textvariable=self.scope_display_name_var, width=24).grid(row=0, column=3, sticky=tk.W, padx=6)
-        ttk.Label(scope_frame, text="Profile").grid(row=0, column=4, sticky=tk.W)
-        self.scope_profile_combo = ttk.Combobox(
-            scope_frame,
-            textvariable=self.scope_profile_var,
-            values=[item["id"] for item in self.runtime.scope_profiles_payload()["profiles"]],
-            width=14,
-            state="readonly",
-        )
-        self.scope_profile_combo.grid(row=0, column=5, sticky=tk.W, padx=6)
-        ttk.Label(scope_frame, text="Assets").grid(row=1, column=0, sticky=tk.W, pady=(8, 0))
-        ttk.Entry(scope_frame, textvariable=self.scope_assets_var, width=62).grid(row=1, column=1, columnspan=3, sticky=tk.EW, padx=6, pady=(8, 0))
-        ttk.Checkbutton(scope_frame, text="In scope", variable=self.scope_in_scope_var).grid(row=1, column=4, sticky=tk.W, pady=(8, 0))
-        ttk.Button(scope_frame, text="Add / Update Target", command=self._add_manual_target).grid(row=1, column=5, sticky=tk.W, padx=6, pady=(8, 0))
-        ttk.Label(scope_frame, text="Active IP").grid(row=2, column=0, sticky=tk.W, pady=(8, 0))
-        ttk.Entry(scope_frame, textvariable=self.scope_active_ip_var, width=24).grid(row=2, column=1, sticky=tk.W, padx=6, pady=(8, 0))
-        ttk.Label(scope_frame, textvariable=self.scope_ip_warning_var, foreground=SOLARIZED["orange"]).grid(
-            row=2, column=2, columnspan=4, sticky=tk.W, pady=(8, 0)
-        )
-        ttk.Button(scope_frame, text="Import Scope File", command=self._import_scope_file).grid(row=3, column=1, sticky=tk.W, padx=6, pady=(8, 0))
-        ttk.Label(scope_frame, text="Imports JSON scope files or line-based asset lists.").grid(row=3, column=2, columnspan=4, sticky=tk.W, pady=(8, 0))
-        scope_frame.columnconfigure(3, weight=1)
+        self._build_scope_target_frame(root)
 
         notes_frame = ttk.LabelFrame(root, text="Tips, Program Notes, and Agent Guidance", padding=10)
         notes_frame.pack(fill=tk.X, pady=8)
@@ -457,7 +425,8 @@ class PrimordialLauncher:
         self.stop_work_button = ttk.Button(action_frame, text="Stop Work", command=self._stop_work)
         self.stop_work_button.grid(row=0, column=7, padx=6)
         ttk.Button(action_frame, text="Clear Models", command=lambda: self._run_background("Clearing models", self._clear_models)).grid(row=0, column=8, padx=6)
-        ttk.Button(action_frame, text="Exit", command=self._close).grid(row=0, column=9, padx=6)
+        ttk.Button(action_frame, text="Check System", command=self._check_system).grid(row=0, column=9, padx=6)
+        ttk.Button(action_frame, text="Exit", command=self._close).grid(row=0, column=10, padx=6)
         ttk.Label(action_frame, textvariable=self.work_status_var).grid(row=1, column=0, columnspan=10, sticky=tk.W, pady=(8, 0))
         ttk.Label(action_frame, textvariable=self.execution_mode_status_var).grid(row=2, column=0, columnspan=3, sticky=tk.W, pady=(8, 0))
         ttk.Label(action_frame, text="Tick interval seconds").grid(row=2, column=3, sticky=tk.W, pady=(8, 0))
@@ -491,21 +460,26 @@ class PrimordialLauncher:
     def _build_monitor_tab(self, root: ttk.Frame) -> None:
         controls = ttk.Frame(root)
         controls.pack(fill=tk.X)
-        ttk.Label(controls, text="Read-only stream of agent traces, task runs, and assistant messages.").pack(side=tk.LEFT)
-        ttk.Button(controls, text="Refresh Agent Monitor", command=lambda: self._refresh_agent_monitor(nonblocking=True)).pack(side=tk.RIGHT)
+        ttk.Label(controls, text="Task runs · traces · events · status. AI reasoning text is in AI Thinking.").pack(side=tk.LEFT)
+        ttk.Button(controls, text="Refresh Now", command=self._trigger_agent_monitor_refresh).pack(side=tk.RIGHT, padx=(6, 0))
+        ttk.Button(controls, text="Clear Screen", command=self._clear_agent_monitor_screen).pack(side=tk.RIGHT)
+        ttk.Checkbutton(controls, text="Auto", variable=self.agent_monitor_auto_var).pack(side=tk.RIGHT, padx=(12, 4))
+        ttk.Label(controls, text="Interval s").pack(side=tk.RIGHT)
+        ttk.Entry(controls, textvariable=self.agent_monitor_interval_var, width=5).pack(side=tk.RIGHT, padx=4)
         self.agent_output = tk.Text(root, wrap=tk.WORD, height=34)
         self._configure_text_widget(self.agent_output)
+        self._configure_monitor_tags()
         self.agent_output.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
         self.agent_output.configure(state=tk.DISABLED)
 
     def _build_ai_thinking_tab(self, root: ttk.Frame) -> None:
         controls = ttk.Frame(root)
         controls.pack(fill=tk.X)
-        ttk.Label(controls, text="Read-only model reasoning stream. Stored records are not deleted by Clear Screen.").pack(side=tk.LEFT)
-        ttk.Checkbutton(controls, text="Auto update", variable=self.ai_thinking_auto_var).pack(side=tk.LEFT, padx=(12, 4))
-        ttk.Label(controls, text="Interval seconds").pack(side=tk.LEFT)
-        ttk.Entry(controls, textvariable=self.ai_thinking_interval_var, width=6).pack(side=tk.LEFT, padx=4)
-        ttk.Button(controls, text="Refresh Now", command=lambda: self._refresh_ai_thinking(nonblocking=True)).pack(side=tk.RIGHT, padx=(6, 0))
+        ttk.Label(controls, text="AI-generated text only — color coded by agent role. Clear Screen keeps DB records.").pack(side=tk.LEFT)
+        ttk.Checkbutton(controls, text="Auto", variable=self.ai_thinking_auto_var).pack(side=tk.LEFT, padx=(12, 4))
+        ttk.Label(controls, text="Interval s").pack(side=tk.LEFT)
+        ttk.Entry(controls, textvariable=self.ai_thinking_interval_var, width=5).pack(side=tk.LEFT, padx=4)
+        ttk.Button(controls, text="Refresh Now", command=self._trigger_ai_thinking_refresh).pack(side=tk.RIGHT, padx=(6, 0))
         ttk.Button(controls, text="Clear Screen", command=self._clear_ai_thinking_screen).pack(side=tk.RIGHT)
         self.ai_thinking_output = tk.Text(root, wrap=tk.WORD, height=34)
         self._configure_text_widget(self.ai_thinking_output)
@@ -542,9 +516,93 @@ class PrimordialLauncher:
                 background=background,
                 font=("TkDefaultFont", 10, "bold"),
             )
+        self.ai_thinking_output.tag_configure(
+            "ai_section_head",
+            foreground=SOLARIZED["yellow"],
+            background=SOLARIZED["base03"],
+            font=("TkDefaultFont", 10, "bold"),
+        )
+        self.ai_thinking_output.tag_configure(
+            "ai_dim",
+            foreground=SOLARIZED["base00"],
+            background=SOLARIZED["base02"],
+        )
+
+    def _configure_monitor_tags(self) -> None:
+        palette = SOLARIZED
+        # Status badge colors for task/run states
+        status_colors = {
+            "running":       (palette["green"],   palette["base02"]),
+            "succeeded":     (palette["cyan"],    palette["base02"]),
+            "failed":        (palette["red"],     palette["base02"]),
+            "timed_out":     (palette["orange"],  palette["base02"]),
+            "pending":       (palette["base1"],   palette["base02"]),
+            "needs_approval":(palette["yellow"],  palette["base02"]),
+            "cancelled":     (palette["base01"],  palette["base02"]),
+            "section_head":  (palette["yellow"],  palette["base03"]),
+        }
+        for name, (fg, bg) in status_colors.items():
+            self.agent_output.tag_configure(
+                f"mon_{name}",
+                foreground=fg,
+                background=bg,
+                font=("TkDefaultFont", 10, "bold"),
+            )
+        self.agent_output.tag_configure(
+            "mon_dim",
+            foreground=palette["base00"],
+            background=palette["base02"],
+        )
+        self.agent_output.tag_configure(
+            "mon_err",
+            foreground=palette["red"],
+            background=palette["base02"],
+            lmargin1=12,
+            lmargin2=12,
+        )
+
+    def _configure_chat_tags(self) -> None:
+        palette = SOLARIZED
+        # Dark band = operator (user), lighter band = AI assistant
+        self.chat_output.tag_configure(
+            "chat_user",
+            background=palette["base02"],
+            foreground=palette["base1"],
+            lmargin1=8,
+            lmargin2=8,
+            spacing1=4,
+            spacing3=4,
+        )
+        self.chat_output.tag_configure(
+            "chat_user_header",
+            background=palette["base02"],
+            foreground=palette["cyan"],
+            font=("TkDefaultFont", 10, "bold"),
+            lmargin1=8,
+            lmargin2=8,
+            spacing1=6,
+        )
+        self.chat_output.tag_configure(
+            "chat_ai",
+            background=palette["base03"],
+            foreground=palette["base0"],
+            lmargin1=8,
+            lmargin2=8,
+            spacing1=4,
+            spacing3=4,
+        )
+        self.chat_output.tag_configure(
+            "chat_ai_header",
+            background=palette["base03"],
+            foreground=palette["green"],
+            font=("TkDefaultFont", 10, "bold"),
+            lmargin1=8,
+            lmargin2=8,
+            spacing1=6,
+        )
 
     def _build_chat_tab(self, root: ttk.Frame) -> None:
-        form = ttk.LabelFrame(root, text="Operator AI", padding=10)
+        form = ttk.LabelFrame(root, text="Operator Chat", padding=10)
         form.pack(fill=tk.X)
         ttk.Label(form, text="Target").grid(row=0, column=0, sticky=tk.W)
         ttk.Entry(form, textvariable=self.chat_target_var, width=28).grid(row=0, column=1, sticky=tk.W, padx=6)
@@ -556,6 +614,7 @@ class PrimordialLauncher:
         form.columnconfigure(1, weight=1)
         self.chat_output = tk.Text(root, wrap=tk.WORD, height=28)
         self._configure_text_widget(self.chat_output)
+        self._configure_chat_tags()
         self.chat_output.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
         self.chat_output.configure(state=tk.DISABLED)
 
@@ -785,17 +844,13 @@ class PrimordialLauncher:
         handle = str(state["handle"])
         display_name = str(state["display_name"])
         profile = str(state["profile"])
-        assets = [str(item) for item in state.get("assets", []) if str(item).strip()]
         active_ip = str(state.get("active_ip") or "").strip()
         generation = state.get("active_ip_generation")
         stale_count = int(state.get("stale_evidence_count", 0) or 0)
 
-        self.target_var.set(handle)
-        self.ip_var.set(active_ip)
         self.scope_handle_var.set(handle)
         self.scope_display_name_var.set(display_name)
         self.scope_profile_var.set(profile)
-        self.scope_assets_var.set(", ".join(assets or [handle]))
         self.scope_active_ip_var.set(active_ip)
         self.chat_target_var.set(handle)
         self.guidance_target_var.set(handle)
@@ -803,16 +858,15 @@ class PrimordialLauncher:
             f"Active target: {handle} | active IP: {active_ip or 'not set'} | "
             f"generation: {generation if generation is not None else 'none'} | historical evidence: {stale_count}"
         )
+        self._refresh_scope_table()
 
     def _install_target_warning_traces(self) -> None:
-        for variable in (self.target_var, self.ip_var, self.scope_handle_var, self.scope_active_ip_var):
+        for variable in (self.scope_handle_var, self.scope_active_ip_var):
             variable.trace_add("write", lambda *_args: self._refresh_target_ip_warnings())
 
     def _refresh_target_ip_warnings(self) -> None:
-        self.htb_ip_warning_var.set(self._target_ip_warning(self.target_var.get(), self.ip_var.get()))
-        self.scope_ip_warning_var.set(
-            self._target_ip_warning(self.scope_handle_var.get(), self.scope_active_ip_var.get())
-        )
+        warning = self._target_ip_warning(self.scope_handle_var.get(), self.scope_active_ip_var.get())
+        self.scope_status_var.set(warning)
 
     def _target_ip_warning(self, handle: str, edited_ip: str) -> str:
         handle = handle.strip()
@@ -824,8 +878,281 @@ class PrimordialLauncher:
             return ""
         stored_ip = str(target.metadata.get("active_ip") or "").strip()
         if stored_ip and stored_ip != edited_ip:
-            return f"Stored active IP is {stored_ip}. Editing this will create a new active-IP generation."
+            return f"Stored active IP is {stored_ip!r}. Applying will create a new active-IP generation."
         return ""
+
+    # ── Target & Scope table ────────────────────────────────────────────
+
+    _ASSET_TYPES = ("ip", "domain", "cidr", "wildcard")
+
+    def _build_scope_target_frame(self, root: ttk.Frame) -> None:
+        frame = ttk.LabelFrame(root, text="Target & Scope", padding=10)
+        frame.pack(fill=tk.X, pady=8)
+
+        # Row 0 — identity
+        ttk.Label(frame, text="Handle").grid(row=0, column=0, sticky=tk.W)
+        ttk.Entry(frame, textvariable=self.scope_handle_var, width=22).grid(row=0, column=1, sticky=tk.W, padx=6)
+        ttk.Label(frame, text="Display Name").grid(row=0, column=2, sticky=tk.W)
+        ttk.Entry(frame, textvariable=self.scope_display_name_var, width=22).grid(row=0, column=3, sticky=tk.W, padx=6)
+        ttk.Label(frame, text="Profile").grid(row=0, column=4, sticky=tk.W)
+        self.scope_profile_combo = ttk.Combobox(
+            frame,
+            textvariable=self.scope_profile_var,
+            values=[item["id"] for item in self.runtime.scope_profiles_payload()["profiles"]],
+            width=14,
+            state="readonly",
+        )
+        self.scope_profile_combo.grid(row=0, column=5, sticky=tk.W, padx=6)
+        ttk.Checkbutton(frame, text="In scope", variable=self.scope_in_scope_var).grid(row=0, column=6, sticky=tk.W, padx=6)
+
+        # Row 1 — active IP + warning
+        ttk.Label(frame, text="Active IP").grid(row=1, column=0, sticky=tk.W, pady=(8, 0))
+        ttk.Entry(frame, textvariable=self.scope_active_ip_var, width=22).grid(row=1, column=1, sticky=tk.W, padx=6, pady=(8, 0))
+        ttk.Label(frame, textvariable=self.scope_status_var, foreground=SOLARIZED["orange"]).grid(
+            row=1, column=2, columnspan=5, sticky=tk.W, pady=(8, 0)
+        )
+
+        # Row 2 — asset table
+        tree_frame = ttk.Frame(frame)
+        tree_frame.grid(row=2, column=0, columnspan=7, sticky=tk.EW, pady=(10, 0))
+        cols = ("type", "asset", "ports", "rule")
+        headings = ("Type", "Asset / Pattern", "Ports", "Rule")
+        col_widths = (80, 340, 100, 70)
+        self.scope_assets_tree = ttk.Treeview(
+            tree_frame,
+            columns=cols,
+            show="headings",
+            height=6,
+            selectmode="browse",
+        )
+        for col, heading, width in zip(cols, headings, col_widths):
+            self.scope_assets_tree.heading(col, text=heading)
+            self.scope_assets_tree.column(col, width=width, stretch=(col == "asset"))
+        vsb = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.scope_assets_tree.yview)
+        self.scope_assets_tree.configure(yscrollcommand=vsb.set)
+        self.scope_assets_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        self.scope_assets_tree.bind("<Double-1>", lambda _e: self._edit_scope_asset())
+
+        # Row 3 — table action buttons
+        btn_row = ttk.Frame(frame)
+        btn_row.grid(row=3, column=0, columnspan=7, sticky=tk.W, pady=(6, 0))
+        ttk.Button(btn_row, text="+ Add", command=self._add_scope_asset).pack(side=tk.LEFT)
+        ttk.Button(btn_row, text="✎ Edit", command=self._edit_scope_asset).pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Button(btn_row, text="✗ Remove", command=self._remove_scope_asset).pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Separator(btn_row, orient=tk.VERTICAL).pack(side=tk.LEFT, padx=8, fill=tk.Y)
+        ttk.Button(btn_row, text="Clear All", command=self._clear_scope_assets, style="Muted.TButton").pack(side=tk.LEFT)
+        ttk.Button(btn_row, text="Import Scope File", command=self._import_scope_and_refresh).pack(side=tk.LEFT, padx=(4, 0))
+
+        # Row 4 — apply (never auto-runs)
+        apply_row = ttk.Frame(frame)
+        apply_row.grid(row=4, column=0, columnspan=7, sticky=tk.W, pady=(8, 0))
+        ttk.Button(apply_row, text="Apply Target (no auto-run)", command=self._apply_scope_target).pack(side=tk.LEFT)
+        ttk.Label(apply_row, textvariable=self.target_persistence_status_var, foreground=SOLARIZED["cyan"]).pack(
+            side=tk.LEFT, padx=(12, 0)
+        )
+
+        frame.columnconfigure(3, weight=1)
+
+    def _refresh_scope_table(self) -> None:
+        if self.scope_assets_tree is None:
+            return
+        handle = self.scope_handle_var.get().strip()
+        target = self.runtime.store.get_target_by_handle(handle) if handle else None
+        db_assets = self.runtime.store.list_scope_assets(target.id) if target else []
+        self._scope_asset_rows = [
+            {
+                "asset": asset.asset,
+                "asset_type": asset.asset_type,
+                "ports": str(asset.metadata.get("ports") or "*"),
+                "scope_rule": str(asset.metadata.get("scope_rule") or "allow"),
+            }
+            for asset in db_assets
+        ]
+        self._repopulate_scope_tree()
+
+    def _repopulate_scope_tree(self) -> None:
+        if self.scope_assets_tree is None:
+            return
+        self.scope_assets_tree.delete(*self.scope_assets_tree.get_children())
+        for index, row in enumerate(self._scope_asset_rows):
+            self.scope_assets_tree.insert(
+                "",
+                tk.END,
+                iid=str(index),
+                values=(
+                    row.get("asset_type", "domain"),
+                    row.get("asset", ""),
+                    row.get("ports", "*"),
+                    row.get("scope_rule", "allow"),
+                ),
+            )
+
+    def _open_asset_dialog(self, existing: dict | None = None) -> dict | None:
+        """Open a modal dialog to add or edit a scope asset row. Returns the row dict or None on cancel."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Add Asset" if existing is None else "Edit Asset")
+        dialog.resizable(False, False)
+        dialog.grab_set()
+        palette = SOLARIZED
+
+        asset_var = tk.StringVar(value=str(existing.get("asset", "")) if existing else "")
+        type_var = tk.StringVar(value=str(existing.get("asset_type", "domain")) if existing else "domain")
+        ports_var = tk.StringVar(value=str(existing.get("ports", "*")) if existing else "*")
+        rule_var = tk.StringVar(value=str(existing.get("scope_rule", "allow")) if existing else "allow")
+
+        form = ttk.Frame(dialog, padding=16)
+        form.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(form, text="Type").grid(row=0, column=0, sticky=tk.W)
+        ttk.Combobox(form, textvariable=type_var, values=list(self._ASSET_TYPES), width=14, state="readonly").grid(
+            row=0, column=1, sticky=tk.W, padx=8, pady=4
+        )
+        ttk.Label(form, text="Asset / Pattern").grid(row=1, column=0, sticky=tk.W)
+        ttk.Entry(form, textvariable=asset_var, width=38).grid(row=1, column=1, sticky=tk.EW, padx=8, pady=4)
+        ttk.Label(form, text="Ports").grid(row=2, column=0, sticky=tk.W)
+        ports_entry = ttk.Entry(form, textvariable=ports_var, width=20)
+        ports_entry.grid(row=2, column=1, sticky=tk.W, padx=8, pady=4)
+        ttk.Label(form, text='* = all  |  e.g. 80,443,8000-8999', foreground=palette["base00"]).grid(
+            row=2, column=2, sticky=tk.W, padx=4
+        )
+        ttk.Label(form, text="Rule").grid(row=3, column=0, sticky=tk.W)
+        ttk.Combobox(form, textvariable=rule_var, values=["allow", "deny"], width=10, state="readonly").grid(
+            row=3, column=1, sticky=tk.W, padx=8, pady=4
+        )
+
+        result: list[dict | None] = [None]
+
+        def _ok() -> None:
+            asset = asset_var.get().strip()
+            if not asset:
+                messagebox.showwarning("Asset required", "Asset / Pattern cannot be empty.", parent=dialog)
+                return
+            result[0] = {
+                "asset": asset,
+                "asset_type": type_var.get() or "domain",
+                "ports": ports_var.get().strip() or "*",
+                "scope_rule": rule_var.get() or "allow",
+            }
+            dialog.destroy()
+
+        btn_row = ttk.Frame(form)
+        btn_row.grid(row=4, column=0, columnspan=3, pady=(12, 0), sticky=tk.E)
+        ttk.Button(btn_row, text="OK", command=_ok).pack(side=tk.LEFT)
+        ttk.Button(btn_row, text="Cancel", command=dialog.destroy).pack(side=tk.LEFT, padx=(8, 0))
+
+        dialog.bind("<Return>", lambda _e: _ok())
+        dialog.bind("<Escape>", lambda _e: dialog.destroy())
+        self.root.wait_window(dialog)
+        return result[0]
+
+    def _add_scope_asset(self) -> None:
+        row = self._open_asset_dialog()
+        if row is None:
+            return
+        self._scope_asset_rows.append(row)
+        self._repopulate_scope_tree()
+
+    def _edit_scope_asset(self) -> None:
+        if self.scope_assets_tree is None:
+            return
+        selected = self.scope_assets_tree.selection()
+        if not selected:
+            return
+        index = int(selected[0])
+        updated = self._open_asset_dialog(existing=self._scope_asset_rows[index])
+        if updated is None:
+            return
+        self._scope_asset_rows[index] = updated
+        self._repopulate_scope_tree()
+        if index < len(self.scope_assets_tree.get_children()):
+            self.scope_assets_tree.selection_set(str(index))
+
+    def _remove_scope_asset(self) -> None:
+        if self.scope_assets_tree is None:
+            return
+        selected = self.scope_assets_tree.selection()
+        if not selected:
+            return
+        index = int(selected[0])
+        self._scope_asset_rows.pop(index)
+        self._repopulate_scope_tree()
+
+    def _clear_scope_assets(self) -> None:
+        if not messagebox.askyesno("Clear All Assets", "Remove all scope assets from the staging table?\n(DB is unchanged until you click Apply.)"):
+            return
+        self._scope_asset_rows.clear()
+        self._repopulate_scope_tree()
+
+    def _apply_scope_target(self) -> None:
+        handle = self.scope_handle_var.get().strip()
+        if not handle:
+            messagebox.showinfo("Target & Scope", "Handle is required.")
+            return
+        config = {
+            "handle": handle,
+            "display_name": self.scope_display_name_var.get().strip() or handle,
+            "profile": self.scope_profile_var.get().strip(),
+            "in_scope": bool(self.scope_in_scope_var.get()),
+            "active_ip": self.scope_active_ip_var.get().strip(),
+            "asset_rows": list(self._scope_asset_rows),
+        }
+        self._run_background("Applying target scope", lambda: self._apply_scope_target_sync(config))
+
+    def _apply_scope_target_sync(self, config: dict[str, object]) -> str:
+        with self._runtime_lock:
+            target = self.runtime.replace_target_scope_assets(
+                handle=str(config["handle"]),
+                display_name=str(config["display_name"]),
+                profile=self.runtime.resolve_scope_profile(str(config["profile"])),
+                in_scope=bool(config["in_scope"]),
+                active_ip=str(config["active_ip"]) if config["active_ip"] else None,
+                asset_rows=list(config["asset_rows"]),
+            )
+            self.runtime.sync_findings_context_exports()
+        self._queue.put(("hydrate_target", ""))
+        self._queue.put(("refresh_tabs", ""))
+        active_ip = target.metadata.get("active_ip") or "not set"
+        return (
+            f"Applied: {target.handle} ({target.profile.value}) | "
+            f"assets={len(list(config['asset_rows']))} | active_ip={active_ip}"
+        )
+
+    def _import_scope_and_refresh(self) -> None:
+        selected = filedialog.askopenfilename(
+            title="Import Primordial Scope",
+            filetypes=[
+                ("Scope files", "*.json *.txt *.scope"),
+                ("JSON files", "*.json"),
+                ("Text files", "*.txt"),
+                ("All files", "*"),
+            ],
+        )
+        if not selected:
+            return
+        path = Path(selected)
+        profile = self.scope_profile_var.get().strip()
+        self._run_background("Importing scope", lambda: self._import_scope_and_refresh_sync(path, profile))
+
+    def _import_scope_and_refresh_sync(self, path: Path, profile: str) -> str:
+        with self._runtime_lock:
+            outcome = self.runtime.import_scope(path, self.runtime.resolve_scope_profile(profile))
+            self.runtime.sync_findings_context_exports()
+        self._queue.put(("hydrate_target", ""))
+        self._queue.put(("refresh_tabs", ""))
+        return (
+            f"Imported scope from {outcome['source']}: "
+            f"targets={outcome['targets_imported']} assets={outcome['assets_imported']} "
+            f"profile={outcome['profile']}"
+        )
+
+    def _check_system(self) -> None:
+        self._run_background("System diagnostics", self._check_system_sync)
+
+    def _check_system_sync(self) -> str:
+        with self._runtime_lock:
+            payload = self.runtime.diagnose_payload()
+        return payload["summary"]
 
     def _start_web_server(self) -> None:
         if self._web_server and self._web_server.running:
@@ -1532,88 +1859,151 @@ class PrimordialLauncher:
         self._refresh_chat(nonblocking=True)
         self._refresh_counts(nonblocking=True)
         self._refresh_credentials_status(nonblocking=True)
+        self._refresh_scope_table()
+
+    # ── Agent Monitor (background-thread refresh, no runtime lock needed) ──
+
+    def _trigger_agent_monitor_refresh(self) -> None:
+        if self._agent_monitor_refresh_running:
+            return
+        self._agent_monitor_refresh_running = True
+        Thread(target=self._background_agent_monitor_refresh, daemon=True).start()
+
+    def _background_agent_monitor_refresh(self) -> None:
+        try:
+            store = self.runtime.store
+            processor_map = self._processor_map_snapshot()
+            runs = store.list_task_runs(limit=120)
+            traces = store.list_traces(limit=200)
+            tasks = store.list_tasks(limit=500)
+            events = store.list_events(limit=100)
+            task_map = {t.id: t for t in tasks}
+            clear_after = self._agent_monitor_clear_after
+            data = {
+                "processor_map": processor_map,
+                "runs": runs,
+                "traces": traces,
+                "tasks": tasks,
+                "task_map": task_map,
+                "events": events,
+                "clear_after": clear_after,
+            }
+            self._queue.put(("agent_monitor_data", data))
+        except Exception:  # noqa: BLE001
+            pass
+        finally:
+            self._agent_monitor_refresh_running = False
+
+    def _render_agent_monitor(self, data: dict) -> None:
+        processor_map = data["processor_map"]
+        runs = data["runs"]
+        traces = data["traces"]
+        tasks = data["tasks"]
+        task_map = data["task_map"]
+        events = data["events"]
+        clear_after = data["clear_after"]
+
+        def after_clear(dt) -> bool:
+            return clear_after is None or dt > clear_after
+
+        widget = self.agent_output
+        original_state = str(widget.cget("state"))
+        if original_state == tk.DISABLED:
+            widget.configure(state=tk.NORMAL)
+        widget.delete("1.0", tk.END)
+
+        def insert(text: str, tag: str = "") -> None:
+            if tag:
+                widget.insert(tk.END, text, tag)
+            else:
+                widget.insert(tk.END, text)
+
+        now = datetime.now(timezone.utc)
+
+        # ── Task Status Overview ──────────────────────────────────────────
+        insert("━━ TASK STATUS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", "mon_section_head")
+        status_buckets: dict[str, list] = {}
+        for task in tasks:
+            status_buckets.setdefault(task.status.value, []).append(task)
+        ordered_statuses = ["running", "needs_approval", "pending", "waiting", "succeeded", "failed", "cancelled"]
+        for status in ordered_statuses:
+            bucket = status_buckets.get(status, [])
+            if not bucket:
+                continue
+            tag = f"mon_{status}" if f"mon_{status}" in widget.tag_names() else "mon_dim"
+            insert(f"  [{status.upper()}] {len(bucket)}", tag)
+            for task in bucket[:5]:
+                insert(f"  {task.kind.value} | {task.title[:60]}\n", "mon_dim")
+            if len(bucket) > 5:
+                insert(f"  … and {len(bucket) - 5} more\n", "mon_dim")
+        insert("\n")
+
+        # ── Recent Task Runs ──────────────────────────────────────────────
+        insert("━━ RECENT RUNS (newest first) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", "mon_section_head")
+        visible_runs = [r for r in runs if after_clear(r.started_at)]
+        if visible_runs:
+            for run in visible_runs[:40]:
+                task = task_map.get(str(run.task_id))
+                title = task.title if task else "unknown task"
+                kind = task.kind.value if task else "?"
+                processor = self._processor_for_task(task, processor_map)
+                status_tag = f"mon_{run.status.value}" if f"mon_{run.status.value}" in widget.tag_names() else "mon_dim"
+                age = (now - run.started_at).total_seconds()
+                age_text = f"{age:.0f}s ago" if age < 3600 else f"{age/3600:.1f}h ago"
+                insert(f"  {run.started_at.strftime('%H:%M:%S')} [{age_text}]  ", "mon_dim")
+                insert(f"{run.status.value:<12}", status_tag)
+                insert(f"  {run.role.value}  {run.model_name}  ({processor})\n", "mon_dim")
+                insert(f"    {kind} → {title[:70]}\n", "mon_dim")
+                if run.error:
+                    insert(f"    ERR: {run.error[:120]}\n", "mon_err")
+        else:
+            insert("  No task runs in current window.\n", "mon_dim")
+        insert("\n")
+
+        # ── Agent Traces ──────────────────────────────────────────────────
+        insert("━━ AGENT TRACES ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", "mon_section_head")
+        visible_traces = [t for t in traces if after_clear(t.created_at)]
+        if visible_traces:
+            for trace in visible_traces[:60]:
+                task = task_map.get(str(trace.task_id))
+                title = task.title if task else "no task"
+                model = trace.metadata.get("model") or (task.provider_model if task else "—")
+                route = task.provider_route.value if task and task.provider_route else "—"
+                insert(f"  {trace.created_at.strftime('%H:%M:%S')}  ", "mon_dim")
+                insert(f"{trace.role.value}", "mon_pending")
+                insert(f"  {trace.status}  {model}  {route}\n", "mon_dim")
+                insert(f"    {title[:60]} → {trace.summary[:80]}\n", "mon_dim")
+        else:
+            insert("  No traces in current window.\n", "mon_dim")
+        insert("\n")
+
+        # ── System Events ─────────────────────────────────────────────────
+        insert("━━ EVENTS (recent) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", "mon_section_head")
+        visible_events = [e for e in events if after_clear(e.created_at)][:30]
+        if visible_events:
+            for event in visible_events:
+                is_err = "fail" in event.summary.lower() or "error" in event.summary.lower()
+                tag = "mon_err" if is_err else "mon_dim"
+                insert(f"  {event.created_at.strftime('%H:%M:%S')}  {event.type.value}  {event.summary[:90]}\n", tag)
+        else:
+            insert("  No events in current window.\n", "mon_dim")
+
+        widget.see(tk.END)
+        if original_state == tk.DISABLED:
+            widget.configure(state=tk.DISABLED)
+
+    def _clear_agent_monitor_screen(self) -> None:
+        self._agent_monitor_clear_after = datetime.now(timezone.utc)
+        self._replace_text(self.agent_output, f"Screen cleared at {self._agent_monitor_clear_after.isoformat()}. Waiting for new events.")
+
+    def _agent_monitor_interval_seconds(self) -> int:
+        try:
+            return max(2, int(self.agent_monitor_interval_var.get()))
+        except (tk.TclError, ValueError):
+            return 5
 
     def _refresh_agent_monitor(self, *, nonblocking: bool = False) -> bool:
-        loaded = self._runtime_read(
-            lambda: (
-                self._processor_map_snapshot(),
-                [
-                    item
-                    for item in self.runtime.store.list_notes(limit=120)
-                    if item.metadata.get("kind") == "worker_ai_review"
-                ],
-                self.runtime.store.list_traces(limit=200),
-                self.runtime.store.list_task_runs(limit=100),
-                {
-                    task.id: task
-                    for task in self.runtime.store.list_tasks(limit=500)
-                },
-            ),
-            nonblocking=nonblocking,
-        )
-        if loaded is None:
-            return False
-        processor_map, ai_notes, traces, runs, task_map = loaded
-        lines = [
-            "Autonomous AI Reviews",
-            "Operator-chat assistant messages are intentionally not shown here. Use the Operator Chat tab for those.",
-        ]
-        if ai_notes:
-            for note in ai_notes:
-                task = task_map.get(str(note.task_id))
-                agent = task.role.value if task else "unknown-agent"
-                route = task.provider_route.value if task and task.provider_route else "unknown-route"
-                model = note.metadata.get("model") or "unknown-model"
-                processor = note.metadata.get("processor") or "unknown-processor"
-                task_kind = note.metadata.get("task_kind") or "unknown-task"
-                elapsed = note.metadata.get("elapsed_seconds")
-                elapsed_text = f" elapsed={float(elapsed):.1f}s" if isinstance(elapsed, int | float) else ""
-                lines.append(
-                    f"\n{note.created_at.isoformat()} | agent={agent} | model={model} | "
-                    f"processor={processor} | route={route} | task={note.task_id or 'none'} | "
-                    f"kind={task_kind}{elapsed_text}"
-                )
-                if task:
-                    lines.append(f"  title={task.title}")
-                lines.append(note.body)
-        else:
-            lines.append("No autonomous AI review notes yet. Run an analysis/review tick after Ollama is reachable.")
-
-        lines.append("\nAgent Traces")
-        if traces:
-            for trace in traces:
-                task = task_map.get(str(trace.task_id))
-                model = trace.metadata.get("model") or (task.provider_model if task else "unknown-model")
-                processor = trace.metadata.get("processor") or self._processor_for_task(task, processor_map)
-                route = task.provider_route.value if task and task.provider_route else "unknown-route"
-                title = task.title if task else "unknown task"
-                lines.append(
-                    f"{trace.created_at.isoformat()} | agent={trace.role.value} | model={model} | "
-                    f"processor={processor} | route={route} | status={trace.status} | task={trace.task_id}"
-                )
-                lines.append(f"  title={title}")
-                lines.append(f"  {trace.summary}")
-        else:
-            lines.append("No agent traces yet.")
-        lines.append("\nTask Runs")
-        if runs:
-            for run in runs:
-                task = task_map.get(str(run.task_id))
-                processor = self._processor_for_task(task, processor_map)
-                title = task.title if task else "unknown task"
-                lines.append(
-                    f"{run.started_at.isoformat()} | agent={run.role.value} | model={run.model_name} | "
-                    f"processor={processor} | route={run.provider_route.value} | status={run.status.value} | "
-                    f"task={run.task_id}"
-                )
-                lines.append(f"  title={title}")
-                if run.trace_summary:
-                    lines.append(f"  {run.trace_summary}")
-                if run.error:
-                    lines.append(f"  error={run.error}")
-        else:
-            lines.append("No task runs yet.")
-        self._replace_text(self.agent_output, "\n".join(lines))
+        self._trigger_agent_monitor_refresh()
         return True
 
     def _refresh_current_work(self, *, nonblocking: bool = False) -> bool:
@@ -1627,7 +2017,17 @@ class PrimordialLauncher:
         recent = list(payload.get("recent", []))
 
         if gui_operations:
-            summary = f"Current work: launcher is running {len(gui_operations)} operation(s)."
+            now = datetime.now(timezone.utc)
+            op_labels = []
+            for operation in gui_operations:
+                label = operation.get("label", "unknown")
+                try:
+                    started = datetime.fromisoformat(str(operation["started_at"]))
+                    elapsed = int((now - started).total_seconds())
+                    op_labels.append(f"{label} ({elapsed}s)")
+                except Exception:  # noqa: BLE001
+                    op_labels.append(label)
+            summary = f"Current work: {', '.join(op_labels)}"
         else:
             summary = f"Current work: {payload.get('summary', 'idle')}"
         self.current_work_summary_var.set(summary)
@@ -1701,69 +2101,102 @@ class PrimordialLauncher:
         except Exception:  # noqa: BLE001 - GUI display should not fail on settings drift
             return {}
 
-    def _refresh_ai_thinking(self, *, nonblocking: bool = False) -> bool:
-        loaded = self._runtime_read(
-            lambda: (
-                self._processor_map_snapshot(),
-                {
-                    task.id: task
-                    for task in self.runtime.store.list_tasks(limit=500)
-                },
-                [
-                    item
-                    for item in self.runtime.store.list_task_runs(limit=160)
-                    if item.model_name and self._is_after_thinking_clear(item.started_at)
-                ],
-                [
-                    item
-                    for item in self.runtime.store.list_notes(limit=200)
-                    if item.metadata.get("kind") == "worker_ai_review"
-                    and self._is_after_thinking_clear(item.created_at)
-                ],
-                [
-                    item
-                    for item in self.runtime.store.list_traces(limit=250)
-                    if (
-                        item.status == "ai_review_completed"
-                        or item.metadata.get("kind") == "worker_ai_review"
-                        or item.metadata.get("model")
-                    )
-                    and self._is_after_thinking_clear(item.created_at)
-                ],
-                [
-                    item
-                    for item in self.runtime.store.list_operator_messages(limit=120)
-                    if item.role == "assistant"
-                    and item.model
-                    and item.model != "deterministic-state"
-                    and self._is_after_thinking_clear(item.created_at)
-                ],
-                [
-                    item
-                    for item in self.runtime.store.list_events(limit=250)
-                    if (
-                        "Worker AI generation unavailable" in item.summary
-                        or "Operator state AI review unavailable" in item.summary
-                    )
-                    and self._is_after_thinking_clear(item.created_at)
-                ],
-            ),
-            nonblocking=nonblocking,
-        )
-        if loaded is None:
-            return False
-        processor_map, task_map, model_runs, ai_notes, ai_traces, model_messages, ai_failure_events = loaded
-        lines = [
-            "AI Thinking",
-            "Shows model-generated reasoning artifacts. Deterministic status replies are excluded.",
-            f"Auto update={'on' if self.ai_thinking_auto_var.get() else 'off'} interval={self._ai_thinking_interval_seconds()}s",
-        ]
-        if self._ai_thinking_clear_after:
-            lines.append(f"Cleared display at {self._ai_thinking_clear_after.isoformat()}; showing newer records only.")
+    # ── AI Thinking (background-thread refresh, no runtime lock needed) ──
 
-        separator = "-------------------"
-        lines.append("\nAutonomous Worker Reviews")
+    def _trigger_ai_thinking_refresh(self) -> None:
+        if self._ai_thinking_refresh_running:
+            return
+        self._ai_thinking_refresh_running = True
+        Thread(target=self._background_ai_thinking_refresh, daemon=True).start()
+
+    def _background_ai_thinking_refresh(self) -> None:
+        try:
+            store = self.runtime.store
+            clear_after = self._ai_thinking_clear_after
+            processor_map = self._processor_map_snapshot()
+            task_map = {t.id: t for t in store.list_tasks(limit=500)}
+
+            def after_clear(dt: datetime) -> bool:
+                return clear_after is None or dt > clear_after
+
+            model_runs = [
+                item for item in store.list_task_runs(limit=160)
+                if item.model_name and after_clear(item.started_at)
+            ]
+            ai_notes = [
+                item for item in store.list_notes(limit=200)
+                if item.metadata.get("kind") == "worker_ai_review" and after_clear(item.created_at)
+            ]
+            ai_traces = [
+                item for item in store.list_traces(limit=250)
+                if (
+                    item.status == "ai_review_completed"
+                    or item.metadata.get("kind") == "worker_ai_review"
+                    or item.metadata.get("model")
+                ) and after_clear(item.created_at)
+            ]
+            model_messages = [
+                item for item in store.list_operator_messages(limit=120)
+                if item.role == "assistant"
+                and item.model
+                and item.model != "deterministic-state"
+                and after_clear(item.created_at)
+            ]
+            ai_failure_events = [
+                item for item in store.list_events(limit=250)
+                if (
+                    "Worker AI generation unavailable" in item.summary
+                    or "Operator state AI review unavailable" in item.summary
+                ) and after_clear(item.created_at)
+            ]
+            self._queue.put(("ai_thinking_data", {
+                "processor_map": processor_map,
+                "task_map": task_map,
+                "model_runs": model_runs,
+                "ai_notes": ai_notes,
+                "ai_traces": ai_traces,
+                "model_messages": model_messages,
+                "ai_failure_events": ai_failure_events,
+                "clear_after": clear_after,
+            }))
+        except Exception:  # noqa: BLE001
+            pass
+        finally:
+            self._ai_thinking_refresh_running = False
+
+    def _render_ai_thinking(self, data: dict) -> None:
+        processor_map = data["processor_map"]
+        task_map = data["task_map"]
+        model_runs = data["model_runs"]
+        ai_notes = data["ai_notes"]
+        ai_traces = data["ai_traces"]
+        model_messages = data["model_messages"]
+        ai_failure_events = data["ai_failure_events"]
+        clear_after = data["clear_after"]
+
+        widget = self.ai_thinking_output
+        original_state = str(widget.cget("state"))
+        if original_state == tk.DISABLED:
+            widget.configure(state=tk.NORMAL)
+        widget.delete("1.0", tk.END)
+
+        def insert_block(agent_role: str, source: str, meta_lines: list[str], body: str) -> None:
+            tag = self._ai_role_tag(agent_role)
+            if tag not in widget.tag_names():
+                tag = self._ai_role_tag("unknown-agent")
+            speaker_tag = f"{tag}_speaker"
+            widget.insert(tk.END, f"[{source}] {agent_role}\n", speaker_tag)
+            for line in meta_lines:
+                widget.insert(tk.END, "  " + line + "\n", "ai_dim")
+            widget.insert(tk.END, body.strip() + "\n\n", tag)
+
+        widget.insert(tk.END, "AI Thinking — model-generated content only\n", "ai_section_head")
+        if clear_after:
+            widget.insert(tk.END, f"Display cleared at {clear_after.isoformat()}; showing newer records only.\n", "ai_dim")
+        widget.insert(tk.END, "\n")
+
         if ai_notes:
+            widget.insert(tk.END, "── AUTONOMOUS WORKER REVIEWS ──────────────────────────────────────\n", "ai_section_head")
             for note in ai_notes:
                 task = task_map.get(str(note.task_id))
                 agent = task.role.value if task else "unknown-agent"
@@ -1771,108 +2204,82 @@ class PrimordialLauncher:
                 model = note.metadata.get("model") or (task.provider_model if task else "unknown-model")
                 processor = note.metadata.get("processor") or self._processor_for_task(task, processor_map)
                 elapsed = note.metadata.get("elapsed_seconds")
-                elapsed_text = f" elapsed={float(elapsed):.1f}s" if isinstance(elapsed, int | float) else ""
-                lines.append(f"\n{separator}")
-                lines.append("source=autonomous-worker-review")
-                lines.append(f"speaker={agent}")
-                lines.append(f"model={model}")
-                lines.append(f"processor={processor}")
-                lines.append(f"route={route}")
-                lines.append(f"task={note.task_id or 'none'}{elapsed_text}")
-                lines.append(f"time={note.created_at.isoformat()}")
+                elapsed_text = f"  elapsed={float(elapsed):.1f}s" if isinstance(elapsed, (int, float)) else ""
+                meta = [
+                    f"model={model}  processor={processor}  route={route}{elapsed_text}",
+                    f"task={note.task_id or 'none'}  time={note.created_at.strftime('%H:%M:%S')}",
+                ]
                 if task:
-                    lines.append(f"talking_about={task.title}")
-                lines.append(separator)
-                lines.append(note.body)
-        else:
-            lines.append("No autonomous worker AI reviews in the current visible window.")
+                    meta.append(f"about={task.title[:80]}")
+                insert_block(agent, "worker-review", meta, note.body)
 
-        lines.append("\nRecent Model Activity")
         if model_runs:
+            widget.insert(tk.END, "── RECENT MODEL RUNS ──────────────────────────────────────────────\n", "ai_section_head")
             for run in model_runs[:20]:
                 task = task_map.get(str(run.task_id))
                 processor = self._processor_for_task(task, processor_map)
-                route = run.provider_route.value
-                lines.append(f"\n{separator}")
-                lines.append("source=model-task-run")
-                lines.append(f"speaker={run.role.value}")
-                lines.append(f"model={run.model_name}")
-                lines.append(f"processor={processor}")
-                lines.append(f"route={route}")
-                lines.append(f"status={run.status.value}")
-                lines.append(f"task={run.task_id}")
-                lines.append(f"time={run.started_at.isoformat()}")
+                meta = [
+                    f"model={run.model_name}  processor={processor}  route={run.provider_route.value}",
+                    f"status={run.status.value}  task={run.task_id}  time={run.started_at.strftime('%H:%M:%S')}",
+                ]
                 if task:
-                    lines.append(f"talking_about={task.title}")
-                lines.append(separator)
-                lines.append(run.trace_summary or run.error or "Model-backed task run completed without a detailed AI review note.")
-        else:
-            lines.append("No recent model-backed task runs in the current visible window.")
+                    meta.append(f"about={task.title[:80]}")
+                body = run.trace_summary or run.error or "Model-backed task run completed without a detailed AI review note."
+                insert_block(run.role.value, "model-run", meta, body)
 
-        lines.append("\nAI Review Traces")
         if ai_traces:
+            widget.insert(tk.END, "── AI REVIEW TRACES ───────────────────────────────────────────────\n", "ai_section_head")
             for trace in ai_traces:
                 task = task_map.get(str(trace.task_id))
                 model = trace.metadata.get("model") or (task.provider_model if task else "unknown-model")
                 processor = trace.metadata.get("processor") or self._processor_for_task(task, processor_map)
                 route = task.provider_route.value if task and task.provider_route else "unknown-route"
-                lines.append(f"\n{separator}")
-                lines.append("source=agent-trace")
-                lines.append(f"speaker={trace.role.value}")
-                lines.append(f"model={model}")
-                lines.append(f"processor={processor}")
-                lines.append(f"route={route}")
-                lines.append(f"status={trace.status}")
-                lines.append(f"task={trace.task_id}")
-                lines.append(f"time={trace.created_at.isoformat()}")
+                meta = [
+                    f"model={model}  processor={processor}  route={route}",
+                    f"status={trace.status}  task={trace.task_id}  time={trace.created_at.strftime('%H:%M:%S')}",
+                ]
                 if task:
-                    lines.append(f"talking_about={task.title}")
-                lines.append(separator)
-                lines.append(trace.summary)
-        else:
-            lines.append("No AI review traces in the current visible window.")
+                    meta.append(f"about={task.title[:80]}")
+                insert_block(trace.role.value, "trace", meta, trace.summary)
 
-        lines.append("\nAI Review Failures / Timeouts")
         if ai_failure_events:
+            widget.insert(tk.END, "── AI FAILURES / TIMEOUTS ─────────────────────────────────────────\n", "ai_section_head")
             for event in ai_failure_events[:20]:
                 task = task_map.get(str(event.task_id)) if event.task_id else None
                 model = event.metadata.get("model") if isinstance(event.metadata, dict) else None
                 processor = self._processor_for_task(task, processor_map)
                 route = task.provider_route.value if task and task.provider_route else "unknown-route"
                 speaker = task.role.value if task else "Primordial AI"
-                lines.append(f"\n{separator}")
-                lines.append("source=ai-failure-event")
-                lines.append(f"speaker={speaker}")
-                lines.append(f"model={model or 'unknown-model'}")
-                lines.append(f"processor={processor}")
-                lines.append(f"route={route}")
-                lines.append(f"task={event.task_id or 'none'}")
-                lines.append(f"time={event.created_at.isoformat()}")
+                error_text = event.metadata.get("error") if isinstance(event.metadata, dict) else None
+                meta = [
+                    f"model={model or 'unknown-model'}  processor={processor}  route={route}",
+                    f"task={event.task_id or 'none'}  time={event.created_at.strftime('%H:%M:%S')}",
+                ]
                 if task:
-                    lines.append(f"talking_about={task.title}")
-                lines.append(separator)
-                lines.append(event.summary)
-                if event.metadata:
-                    error_text = event.metadata.get("error")
-                    if error_text:
-                        lines.append(f"error={error_text}")
-        else:
-            lines.append("No AI review failure or timeout events in the current visible window.")
+                    meta.append(f"about={task.title[:80]}")
+                body = event.summary
+                if error_text:
+                    body += f"\nerror={error_text}"
+                insert_block(speaker, "ai-failure", meta, body)
 
-        lines.append("\nOperator Local-Model Answers")
         if model_messages:
+            widget.insert(tk.END, "── OPERATOR AI ANSWERS ────────────────────────────────────────────\n", "ai_section_head")
             for message in model_messages:
-                lines.append(f"\n{separator}")
-                lines.append("source=operator-chat-assistant")
-                lines.append("speaker=Primordial AI")
-                lines.append(f"model={message.model}")
-                lines.append(f"target={message.target_id or 'global'}")
-                lines.append(f"time={message.created_at.isoformat()}")
-                lines.append(separator)
-                lines.append(message.body)
-        else:
-            lines.append("No non-deterministic operator model answers in the current visible window.")
-        self._replace_ai_thinking_text("\n".join(lines))
+                meta = [
+                    f"model={message.model}  target={message.target_id or 'global'}",
+                    f"time={message.created_at.strftime('%H:%M:%S')}",
+                ]
+                insert_block("Primordial AI", "operator-chat", meta, message.body)
+
+        if not (ai_notes or model_runs or ai_traces or ai_failure_events or model_messages):
+            widget.insert(tk.END, "No AI-generated content in the current visible window.\n", "ai_dim")
+
+        widget.see(tk.END)
+        if original_state == tk.DISABLED:
+            widget.configure(state=tk.DISABLED)
+
+    def _refresh_ai_thinking(self, *, nonblocking: bool = False) -> bool:  # noqa: ARG002
+        self._trigger_ai_thinking_refresh()
         return True
 
     def _is_after_thinking_clear(self, created_at: datetime) -> bool:
@@ -1890,21 +2297,47 @@ class PrimordialLauncher:
         except (tk.TclError, ValueError):
             return 5
 
-    def _refresh_chat(self, *, nonblocking: bool = False) -> bool:
-        messages = self._runtime_read(
-            lambda: list(reversed(self.runtime.store.list_operator_messages(limit=80))),
-            nonblocking=nonblocking,
-        )
-        if messages is None:
-            return False
-        lines = []
-        for message in messages:
-            label = "Primordial AI" if message.role == "assistant" else "Operator"
-            model = f" | {message.model}" if message.model else ""
-            lines.append(f"{label}{model} | {message.created_at.isoformat()}")
-            lines.append(message.body)
-            lines.append("")
-        self._replace_text(self.chat_output, "\n".join(lines) if lines else "No operator chat yet.")
+    # ── Chat (background-thread refresh, no runtime lock needed) ──
+
+    def _trigger_chat_refresh(self) -> None:
+        if self._chat_refresh_running:
+            return
+        self._chat_refresh_running = True
+        Thread(target=self._background_chat_refresh, daemon=True).start()
+
+    def _background_chat_refresh(self) -> None:
+        try:
+            messages = list(reversed(self.runtime.store.list_operator_messages(limit=80)))
+            self._queue.put(("chat_data", messages))
+        except Exception:  # noqa: BLE001
+            pass
+        finally:
+            self._chat_refresh_running = False
+
+    def _render_chat_data(self, messages: list) -> None:
+        widget = self.chat_output
+        original_state = str(widget.cget("state"))
+        if original_state == tk.DISABLED:
+            widget.configure(state=tk.NORMAL)
+        widget.delete("1.0", tk.END)
+        if not messages:
+            widget.insert(tk.END, "No operator chat yet.\n")
+        else:
+            for message in messages:
+                is_user = message.role != "assistant"
+                header_tag = "chat_user_header" if is_user else "chat_ai_header"
+                body_tag = "chat_user" if is_user else "chat_ai"
+                label = "Operator" if is_user else "Primordial AI"
+                model_suffix = f" | {message.model}" if message.model else ""
+                header = f"{label}{model_suffix} | {message.created_at.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                widget.insert(tk.END, header, header_tag)
+                widget.insert(tk.END, message.body.rstrip() + "\n\n", body_tag)
+        widget.see(tk.END)
+        if original_state == tk.DISABLED:
+            widget.configure(state=tk.DISABLED)
+
+    def _refresh_chat(self, *, nonblocking: bool = False) -> bool:  # noqa: ARG002
+        self._trigger_chat_refresh()
         return True
 
     def _refresh_counts(self, *, nonblocking: bool = False) -> bool:
@@ -2064,9 +2497,20 @@ class PrimordialLauncher:
                         self._apply_runtime_tuning_payload(tuning)
                 elif status == "system_status_done":
                     self._system_status_refresh_running = False
+                elif status == "agent_monitor_data":
+                    if isinstance(message, dict):
+                        self._render_agent_monitor(message)
+                elif status == "ai_thinking_data":
+                    if isinstance(message, dict):
+                        self._render_ai_thinking(message)
+                elif status == "chat_data":
+                    if isinstance(message, list):
+                        self._render_chat_data(message)
                 elif status == "set_guidance":
                     self.guidance_input.delete("1.0", tk.END)
                     self.guidance_input.insert(tk.END, message)
+                elif status == "hydrate_target":
+                    self._hydrate_target_fields_from_store()
                 elif status == "operation_done":
                     self._active_operations.pop(message, None)
                     self._refresh_current_work()
@@ -2088,16 +2532,17 @@ class PrimordialLauncher:
 
     def _poll_agent_monitor(self) -> None:
         try:
-            self._refresh_agent_monitor(nonblocking=True)
+            if self.agent_monitor_auto_var.get():
+                self._trigger_agent_monitor_refresh()
         except tk.TclError:
             return
         if not self._closed:
-            self.root.after(3000, self._poll_agent_monitor)
+            self.root.after(self._agent_monitor_interval_seconds() * 1000, self._poll_agent_monitor)
 
     def _poll_ai_thinking(self) -> None:
         try:
             if self.ai_thinking_auto_var.get():
-                self._refresh_ai_thinking(nonblocking=True)
+                self._trigger_ai_thinking_refresh()
         except tk.TclError:
             return
         if not self._closed:

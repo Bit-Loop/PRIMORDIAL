@@ -321,6 +321,10 @@ class RuntimeStore:
             ),
         )
 
+    def delete_scope_assets_for_target(self, target_id: str) -> int:
+        self._execute("DELETE FROM scope_assets WHERE target_id = ?", (target_id,))
+        return self._conn.total_changes
+
     def list_scope_assets(self, target_id: str | None = None) -> list[ScopeAsset]:
         if target_id:
             rows = self._query(

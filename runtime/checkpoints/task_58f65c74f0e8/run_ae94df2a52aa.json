@@ -1,0 +1,37 @@
+{
+  "task": {
+    "attempts": 0,
+    "created_at": "2026-05-06T05:49:04.085213+00:00",
+    "evidence_refs": [],
+    "id": "task_58f65c74f0e8",
+    "kind": "compact_memory",
+    "latest_run_id": "run_ae94df2a52aa",
+    "max_attempts": 1,
+    "metadata": {
+      "active_ip": "10.129.48.145",
+      "active_ip_generation": "6",
+      "autonomy_mode": "assisted",
+      "cold_path": false,
+      "provider_rationale": "memory compaction is a hot-path background CPU task"
+    },
+    "methodology": "web_app_core",
+    "parent_task_id": null,
+    "phase": "memory_maintenance",
+    "priority": 65,
+    "provider_model": "tripolskypetr/qwen3.5-uncensored-aggressive:9b",
+    "provider_route": "local_compact",
+    "required_capabilities": [
+      "memory-compaction",
+      "semantic-promotion"
+    ],
+    "requires_approval": false,
+    "risk_tier": "low",
+    "role": "memory_worker",
+    "session_id": "session_1af6142eb1f7",
+    "status": "running",
+    "summary": "Promote durable memory and compact noisy context for pirate.htb.",
+    "target_id": "target_19956ec84d56",
+    "title": "Compact notes and memory",
+    "updated_at": "2026-05-06T05:54:04.355891+00:00"
+  }
+}
