@@ -101,6 +101,9 @@ class PrimordialLauncher:
         self.web_status_var = tk.StringVar(value="Web server: stopped")
         self.work_status_var = tk.StringVar(value="Work status: idle")
         self.current_work_summary_var = tk.StringVar(value="Current work: idle")
+        self.cpu_load_var = tk.StringVar(value="CPU: sampling")
+        self.gpu_load_var = tk.StringVar(value="GPU: sampling")
+        self.runtime_tuning_status_var = tk.StringVar(value="Runtime tuning: defaults")
         self.target_persistence_status_var = tk.StringVar(value="Active target: not loaded")
         self.htb_ip_warning_var = tk.StringVar()
         self.scope_ip_warning_var = tk.StringVar()
@@ -108,6 +111,9 @@ class PrimordialLauncher:
         self.execution_toggle_text_var = tk.StringVar(value="Enable Continuous Mode")
         self.execution_mode_status_var = tk.StringVar(value="Execution mode: tick")
         self.continuous_interval_var = tk.IntVar(value=PrimordialRuntime.DEFAULT_EXECUTION_INTERVAL_SECONDS)
+        self.gpu_ai_timeout_var = tk.IntVar(value=PrimordialRuntime.DEFAULT_WORKER_AI_TIMEOUT_SECONDS_GPU)
+        self.cpu_ai_timeout_var = tk.IntVar(value=PrimordialRuntime.DEFAULT_WORKER_AI_TIMEOUT_SECONDS_CPU)
+        self.stale_run_timeout_var = tk.IntVar(value=PrimordialRuntime.DEFAULT_STALE_RUN_TIMEOUT_SECONDS)
         self.model_vars: dict[str, tk.StringVar] = {}
         self.model_processor_vars: dict[str, tk.StringVar] = {}
         self.model_combos: dict[str, ttk.Combobox] = {}
@@ -115,8 +121,13 @@ class PrimordialLauncher:
         self.run_more_ticks_button: ttk.Button | None = None
         self.stop_work_button: ttk.Button | None = None
         self.continuous_interval_entry: ttk.Entry | None = None
+        self.gpu_ai_timeout_entry: ttk.Entry | None = None
+        self.cpu_ai_timeout_entry: ttk.Entry | None = None
+        self.stale_run_timeout_entry: ttk.Entry | None = None
         self.scope_profile_combo: ttk.Combobox | None = None
         self.scope_profiles_tree: ttk.Treeview | None = None
+        self.cpu_progress: ttk.Progressbar | None = None
+        self.gpu_progress: ttk.Progressbar | None = None
         self.chat_target_var = tk.StringVar(value="pirate.htb")
         self.notion_api_key_var = tk.StringVar()
         self.notion_parent_page_id_var = tk.StringVar()
@@ -133,10 +144,11 @@ class PrimordialLauncher:
         self._ai_thinking_clear_after: datetime | None = None
         self._closed = False
         self._web_server: WebConsoleThread | None = None
-        self._queue: Queue[tuple[str, str]] = Queue()
+        self._queue: Queue[tuple[str, object]] = Queue()
         self._runtime_lock = RLock()
         self._stop_requested = Event()
         self._continuous_tick_running = False
+        self._system_status_refresh_running = False
         self._applied_execution_interval_seconds = PrimordialRuntime.DEFAULT_EXECUTION_INTERVAL_SECONDS
         self._execution_mode_after_id: str | None = None
         self._operation_seq = 0
@@ -150,6 +162,7 @@ class PrimordialLauncher:
         self._poll_agent_monitor()
         self._poll_ai_thinking()
         self._poll_execution_mode()
+        self._poll_system_metrics()
         self.root.protocol("WM_DELETE_WINDOW", self._close)
 
     def _configure_solarized_dark_theme(self) -> None:
@@ -256,6 +269,22 @@ class PrimordialLauncher:
             background=[("selected", palette["blue"])],
             foreground=[("selected", palette["base03"])],
         )
+        self._style.configure(
+            "Cpu.Horizontal.TProgressbar",
+            troughcolor=palette["base02"],
+            background=palette["blue"],
+            bordercolor=palette["base01"],
+            lightcolor=palette["cyan"],
+            darkcolor=palette["blue"],
+        )
+        self._style.configure(
+            "Gpu.Horizontal.TProgressbar",
+            troughcolor=palette["base02"],
+            background=palette["orange"],
+            bordercolor=palette["base01"],
+            lightcolor=palette["yellow"],
+            darkcolor=palette["orange"],
+        )
 
     def _configure_text_widget(self, widget: tk.Text) -> None:
         palette = SOLARIZED
@@ -288,7 +317,35 @@ class PrimordialLauncher:
         header = ttk.Frame(root)
         header.pack(fill=tk.X)
         ttk.Label(header, text="Primordial Local Launcher", font=("TkDefaultFont", 16, "bold")).pack(side=tk.LEFT)
-        ttk.Label(header, textvariable=self.web_status_var).pack(side=tk.RIGHT)
+        status_stack = ttk.Frame(header)
+        status_stack.pack(side=tk.RIGHT, fill=tk.X)
+        ttk.Label(status_stack, textvariable=self.web_status_var).pack(anchor=tk.E)
+        monitors = ttk.Frame(status_stack)
+        monitors.pack(anchor=tk.E, pady=(6, 0))
+        cpu_frame = ttk.Frame(monitors)
+        cpu_frame.pack(side=tk.LEFT, padx=(0, 12))
+        ttk.Label(cpu_frame, textvariable=self.cpu_load_var).pack(anchor=tk.W)
+        self.cpu_progress = ttk.Progressbar(
+            cpu_frame,
+            orient=tk.HORIZONTAL,
+            mode="determinate",
+            length=180,
+            maximum=100,
+            style="Cpu.Horizontal.TProgressbar",
+        )
+        self.cpu_progress.pack(fill=tk.X, expand=True)
+        gpu_frame = ttk.Frame(monitors)
+        gpu_frame.pack(side=tk.LEFT)
+        ttk.Label(gpu_frame, textvariable=self.gpu_load_var).pack(anchor=tk.W)
+        self.gpu_progress = ttk.Progressbar(
+            gpu_frame,
+            orient=tk.HORIZONTAL,
+            mode="determinate",
+            length=180,
+            maximum=100,
+            style="Gpu.Horizontal.TProgressbar",
+        )
+        self.gpu_progress.pack(fill=tk.X, expand=True)
 
         self.notebook = ttk.Notebook(root)
         self.notebook.pack(fill=tk.BOTH, expand=True, pady=(12, 0))
@@ -429,13 +486,13 @@ class PrimordialLauncher:
         footer.pack(fill=tk.X, pady=(8, 0))
         ttk.Button(footer, text="Refresh Status", command=self._refresh_status).pack(side=tk.LEFT)
         ttk.Button(footer, text="Ask: status and next step", command=self._ask_status).pack(side=tk.LEFT, padx=6)
-        ttk.Button(footer, text="Refresh All Tabs", command=self._refresh_all_tabs).pack(side=tk.LEFT, padx=6)
+        ttk.Button(footer, text="Refresh All Tabs", command=self._request_refresh_all_tabs).pack(side=tk.LEFT, padx=6)
 
     def _build_monitor_tab(self, root: ttk.Frame) -> None:
         controls = ttk.Frame(root)
         controls.pack(fill=tk.X)
         ttk.Label(controls, text="Read-only stream of agent traces, task runs, and assistant messages.").pack(side=tk.LEFT)
-        ttk.Button(controls, text="Refresh Agent Monitor", command=self._refresh_agent_monitor).pack(side=tk.RIGHT)
+        ttk.Button(controls, text="Refresh Agent Monitor", command=lambda: self._refresh_agent_monitor(nonblocking=True)).pack(side=tk.RIGHT)
         self.agent_output = tk.Text(root, wrap=tk.WORD, height=34)
         self._configure_text_widget(self.agent_output)
         self.agent_output.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
@@ -448,7 +505,7 @@ class PrimordialLauncher:
         ttk.Checkbutton(controls, text="Auto update", variable=self.ai_thinking_auto_var).pack(side=tk.LEFT, padx=(12, 4))
         ttk.Label(controls, text="Interval seconds").pack(side=tk.LEFT)
         ttk.Entry(controls, textvariable=self.ai_thinking_interval_var, width=6).pack(side=tk.LEFT, padx=4)
-        ttk.Button(controls, text="Refresh Now", command=self._refresh_ai_thinking).pack(side=tk.RIGHT, padx=(6, 0))
+        ttk.Button(controls, text="Refresh Now", command=lambda: self._refresh_ai_thinking(nonblocking=True)).pack(side=tk.RIGHT, padx=(6, 0))
         ttk.Button(controls, text="Clear Screen", command=self._clear_ai_thinking_screen).pack(side=tk.RIGHT)
         self.ai_thinking_output = tk.Text(root, wrap=tk.WORD, height=34)
         self._configure_text_widget(self.ai_thinking_output)
@@ -506,7 +563,7 @@ class PrimordialLauncher:
         controls = ttk.Frame(root)
         controls.pack(fill=tk.X)
         ttk.Label(controls, text="Runtime record counts and compact dashboard status.").pack(side=tk.LEFT)
-        ttk.Button(controls, text="Refresh Counts", command=self._refresh_counts).pack(side=tk.RIGHT)
+        ttk.Button(controls, text="Refresh Counts", command=lambda: self._refresh_counts(nonblocking=True)).pack(side=tk.RIGHT)
         self.counts_output = tk.Text(root, wrap=tk.WORD, height=34)
         self._configure_text_widget(self.counts_output)
         self.counts_output.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
@@ -517,9 +574,11 @@ class PrimordialLauncher:
         config_notebook.pack(fill=tk.BOTH, expand=True)
         models_tab = ttk.Frame(config_notebook, padding=8)
         profiles_tab = ttk.Frame(config_notebook, padding=8)
+        runtime_tab = ttk.Frame(config_notebook, padding=8)
         credentials_tab = ttk.Frame(config_notebook, padding=8)
         config_notebook.add(models_tab, text="Models")
         config_notebook.add(profiles_tab, text="Scope Profiles")
+        config_notebook.add(runtime_tab, text="Runtime")
         config_notebook.add(credentials_tab, text="Credentials")
 
         models_frame = ttk.LabelFrame(models_tab, text="Ollama Model Roles", padding=10)
@@ -533,6 +592,7 @@ class PrimordialLauncher:
         ttk.Button(model_actions, text="Clear Models", command=lambda: self._run_background("Clearing models", self._clear_models)).pack(side=tk.LEFT, padx=6)
 
         self._build_scope_profile_controls(profiles_tab)
+        self._build_runtime_tuning_controls(runtime_tab)
         self._build_credentials_controls(credentials_tab)
 
     def _build_model_role_controls(self, parent: ttk.Frame) -> None:
@@ -616,6 +676,31 @@ class PrimordialLauncher:
         self.scope_profiles_tree.pack(fill=tk.BOTH, expand=True)
         self.scope_profiles_tree.bind("<<TreeviewSelect>>", self._on_scope_profile_selected)
         self._refresh_scope_profiles()
+
+    def _build_runtime_tuning_controls(self, root: ttk.Frame) -> None:
+        note = (
+            "Tune local model patience and stale-run recovery. CPU timeout should generally be longer than GPU "
+            "because slower reviewer/code lanes can legitimately take much longer to finish."
+        )
+        ttk.Label(root, text=note, wraplength=760, justify=tk.LEFT).pack(fill=tk.X)
+
+        tuning = ttk.LabelFrame(root, text="Runtime Tuning", padding=10)
+        tuning.pack(fill=tk.X, pady=(8, 0))
+        ttk.Label(tuning, text="GPU AI timeout (seconds)").grid(row=0, column=0, sticky=tk.W)
+        self.gpu_ai_timeout_entry = ttk.Entry(tuning, textvariable=self.gpu_ai_timeout_var, width=10)
+        self.gpu_ai_timeout_entry.grid(row=0, column=1, sticky=tk.W, padx=6)
+        ttk.Label(tuning, text="CPU AI timeout (seconds)").grid(row=0, column=2, sticky=tk.W)
+        self.cpu_ai_timeout_entry = ttk.Entry(tuning, textvariable=self.cpu_ai_timeout_var, width=10)
+        self.cpu_ai_timeout_entry.grid(row=0, column=3, sticky=tk.W, padx=6)
+        ttk.Label(tuning, text="Stale run timeout (seconds)").grid(row=1, column=0, sticky=tk.W, pady=(8, 0))
+        self.stale_run_timeout_entry = ttk.Entry(tuning, textvariable=self.stale_run_timeout_var, width=10)
+        self.stale_run_timeout_entry.grid(row=1, column=1, sticky=tk.W, padx=6, pady=(8, 0))
+        ttk.Button(tuning, text="Apply Runtime Tuning", command=self._apply_runtime_tuning).grid(
+            row=1, column=2, sticky=tk.W, padx=6, pady=(8, 0)
+        )
+        ttk.Label(tuning, textvariable=self.runtime_tuning_status_var, foreground=SOLARIZED["cyan"]).grid(
+            row=2, column=0, columnspan=4, sticky=tk.W, pady=(8, 0)
+        )
 
     def _build_credentials_controls(self, root: ttk.Frame) -> None:
         form = ttk.Frame(root)
@@ -1021,6 +1106,24 @@ class PrimordialLauncher:
             return f"Applied {interval}s tick interval. Continuous mode will use the new cadence on the next loop."
         return f"Applied {interval}s tick interval. It is now the default cadence for future continuous runs."
 
+    def _apply_runtime_tuning(self) -> None:
+        self._run_background("Applying runtime tuning", self._apply_runtime_tuning_sync)
+
+    def _apply_runtime_tuning_sync(self) -> str:
+        with self._runtime_lock:
+            payload = self.runtime.update_runtime_tuning(
+                gpu_ai_timeout_seconds=int(self.gpu_ai_timeout_var.get()),
+                cpu_ai_timeout_seconds=int(self.cpu_ai_timeout_var.get()),
+                stale_run_timeout_seconds=int(self.stale_run_timeout_var.get()),
+            )
+        self._queue.put(("refresh_tabs", ""))
+        return (
+            "Runtime tuning updated: "
+            f"GPU AI timeout={payload['gpu_ai_timeout_seconds']}s, "
+            f"CPU AI timeout={payload['cpu_ai_timeout_seconds']}s, "
+            f"stale run timeout={payload['stale_run_timeout_seconds']}s."
+        )
+
     def _set_execution_mode_sync(self, mode: str) -> str:
         with self._runtime_lock:
             payload = self.runtime.update_execution_mode(
@@ -1030,9 +1133,10 @@ class PrimordialLauncher:
         self._queue.put(("refresh_tabs", ""))
         return self._format_execution_mode(payload)
 
-    def _refresh_execution_mode(self) -> None:
-        with self._runtime_lock:
-            payload = self.runtime.execution_mode_payload()
+    def _refresh_execution_mode(self, *, nonblocking: bool = False) -> bool:
+        payload = self._runtime_read(self.runtime.execution_mode_payload, nonblocking=nonblocking)
+        if payload is None:
+            return False
         self.execution_mode_var.set(str(payload["mode"]))
         interval = int(payload["interval_seconds"])
         self._applied_execution_interval_seconds = interval
@@ -1052,6 +1156,65 @@ class PrimordialLauncher:
                 self.run_more_ticks_button.configure(style="TButton", state=tk.NORMAL)
             if self.stop_work_button is not None:
                 self.stop_work_button.configure(style="TButton", state=tk.NORMAL)
+        return True
+
+    def _refresh_system_status(self, *, nonblocking: bool = False) -> bool:
+        metrics = None if nonblocking else self.runtime.system_metrics_payload()
+        tuning = self._runtime_read(self.runtime.runtime_tuning_payload, nonblocking=nonblocking)
+        if isinstance(metrics, dict):
+            self._apply_system_metrics(metrics)
+        if tuning is not None:
+            self._apply_runtime_tuning_payload(tuning)
+        return True
+
+    def _apply_system_metrics(self, payload: dict[str, object]) -> None:
+        cpu = payload.get("cpu", {}) if isinstance(payload, dict) else {}
+        gpu = payload.get("gpu", {}) if isinstance(payload, dict) else {}
+        cpu_percent = float(cpu.get("percent", 0.0) or 0.0)
+        gpu_percent = float(gpu.get("percent", 0.0) or 0.0)
+        self.cpu_load_var.set(
+            "CPU: "
+            + (
+                f"{cpu_percent:.1f}% | load1 {float(cpu.get('load_1', 0.0) or 0.0):.2f} / {cpu.get('cpu_count', '?')} cores"
+                if cpu.get("available", True)
+                else "unavailable"
+            )
+        )
+        if self.cpu_progress is not None:
+            self.cpu_progress.configure(value=max(0.0, min(100.0, cpu_percent)))
+        if gpu.get("available"):
+            memory_used = float(gpu.get("memory_used_mb", 0.0) or 0.0)
+            memory_total = float(gpu.get("memory_total_mb", 0.0) or 0.0)
+            self.gpu_load_var.set(
+                f"GPU: {gpu_percent:.1f}% | VRAM {memory_used:.0f}/{memory_total:.0f} MB"
+            )
+        else:
+            self.gpu_load_var.set(f"GPU: {gpu.get('error') or 'unavailable'}")
+        if self.gpu_progress is not None:
+            self.gpu_progress.configure(value=max(0.0, min(100.0, gpu_percent)))
+
+    def _apply_runtime_tuning_payload(self, payload: dict[str, object]) -> None:
+        self._sync_intvar_if_idle(
+            self.gpu_ai_timeout_var,
+            int(payload.get("gpu_ai_timeout_seconds", PrimordialRuntime.DEFAULT_WORKER_AI_TIMEOUT_SECONDS_GPU)),
+            self.gpu_ai_timeout_entry,
+        )
+        self._sync_intvar_if_idle(
+            self.cpu_ai_timeout_var,
+            int(payload.get("cpu_ai_timeout_seconds", PrimordialRuntime.DEFAULT_WORKER_AI_TIMEOUT_SECONDS_CPU)),
+            self.cpu_ai_timeout_entry,
+        )
+        self._sync_intvar_if_idle(
+            self.stale_run_timeout_var,
+            int(payload.get("stale_run_timeout_seconds", PrimordialRuntime.DEFAULT_STALE_RUN_TIMEOUT_SECONDS)),
+            self.stale_run_timeout_entry,
+        )
+        self.runtime_tuning_status_var.set(
+            "Runtime tuning: "
+            f"GPU AI timeout {payload.get('gpu_ai_timeout_seconds')}s | "
+            f"CPU AI timeout {payload.get('cpu_ai_timeout_seconds')}s | "
+            f"stale run timeout {payload.get('stale_run_timeout_seconds')}s"
+        )
 
     def _format_execution_mode(self, payload: dict[str, object]) -> str:
         mode = str(payload.get("mode", "tick"))
@@ -1085,8 +1248,8 @@ class PrimordialLauncher:
             return
         self._execution_mode_after_id = None
         try:
-            self._refresh_execution_mode()
-            if self.execution_mode_var.get() == "continuous" and not self._continuous_tick_running:
+            refreshed = self._refresh_execution_mode(nonblocking=True)
+            if refreshed and self.execution_mode_var.get() == "continuous" and not self._continuous_tick_running:
                 self._continuous_tick_running = True
                 self._stop_requested.clear()
                 self._run_background("Continuous tick", self._continuous_tick_sync)
@@ -1290,10 +1453,17 @@ class PrimordialLauncher:
 
     def _refresh_status(self) -> None:
         self._set_web_status()
+        self._run_background("Refreshing status", self._refresh_status_sync)
+
+    def _refresh_status_sync(self) -> str:
         with self._runtime_lock:
             self.runtime.sync_findings_context_exports()
-            self._write_output(render_dashboard_text(self.runtime) + "\n")
-        self._refresh_all_tabs()
+            rendered = render_dashboard_text(self.runtime)
+        self._queue.put(("refresh_tabs", ""))
+        return rendered
+
+    def _request_refresh_all_tabs(self) -> None:
+        self._queue.put(("refresh_tabs", ""))
 
     def _ask_status(self) -> None:
         handle = self.target_var.get().strip() or "pirate.htb"
@@ -1326,9 +1496,25 @@ class PrimordialLauncher:
             return f"Operator AI failed: {payload['error']}"
         return f"Operator AI answered with {payload['model']}."
 
+    def _runtime_read(self, loader: Callable[[], object], *, nonblocking: bool = False) -> object | None:
+        acquired = self._runtime_lock.acquire(blocking=not nonblocking)
+        if not acquired:
+            return None
+        try:
+            return loader()
+        finally:
+            self._runtime_lock.release()
+
+    def _sync_intvar_if_idle(self, variable: tk.IntVar, value: int, entry: ttk.Entry | None) -> None:
+        focus_widget = self.root.focus_get()
+        if entry is not None and focus_widget == entry:
+            return
+        variable.set(int(value))
+
     def _refresh_all_tabs(self) -> None:
         self._refresh_execution_mode()
         self._refresh_current_work()
+        self._refresh_system_status()
         self._refresh_scope_profiles()
         self._refresh_agent_monitor()
         self._refresh_ai_thinking()
@@ -1336,20 +1522,38 @@ class PrimordialLauncher:
         self._refresh_counts()
         self._refresh_credentials_status()
 
-    def _refresh_agent_monitor(self) -> None:
-        with self._runtime_lock:
-            processor_map = self._processor_map_snapshot()
-            ai_notes = [
-                item
-                for item in self.runtime.store.list_notes(limit=120)
-                if item.metadata.get("kind") == "worker_ai_review"
-            ]
-            traces = self.runtime.store.list_traces(limit=200)
-            runs = self.runtime.store.list_task_runs(limit=100)
-            task_map = {
-                task.id: task
-                for task in self.runtime.store.list_tasks(limit=500)
-            }
+    def _refresh_all_tabs_nonblocking(self) -> None:
+        self._refresh_execution_mode(nonblocking=True)
+        self._refresh_current_work(nonblocking=True)
+        self._refresh_system_status(nonblocking=True)
+        self._refresh_scope_profiles()
+        self._refresh_agent_monitor(nonblocking=True)
+        self._refresh_ai_thinking(nonblocking=True)
+        self._refresh_chat(nonblocking=True)
+        self._refresh_counts(nonblocking=True)
+        self._refresh_credentials_status(nonblocking=True)
+
+    def _refresh_agent_monitor(self, *, nonblocking: bool = False) -> bool:
+        loaded = self._runtime_read(
+            lambda: (
+                self._processor_map_snapshot(),
+                [
+                    item
+                    for item in self.runtime.store.list_notes(limit=120)
+                    if item.metadata.get("kind") == "worker_ai_review"
+                ],
+                self.runtime.store.list_traces(limit=200),
+                self.runtime.store.list_task_runs(limit=100),
+                {
+                    task.id: task
+                    for task in self.runtime.store.list_tasks(limit=500)
+                },
+            ),
+            nonblocking=nonblocking,
+        )
+        if loaded is None:
+            return False
+        processor_map, ai_notes, traces, runs, task_map = loaded
         lines = [
             "Autonomous AI Reviews",
             "Operator-chat assistant messages are intentionally not shown here. Use the Operator Chat tab for those.",
@@ -1410,10 +1614,12 @@ class PrimordialLauncher:
         else:
             lines.append("No task runs yet.")
         self._replace_text(self.agent_output, "\n".join(lines))
+        return True
 
-    def _refresh_current_work(self) -> None:
-        with self._runtime_lock:
-            payload = self.runtime.work_status_payload()
+    def _refresh_current_work(self, *, nonblocking: bool = False) -> bool:
+        payload = self._runtime_read(self.runtime.work_status_payload, nonblocking=nonblocking)
+        if payload is None:
+            return False
         gui_operations = list(self._active_operations.values())
         active = list(payload.get("active", []))
         queued = list(payload.get("queued", []))
@@ -1459,6 +1665,7 @@ class PrimordialLauncher:
         else:
             lines.append("- none")
         self._replace_text(self.current_work_output, "\n".join(lines))
+        return True
 
     def _format_work_item(self, item: object) -> str:
         if not isinstance(item, dict):
@@ -1494,51 +1701,58 @@ class PrimordialLauncher:
         except Exception:  # noqa: BLE001 - GUI display should not fail on settings drift
             return {}
 
-    def _refresh_ai_thinking(self) -> None:
-        with self._runtime_lock:
-            processor_map = self._processor_map_snapshot()
-            task_map = {
-                task.id: task
-                for task in self.runtime.store.list_tasks(limit=500)
-            }
-            model_runs = [
-                item
-                for item in self.runtime.store.list_task_runs(limit=160)
-                if item.model_name and self._is_after_thinking_clear(item.started_at)
-            ]
-            ai_notes = [
-                item
-                for item in self.runtime.store.list_notes(limit=200)
-                if item.metadata.get("kind") == "worker_ai_review"
-                and self._is_after_thinking_clear(item.created_at)
-            ]
-            ai_traces = [
-                item
-                for item in self.runtime.store.list_traces(limit=250)
-                if (
-                    item.status == "ai_review_completed"
-                    or item.metadata.get("kind") == "worker_ai_review"
-                    or item.metadata.get("model")
-                )
-                and self._is_after_thinking_clear(item.created_at)
-            ]
-            model_messages = [
-                item
-                for item in self.runtime.store.list_operator_messages(limit=120)
-                if item.role == "assistant"
-                and item.model
-                and item.model != "deterministic-state"
-                and self._is_after_thinking_clear(item.created_at)
-            ]
-            ai_failure_events = [
-                item
-                for item in self.runtime.store.list_events(limit=250)
-                if (
-                    "Worker AI generation unavailable" in item.summary
-                    or "Operator state AI review unavailable" in item.summary
-                )
-                and self._is_after_thinking_clear(item.created_at)
-            ]
+    def _refresh_ai_thinking(self, *, nonblocking: bool = False) -> bool:
+        loaded = self._runtime_read(
+            lambda: (
+                self._processor_map_snapshot(),
+                {
+                    task.id: task
+                    for task in self.runtime.store.list_tasks(limit=500)
+                },
+                [
+                    item
+                    for item in self.runtime.store.list_task_runs(limit=160)
+                    if item.model_name and self._is_after_thinking_clear(item.started_at)
+                ],
+                [
+                    item
+                    for item in self.runtime.store.list_notes(limit=200)
+                    if item.metadata.get("kind") == "worker_ai_review"
+                    and self._is_after_thinking_clear(item.created_at)
+                ],
+                [
+                    item
+                    for item in self.runtime.store.list_traces(limit=250)
+                    if (
+                        item.status == "ai_review_completed"
+                        or item.metadata.get("kind") == "worker_ai_review"
+                        or item.metadata.get("model")
+                    )
+                    and self._is_after_thinking_clear(item.created_at)
+                ],
+                [
+                    item
+                    for item in self.runtime.store.list_operator_messages(limit=120)
+                    if item.role == "assistant"
+                    and item.model
+                    and item.model != "deterministic-state"
+                    and self._is_after_thinking_clear(item.created_at)
+                ],
+                [
+                    item
+                    for item in self.runtime.store.list_events(limit=250)
+                    if (
+                        "Worker AI generation unavailable" in item.summary
+                        or "Operator state AI review unavailable" in item.summary
+                    )
+                    and self._is_after_thinking_clear(item.created_at)
+                ],
+            ),
+            nonblocking=nonblocking,
+        )
+        if loaded is None:
+            return False
+        processor_map, task_map, model_runs, ai_notes, ai_traces, model_messages, ai_failure_events = loaded
         lines = [
             "AI Thinking",
             "Shows model-generated reasoning artifacts. Deterministic status replies are excluded.",
@@ -1659,6 +1873,7 @@ class PrimordialLauncher:
         else:
             lines.append("No non-deterministic operator model answers in the current visible window.")
         self._replace_ai_thinking_text("\n".join(lines))
+        return True
 
     def _is_after_thinking_clear(self, created_at: datetime) -> bool:
         return self._ai_thinking_clear_after is None or created_at > self._ai_thinking_clear_after
@@ -1675,9 +1890,13 @@ class PrimordialLauncher:
         except (tk.TclError, ValueError):
             return 5
 
-    def _refresh_chat(self) -> None:
-        with self._runtime_lock:
-            messages = list(reversed(self.runtime.store.list_operator_messages(limit=80)))
+    def _refresh_chat(self, *, nonblocking: bool = False) -> bool:
+        messages = self._runtime_read(
+            lambda: list(reversed(self.runtime.store.list_operator_messages(limit=80))),
+            nonblocking=nonblocking,
+        )
+        if messages is None:
+            return False
         lines = []
         for message in messages:
             label = "Primordial AI" if message.role == "assistant" else "Operator"
@@ -1686,11 +1905,16 @@ class PrimordialLauncher:
             lines.append(message.body)
             lines.append("")
         self._replace_text(self.chat_output, "\n".join(lines) if lines else "No operator chat yet.")
+        return True
 
-    def _refresh_counts(self) -> None:
-        with self._runtime_lock:
-            dashboard = self.runtime.dashboard_payload()
-            rendered = render_dashboard_text(self.runtime)
+    def _refresh_counts(self, *, nonblocking: bool = False) -> bool:
+        loaded = self._runtime_read(
+            lambda: (self.runtime.dashboard_payload(), render_dashboard_text(self.runtime)),
+            nonblocking=nonblocking,
+        )
+        if loaded is None:
+            return False
+        dashboard, rendered = loaded
         counts = dashboard.get("counts", {})
         lines = ["Counts"]
         if isinstance(counts, dict):
@@ -1699,12 +1923,15 @@ class PrimordialLauncher:
         lines.append("\nDashboard")
         lines.append(rendered)
         self._replace_text(self.counts_output, "\n".join(lines))
+        return True
 
-    def _refresh_credentials_status(self) -> None:
-        with self._runtime_lock:
-            payload = self.runtime.credentials_payload()
+    def _refresh_credentials_status(self, *, nonblocking: bool = False) -> bool:
+        payload = self._runtime_read(self.runtime.credentials_payload, nonblocking=nonblocking)
+        if payload is None:
+            return False
         self.credentials_status_var.set(f"Credentials: {payload.get('path')}")
         self._replace_text(self.credentials_output, self._format_credentials_payload(payload))
+        return True
 
     def _format_credentials_payload(self, payload: dict[str, object]) -> str:
         lines = [f"credential_store={payload.get('path')}"]
@@ -1790,7 +2017,7 @@ class PrimordialLauncher:
 
     def _run_background(self, label: str, worker: Callable[[], str | None]) -> None:
         operation_id = self._begin_operation(label)
-        self._refresh_current_work()
+        self._refresh_current_work(nonblocking=True)
         Thread(target=self._background_entrypoint, args=(worker, operation_id), daemon=True).start()
 
     def _begin_operation(self, label: str) -> str:
@@ -1822,11 +2049,21 @@ class PrimordialLauncher:
                     self.work_status_var.set("Work status: failed")
                     messagebox.showerror("Primordial action failed", message)
                 elif status == "refresh_tabs":
-                    self._refresh_all_tabs()
+                    self._refresh_all_tabs_nonblocking()
                 elif status == "refresh_scope_profiles":
                     self._refresh_scope_profiles()
                 elif status == "reschedule_execution_mode_poll":
                     self._schedule_execution_mode_poll()
+                elif status == "system_status":
+                    payload = message if isinstance(message, dict) else {}
+                    metrics = payload.get("metrics")
+                    tuning = payload.get("tuning")
+                    if isinstance(metrics, dict):
+                        self._apply_system_metrics(metrics)
+                    if isinstance(tuning, dict):
+                        self._apply_runtime_tuning_payload(tuning)
+                elif status == "system_status_done":
+                    self._system_status_refresh_running = False
                 elif status == "set_guidance":
                     self.guidance_input.delete("1.0", tk.END)
                     self.guidance_input.insert(tk.END, message)
@@ -1843,7 +2080,7 @@ class PrimordialLauncher:
 
     def _poll_current_work(self) -> None:
         try:
-            self._refresh_current_work()
+            self._refresh_current_work(nonblocking=True)
         except tk.TclError:
             return
         if not self._closed:
@@ -1851,7 +2088,7 @@ class PrimordialLauncher:
 
     def _poll_agent_monitor(self) -> None:
         try:
-            self._refresh_agent_monitor()
+            self._refresh_agent_monitor(nonblocking=True)
         except tk.TclError:
             return
         if not self._closed:
@@ -1860,11 +2097,26 @@ class PrimordialLauncher:
     def _poll_ai_thinking(self) -> None:
         try:
             if self.ai_thinking_auto_var.get():
-                self._refresh_ai_thinking()
+                self._refresh_ai_thinking(nonblocking=True)
         except tk.TclError:
             return
         if not self._closed:
             self.root.after(self._ai_thinking_interval_seconds() * 1000, self._poll_ai_thinking)
+
+    def _poll_system_metrics(self) -> None:
+        if not self._system_status_refresh_running:
+            self._system_status_refresh_running = True
+            Thread(target=self._background_system_status_refresh, daemon=True).start()
+        if not self._closed:
+            self.root.after(2500, self._poll_system_metrics)
+
+    def _background_system_status_refresh(self) -> None:
+        try:
+            metrics = self.runtime.system_metrics_payload()
+            tuning = self._runtime_read(self.runtime.runtime_tuning_payload, nonblocking=True)
+            self._queue.put(("system_status", {"metrics": metrics, "tuning": tuning}))
+        finally:
+            self._queue.put(("system_status_done", ""))
 
     def _write_output(self, message: str) -> None:
         self.output.insert(tk.END, message.rstrip() + "\n\n")

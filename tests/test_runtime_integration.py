@@ -47,6 +47,75 @@ class RuntimeIntegrationTests(unittest.TestCase):
             )
             runtime.shutdown()
 
+    def test_runtime_tuning_defaults_persist_and_apply_to_workflow(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = AppConfig.from_env(project_root=root)
+            config.manifests_dir = MANIFESTS_DIR
+            config.ensure_directories()
+            runtime = PrimordialRuntime(config)
+            runtime.initialize()
+
+            defaults = runtime.runtime_tuning_payload()
+            self.assertEqual(
+                defaults["cpu_ai_timeout_seconds"],
+                PrimordialRuntime.DEFAULT_WORKER_AI_TIMEOUT_SECONDS_CPU,
+            )
+            self.assertEqual(
+                defaults["gpu_ai_timeout_seconds"],
+                PrimordialRuntime.DEFAULT_WORKER_AI_TIMEOUT_SECONDS_GPU,
+            )
+            self.assertEqual(
+                defaults["stale_run_timeout_seconds"],
+                PrimordialRuntime.DEFAULT_STALE_RUN_TIMEOUT_SECONDS,
+            )
+
+            updated = runtime.update_runtime_tuning(
+                cpu_ai_timeout_seconds=420,
+                gpu_ai_timeout_seconds=150,
+                stale_run_timeout_seconds=5400,
+            )
+            self.assertEqual(updated["cpu_ai_timeout_seconds"], 420)
+            self.assertEqual(updated["gpu_ai_timeout_seconds"], 150)
+            self.assertEqual(updated["stale_run_timeout_seconds"], 5400)
+            self.assertEqual(runtime.workflow.stale_run_max_age_seconds, 5400)
+            runtime.shutdown()
+
+            runtime_reloaded = PrimordialRuntime(config)
+            runtime_reloaded.initialize()
+            persisted = runtime_reloaded.runtime_tuning_payload()
+            self.assertEqual(persisted["cpu_ai_timeout_seconds"], 420)
+            self.assertEqual(persisted["gpu_ai_timeout_seconds"], 150)
+            self.assertEqual(persisted["stale_run_timeout_seconds"], 5400)
+            self.assertEqual(runtime_reloaded.workflow.stale_run_max_age_seconds, 5400)
+            runtime_reloaded.shutdown()
+
+    def test_dashboard_payload_surfaces_runtime_tuning_and_system_metrics(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = AppConfig.from_env(project_root=root)
+            config.manifests_dir = MANIFESTS_DIR
+            config.ensure_directories()
+            runtime = PrimordialRuntime(config)
+            runtime.initialize()
+
+            with patch.object(
+                runtime,
+                "_read_cpu_metrics",
+                return_value={"available": True, "percent": 12.5, "load_1": 1.23, "cpu_count": 8},
+            ), patch.object(
+                runtime,
+                "_read_gpu_metrics",
+                return_value={"available": True, "percent": 34.0, "memory_used_mb": 2048.0, "memory_total_mb": 8192.0},
+            ):
+                payload = runtime.dashboard_payload()
+
+            self.assertIn("runtime_tuning", payload)
+            self.assertIn("system_metrics", payload)
+            self.assertEqual(payload["system_metrics"]["cpu"]["percent"], 12.5)
+            self.assertEqual(payload["system_metrics"]["gpu"]["percent"], 34.0)
+            runtime.shutdown()
+
     def test_work_status_repairs_stale_active_run_state(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

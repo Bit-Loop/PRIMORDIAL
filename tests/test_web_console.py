@@ -638,6 +638,32 @@ class WebConsoleTests(unittest.TestCase):
         self.assertEqual(mode["interval_seconds"], 7)
         self.assertEqual(dashboard["execution_mode"]["mode"], "continuous")
 
+    def test_runtime_settings_endpoint_persists_and_surfaces_on_dashboard(self) -> None:
+        update_response = self.app.dispatch(
+            "POST",
+            "/api/runtime-settings",
+            json.dumps(
+                {
+                    "gpu_ai_timeout_seconds": 150,
+                    "cpu_ai_timeout_seconds": 420,
+                    "stale_run_timeout_seconds": 5400,
+                }
+            ).encode("utf-8"),
+        )
+        settings_response = self.app.dispatch("GET", "/api/runtime-settings")
+        dashboard_response = self.app.dispatch("GET", "/api/dashboard")
+
+        update = json.loads(update_response.body)
+        settings = json.loads(settings_response.body)
+        dashboard = json.loads(dashboard_response.body)
+
+        self.assertEqual(update_response.status, 200)
+        self.assertTrue(update["ok"])
+        self.assertEqual(update["result"]["runtime_tuning"]["cpu_ai_timeout_seconds"], 420)
+        self.assertEqual(settings["gpu_ai_timeout_seconds"], 150)
+        self.assertEqual(settings["stale_run_timeout_seconds"], 5400)
+        self.assertEqual(dashboard["runtime_tuning"]["cpu_ai_timeout_seconds"], 420)
+
     def test_model_role_endpoint_lists_and_persists_selected_models(self) -> None:
         with patch.object(
             self.runtime.ollama,

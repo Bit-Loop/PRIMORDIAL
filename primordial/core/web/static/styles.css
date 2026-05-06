@@ -72,6 +72,50 @@ h1 {
   min-width: 260px;
 }
 
+.hero-monitors {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.load-monitor {
+  border-radius: 16px;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.62);
+  border: 1px solid rgba(55, 38, 24, 0.08);
+}
+
+.load-monitor-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+  margin-bottom: 8px;
+}
+
+.meter {
+  width: 100%;
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(32, 21, 13, 0.08);
+  overflow: hidden;
+}
+
+.meter-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 999px;
+  transition: width 160ms ease;
+}
+
+.cpu-fill {
+  background: linear-gradient(90deg, #2aa198, #268bd2);
+}
+
+.gpu-fill {
+  background: linear-gradient(90deg, #b58900, #cb4b16);
+}
+
 .pill,
 .status-chip {
   display: inline-flex;
@@ -130,6 +174,14 @@ h1 {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+}
+
+.runtime-settings-form {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+  margin-bottom: 10px;
 }
 
 .field {
@@ -513,6 +565,10 @@ tbody tr {
   }
 
   .controls-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .runtime-settings-form {
     grid-template-columns: 1fr;
   }
 

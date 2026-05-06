@@ -1,0 +1,102 @@
+{
+  "body": "**Facts**\n- Target `pirate.htb` is `hack_the_box` and in_scope=True.\n- Active operator-confirmed IP is `10.129.244.95`.\n- Methodology phase is `analysis` / `analyze_evidence` with completion state `waiting_on_existing_tasks`.\n- 3 recent evidence record(s) are historical for an older active-IP generation.\n- `Kerberos user discovery: pirate.htb`: Kerberos user discovery against 10.129.244.95 found 0 user principal(s) and 0 SPN candidate(s).\n- `AD enumeration: pirate.htb`: Anonymous AD enumeration against 10.129.244.95 observed 6 LDAP naming context value(s), 0 SMB share candidate(s), and 0 RPC user candidate(s).\n- `Web content discovery: pirate.htb`: Bounded web content discovery checked 3 base URL(s) with 420 words and found no interesting paths.\n- `PoC applicability validation: pirate.htb`: Classified 1 retained public PoC candidate(s): 1 ready for gated review, 0 blocked or research-only. No PoC was executed and no exploit code was generated.\n- `Exploit research: pirate.htb`: Searchsploit research found 1 non-DoS candidate(s), suppressed 0 DoS/crash-oriented result(s), and retained 1 example excerpt(s): Microsoft Active Directory LDAP Server - 'Username' Enumeration.\n- `DNS enumeration: pirate.htb`: DNS enumeration queried pirate.htb via 10.129.244.95; parsed 7 record(s). AXFR did not succeed.\n- Recent task states: recon_scan:succeeded, recon_scan:cancelled, recon_scan:succeeded, service_discovery:succeeded, service_discovery:cancelled, service_discovery:cancelled, service_discovery:cancelled, service_discovery:cancelled\n- Registered primitives: ad-enumeration, behavior-review, caido-search, chain-review, claude-review, content-discovery, credentialed-access-check, discord-alert, dns-enumeration, finding-verification, http-probe, hypothesis-analysis, kerberos-attack-check, kerberos-user-discovery, memory-compactor, notion-sync, poc-applicability-validation, searchsploit-research, tcp-service-discovery\n\n**Potential Paths**\n- `PoC applicability candidates ready for gated review`: 1 retained public PoC candidate(s) have enough evidence for a deeper gated review. Execution still requires explicit policy approval and bounded stop conditions. Confidence 0.72.\n- `PoC research candidates for gated synthesis`: Searchsploit returned non-DoS public exploit references. These are research candidates only; they require version validation, adaptation review, and policy approval before any execution. Confidence 0.70.\n- `Exploit research: pirate.htb` retained 1 non-DoS public exploit reference(s). These are potential paths until target-specific version/applicability evidence verifies them.\n\n**Blockers**\n- No stored evidence contains a user/root flag or flag-like token.\n- Lab username/password are not configured, so credentialed SMB/WinRM verification cannot run.\n\n**Next Actions**\n- Run gated public PoC applicability validation against exact service/version evidence. Prerequisite: retained non-DoS Searchsploit candidates. Confidence: 0.76.\n- Configure lab credentials before credentialed SMB/WinRM verification. Prerequisite: operator-provided username/password. Confidence: 0.72.",
+  "created_at": "2026-05-06T03:10:27.251812+00:00",
+  "id": "opmsg_131b292e4a6d",
+  "metadata": {
+    "elapsed_seconds": 10.35275361,
+    "guardrail_replaced_model_output": true,
+    "mode": "deterministic_state_answer",
+    "ok": true,
+    "route_model": "bjoernb/gemma4-e4b-think:latest",
+    "route_num_gpu": null
+  },
+  "model": "deterministic-state",
+  "role": "assistant",
+  "target": {
+    "created_at": "2026-05-05T02:04:46.452719+00:00",
+    "display_name": "HTB Pirate",
+    "handle": "pirate.htb",
+    "id": "target_19956ec84d56",
+    "in_scope": true,
+    "metadata": {
+      "active_ip": "10.129.244.95",
+      "active_ip_generation": 3,
+      "active_ip_source": "target_update",
+      "methodology_state": {
+        "blockers": [
+          "Lab username/password are not configured, so credentialed SMB/WinRM verification cannot run.",
+          "AI proposal rejected: Verify LDAP unauthenticated bind capability (missing primitive mapping)",
+          "AI proposal rejected: Enumerate LDAP rootDSE for server version and capabilities (missing primitive mapping)",
+          "AI proposal rejected: Refine query to include exact IIS version + AD LDAP context (missing primitive mapping)"
+        ],
+        "candidate_actions": [],
+        "completion": "waiting_on_existing_tasks",
+        "fingerprint": "{\"blockers\": [\"Lab username/password are not configured, so credentialed SMB/WinRM verification cannot run.\", \"AI proposal rejected: Verify LDAP unauthenticated bind capability (missing primitive mapping)\", \"AI proposal rejected: Enumerate LDAP rootDSE for server version and capabilities (missing primitive mapping)\", \"AI proposal rejected: Refine query to include exact IIS version + AD LDAP context (missing primitive mapping)\"], \"candidate_actions\": [], \"completion\": \"waiting_on_existing_tasks\", \"no_progress_reason\": null, \"phase\": \"analysis\", \"subphase\": \"analyze_evidence\"}",
+        "metadata": {
+          "active_ip_generation": "3",
+          "ai_proposal_admission": {
+            "accepted": [],
+            "rejected": [
+              {
+                "primitive_hint": "ldap_bind_unauthenticated",
+                "reason": "missing primitive mapping",
+                "task_id": "task_0f1c0ab7caa1",
+                "title": "Verify LDAP unauthenticated bind capability"
+              },
+              {
+                "primitive_hint": "ldap_rootdse_enumeration",
+                "reason": "missing primitive mapping",
+                "task_id": "task_0f1c0ab7caa1",
+                "title": "Enumerate LDAP rootDSE for server version and capabilities"
+              },
+              {
+                "primitive_hint": "web_fingerprinting",
+                "reason": "missing primitive mapping",
+                "task_id": "task_0f1c0ab7caa1",
+                "title": "Refine query to include exact IIS version + AD LDAP context"
+              },
+              {
+                "primitive_hint": "ldap_search_bind, ldap_rootdse_query",
+                "reason": "missing primitive mapping",
+                "task_id": "task_b72eb747db11",
+                "title": "Verify AD/LDAP version via unauthenticated LDAP bind + extended control"
+              },
+              {
+                "primitive_hint": "ldap_search, ldap_page_size_control",
+                "reason": "missing primitive mapping",
+                "task_id": "task_b72eb747db11",
+                "title": "Test LDAP anonymous bind and enumeration with bounded filters"
+              },
+              {
+                "primitive_hint": "http_probe, http_headers_capture",
+                "reason": "missing primitive mapping",
+                "task_id": "task_b72eb747db11",
+                "title": "Cross-reference IIS version with AD schema version via HTTP headers or /iisstart.htm"
+              }
+            ]
+          },
+          "current_generation_evidence_count": 9,
+          "verified_interest_count": 0,
+          "waiting_task_count": 1
+        },
+        "next_unblock_action": "Lab username/password are not configured, so credentialed SMB/WinRM verification cannot run.",
+        "no_progress_reason": null,
+        "phase": "analysis",
+        "planner_version": 2,
+        "retry_budget": {
+          "analyze_evidence": 2
+        },
+        "subphase": "analyze_evidence",
+        "transition_reason": "Existing needs_approval task is already covering the next methodology step.",
+        "updated_at": "2026-05-06T03:10:08.316413+00:00"
+      },
+      "operator_confirmed_ip": "10.129.244.95",
+      "operator_confirmed_ip_at": "2026-05-06T03:09:56.289000+00:00",
+      "source": "gui_start_work",
+      "stale_evidence_before": "2026-05-05T14:36:25.399151+00:00",
+      "target_kind": "htb_lab"
+    },
+    "profile": "hack_the_box",
+    "updated_at": "2026-05-06T03:10:08.316537+00:00"
+  }
+}

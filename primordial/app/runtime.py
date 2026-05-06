@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import os
 from pathlib import Path
 import re
+from threading import RLock
+import shutil
+import subprocess
+import time
 
 from primordial.adapters.caido import CaidoIntegrationService
 from primordial.adapters.discord import DiscordNotificationService
@@ -62,6 +67,14 @@ class PrimordialRuntime:
     EXECUTION_MODE_INTERVAL_SETTING = "execution_mode_interval_seconds"
     EXECUTION_MODES = {"tick", "continuous"}
     DEFAULT_EXECUTION_INTERVAL_SECONDS = 30
+    RUNTIME_TUNING_SETTING = "runtime_tuning"
+    DEFAULT_WORKER_AI_TIMEOUT_SECONDS_GPU = 120
+    DEFAULT_WORKER_AI_TIMEOUT_SECONDS_CPU = 300
+    DEFAULT_STALE_RUN_TIMEOUT_SECONDS = 3600
+    MIN_GPU_AI_TIMEOUT_SECONDS = 15
+    MIN_CPU_AI_TIMEOUT_SECONDS = 30
+    MIN_STALE_RUN_TIMEOUT_SECONDS = 60
+    METRICS_CACHE_TTL_SECONDS = 2.0
     WORKER_AI_TIMEOUT_SECONDS_GPU = 120
     WORKER_AI_TIMEOUT_SECONDS_CPU = 300
     SCOPE_PROFILE_PRESETS_SETTING = "scope_profile_presets"
@@ -115,6 +128,10 @@ class PrimordialRuntime:
         self.findings_context = FindingsContextService(config.findings_dir, config.notion_exports_dir)
         self.resume_tracker = ResumeTracker(self.store, self.event_bus)
         self.worker_broker = WorkerBroker(self.event_bus)
+        self._metrics_lock = RLock()
+        self._cpu_sample: tuple[int, int] | None = None
+        self._system_metrics_cache: dict[str, object] | None = None
+        self._system_metrics_cache_at = 0.0
         self._register_modules()
         self._register_worker_runners()
         self.workflow = WorkflowOrchestrator(
@@ -168,6 +185,7 @@ class PrimordialRuntime:
                 )
             )
         self._recover_runtime_state()
+        self._apply_runtime_tuning()
         self.repair_execution_state()
         for target in self.store.list_targets():
             self.findings_context.ensure_target(target)
@@ -337,6 +355,96 @@ class PrimordialRuntime:
             "interval_seconds": interval_seconds,
             "available_modes": ["tick", "continuous"],
         }
+
+    def runtime_tuning_payload(self) -> dict[str, object]:
+        raw = self.store.get_setting(self.RUNTIME_TUNING_SETTING, {})
+        if not isinstance(raw, dict):
+            raw = {}
+        gpu_timeout = self._bounded_int(
+            raw.get("gpu_ai_timeout_seconds"),
+            default=self.DEFAULT_WORKER_AI_TIMEOUT_SECONDS_GPU,
+            minimum=self.MIN_GPU_AI_TIMEOUT_SECONDS,
+        )
+        cpu_timeout = self._bounded_int(
+            raw.get("cpu_ai_timeout_seconds"),
+            default=self.DEFAULT_WORKER_AI_TIMEOUT_SECONDS_CPU,
+            minimum=self.MIN_CPU_AI_TIMEOUT_SECONDS,
+        )
+        stale_timeout = self._bounded_int(
+            raw.get("stale_run_timeout_seconds"),
+            default=self.DEFAULT_STALE_RUN_TIMEOUT_SECONDS,
+            minimum=self.MIN_STALE_RUN_TIMEOUT_SECONDS,
+        )
+        return {
+            "gpu_ai_timeout_seconds": gpu_timeout,
+            "cpu_ai_timeout_seconds": cpu_timeout,
+            "stale_run_timeout_seconds": stale_timeout,
+            "defaults": {
+                "gpu_ai_timeout_seconds": self.DEFAULT_WORKER_AI_TIMEOUT_SECONDS_GPU,
+                "cpu_ai_timeout_seconds": self.DEFAULT_WORKER_AI_TIMEOUT_SECONDS_CPU,
+                "stale_run_timeout_seconds": self.DEFAULT_STALE_RUN_TIMEOUT_SECONDS,
+            },
+            "minimums": {
+                "gpu_ai_timeout_seconds": self.MIN_GPU_AI_TIMEOUT_SECONDS,
+                "cpu_ai_timeout_seconds": self.MIN_CPU_AI_TIMEOUT_SECONDS,
+                "stale_run_timeout_seconds": self.MIN_STALE_RUN_TIMEOUT_SECONDS,
+            },
+        }
+
+    def update_runtime_tuning(
+        self,
+        *,
+        gpu_ai_timeout_seconds: int | None = None,
+        cpu_ai_timeout_seconds: int | None = None,
+        stale_run_timeout_seconds: int | None = None,
+    ) -> dict[str, object]:
+        current = self.runtime_tuning_payload()
+        updated = {
+            "gpu_ai_timeout_seconds": self._bounded_int(
+                gpu_ai_timeout_seconds,
+                default=int(current["gpu_ai_timeout_seconds"]),
+                minimum=self.MIN_GPU_AI_TIMEOUT_SECONDS,
+            ),
+            "cpu_ai_timeout_seconds": self._bounded_int(
+                cpu_ai_timeout_seconds,
+                default=int(current["cpu_ai_timeout_seconds"]),
+                minimum=self.MIN_CPU_AI_TIMEOUT_SECONDS,
+            ),
+            "stale_run_timeout_seconds": self._bounded_int(
+                stale_run_timeout_seconds,
+                default=int(current["stale_run_timeout_seconds"]),
+                minimum=self.MIN_STALE_RUN_TIMEOUT_SECONDS,
+            ),
+        }
+        self.store.set_setting(self.RUNTIME_TUNING_SETTING, updated)
+        self._apply_runtime_tuning()
+        payload = self.runtime_tuning_payload()
+        self.store.insert_event(
+            EventRecord(
+                type=EventType.BOOTSTRAP,
+                summary="Runtime tuning updated",
+                metadata=payload,
+            )
+        )
+        return payload
+
+    def system_metrics_payload(self, *, force_refresh: bool = False) -> dict[str, object]:
+        with self._metrics_lock:
+            now = time.monotonic()
+            if (
+                not force_refresh
+                and self._system_metrics_cache is not None
+                and (now - self._system_metrics_cache_at) < self.METRICS_CACHE_TTL_SECONDS
+            ):
+                return dict(self._system_metrics_cache)
+            payload = {
+                "updated_at": utc_now().isoformat(),
+                "cpu": self._read_cpu_metrics(),
+                "gpu": self._read_gpu_metrics(),
+            }
+            self._system_metrics_cache = payload
+            self._system_metrics_cache_at = now
+            return dict(payload)
 
     def update_execution_mode(self, mode: str, *, interval_seconds: int | None = None) -> dict[str, object]:
         selected = str(mode).strip().lower()
@@ -608,6 +716,8 @@ class PrimordialRuntime:
     def dashboard_payload(self) -> dict[str, object]:
         payload = json_ready(self.dashboard())
         payload["execution_mode"] = self.execution_mode_payload()
+        payload["runtime_tuning"] = self.runtime_tuning_payload()
+        payload["system_metrics"] = self.system_metrics_payload()
         payload["work_status"] = self.work_status_payload()
         return payload
 
@@ -1518,11 +1628,10 @@ class PrimordialRuntime:
         return 0 if processor == "cpu" else None
 
     def _ollama_timeout_seconds_for_processor(self, processor: str) -> int:
-        return (
-            self.WORKER_AI_TIMEOUT_SECONDS_CPU
-            if processor == "cpu"
-            else self.WORKER_AI_TIMEOUT_SECONDS_GPU
-        )
+        tuning = self.runtime_tuning_payload()
+        if processor == "cpu":
+            return int(tuning["cpu_ai_timeout_seconds"])
+        return int(tuning["gpu_ai_timeout_seconds"])
 
     def _worker_ai_generate(
         self,
@@ -2455,6 +2564,140 @@ class PrimordialRuntime:
                 task.metadata["recovered_duplicate"] = True
                 self.store.insert_task(task)
         self.resume_tracker.resume_due_tasks(limit=500)
+
+    def _apply_runtime_tuning(self) -> None:
+        tuning = self.runtime_tuning_payload()
+        self.WORKER_AI_TIMEOUT_SECONDS_GPU = int(tuning["gpu_ai_timeout_seconds"])
+        self.WORKER_AI_TIMEOUT_SECONDS_CPU = int(tuning["cpu_ai_timeout_seconds"])
+        self.workflow.stale_run_max_age_seconds = int(tuning["stale_run_timeout_seconds"])
+
+    def _bounded_int(self, raw: object, *, default: int, minimum: int) -> int:
+        try:
+            value = int(raw) if raw is not None else default
+        except (TypeError, ValueError):
+            value = default
+        return max(minimum, value)
+
+    def _read_cpu_metrics(self) -> dict[str, object]:
+        cpu_count = max(1, os.cpu_count() or 1)
+        load_1 = load_5 = load_15 = 0.0
+        if hasattr(os, "getloadavg"):
+            try:
+                load_1, load_5, load_15 = os.getloadavg()
+            except OSError:
+                pass
+        percent = None
+        try:
+            with Path("/proc/stat").open("r", encoding="utf-8") as handle:
+                first_line = handle.readline().strip()
+            fields = [int(value) for value in first_line.split()[1:]]
+            if len(fields) >= 4:
+                idle = fields[3] + (fields[4] if len(fields) > 4 else 0)
+                total = sum(fields)
+                previous = self._cpu_sample
+                self._cpu_sample = (idle, total)
+                if previous is not None:
+                    idle_delta = idle - previous[0]
+                    total_delta = total - previous[1]
+                    if total_delta > 0:
+                        percent = max(0.0, min(100.0, 100.0 * (1.0 - (idle_delta / total_delta))))
+        except OSError:
+            percent = None
+        if percent is None:
+            percent = max(0.0, min(100.0, (load_1 / cpu_count) * 100.0))
+        return {
+            "available": True,
+            "percent": round(percent, 1),
+            "load_1": round(load_1, 2),
+            "load_5": round(load_5, 2),
+            "load_15": round(load_15, 2),
+            "cpu_count": cpu_count,
+        }
+
+    def _read_gpu_metrics(self) -> dict[str, object]:
+        nvidia_smi = shutil.which("nvidia-smi")
+        if not nvidia_smi:
+            return {
+                "available": False,
+                "percent": 0.0,
+                "memory_percent": 0.0,
+                "memory_used_mb": None,
+                "memory_total_mb": None,
+                "temperature_c": None,
+                "error": "nvidia-smi not found",
+            }
+        try:
+            result = subprocess.run(
+                [
+                    nvidia_smi,
+                    "--query-gpu=utilization.gpu,utilization.memory,memory.used,memory.total,temperature.gpu",
+                    "--format=csv,noheader,nounits",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return {
+                "available": False,
+                "percent": 0.0,
+                "memory_percent": 0.0,
+                "memory_used_mb": None,
+                "memory_total_mb": None,
+                "temperature_c": None,
+                "error": str(exc),
+            }
+        if result.returncode != 0:
+            return {
+                "available": False,
+                "percent": 0.0,
+                "memory_percent": 0.0,
+                "memory_used_mb": None,
+                "memory_total_mb": None,
+                "temperature_c": None,
+                "error": result.stderr.strip() or result.stdout.strip() or "nvidia-smi failed",
+            }
+        line = next((item.strip() for item in result.stdout.splitlines() if item.strip()), "")
+        if not line:
+            return {
+                "available": False,
+                "percent": 0.0,
+                "memory_percent": 0.0,
+                "memory_used_mb": None,
+                "memory_total_mb": None,
+                "temperature_c": None,
+                "error": "nvidia-smi returned no GPU data",
+            }
+        parts = [segment.strip() for segment in line.split(",")]
+        try:
+            utilization = float(parts[0])
+            memory_utilization = float(parts[1])
+            memory_used = float(parts[2])
+            memory_total = float(parts[3])
+            temperature = float(parts[4])
+        except (IndexError, ValueError):
+            return {
+                "available": False,
+                "percent": 0.0,
+                "memory_percent": 0.0,
+                "memory_used_mb": None,
+                "memory_total_mb": None,
+                "temperature_c": None,
+                "error": f"unexpected nvidia-smi output: {line}",
+            }
+        memory_percent = max(0.0, min(100.0, memory_utilization))
+        if memory_total > 0:
+            memory_percent = max(0.0, min(100.0, (memory_used / memory_total) * 100.0))
+        return {
+            "available": True,
+            "percent": round(max(0.0, min(100.0, utilization)), 1),
+            "memory_percent": round(memory_percent, 1),
+            "memory_used_mb": round(memory_used, 1),
+            "memory_total_mb": round(memory_total, 1),
+            "temperature_c": round(temperature, 1),
+            "error": None,
+        }
 
     def _cleanup_deleted_paths(self, raw_paths: list[str]) -> None:
         allowed_roots = (self.config.artifacts_dir.resolve(), self.config.checkpoints_dir.resolve())

@@ -107,6 +107,7 @@ class WorkflowOrchestrator:
         self.checkpoints_dir = checkpoints_dir
         self.credentials_status_loader = credentials_status_loader
         self.event_bus = event_bus
+        self.stale_run_max_age_seconds = self.STALE_RUN_MAX_AGE_SECONDS
 
     def preview_target_state(self, target: Target) -> TargetMethodologyState:
         return self._evaluate_target_methodology_state(target)
@@ -648,7 +649,7 @@ class WorkflowOrchestrator:
             return f"task status is {task.status.value}"
         last_seen = run.heartbeat_at or run.started_at
         age_seconds = (now - last_seen).total_seconds()
-        if age_seconds > self.STALE_RUN_MAX_AGE_SECONDS:
+        if age_seconds > self.stale_run_max_age_seconds:
             return f"no execution heartbeat for {int(age_seconds)}s"
         return None
 

@@ -1,0 +1,167 @@
+{
+  "base_dn": "DC=pirate,DC=htb",
+  "command_results": [
+    {
+      "argv": [
+        "ldapsearch",
+        "-x",
+        "-LLL",
+        "-H",
+        "ldap://10.129.244.95",
+        "-b",
+        "DC=pirate,DC=htb",
+        "(|(objectClass=user)(objectClass=person))",
+        "sAMAccountName",
+        "userPrincipalName",
+        "servicePrincipalName",
+        "userAccountControl"
+      ],
+      "executed": true,
+      "returncode": 1,
+      "stderr": "Operations error (1)\nAdditional information: 000004DC: LdapErr: DSID-0C090D5A, comment: In order to perform this operation a successful bind must be completed on the connection., data 0, v4563\n",
+      "stdout": "",
+      "timeout": false,
+      "tool": "ldapsearch"
+    },
+    {
+      "argv": [
+        "rpcclient",
+        "-U",
+        "",
+        "-N",
+        "10.129.244.95",
+        "-c",
+        "enumdomusers"
+      ],
+      "executed": true,
+      "returncode": 1,
+      "stderr": "",
+      "stdout": "result was NT_STATUS_ACCESS_DENIED\n",
+      "timeout": false,
+      "tool": "rpcclient"
+    },
+    {
+      "argv": [
+        "netexec",
+        "smb",
+        "10.129.244.95",
+        "-u",
+        "",
+        "-p",
+        "",
+        "--users"
+      ],
+      "executed": true,
+      "returncode": 1,
+      "stderr": "Traceback (most recent call last):\n  File \"/usr/bin/netexec\", line 5, in <module>\n    from nxc.netexec import main\nModuleNotFoundError: No module named 'nxc'\n",
+      "stdout": "",
+      "timeout": false,
+      "tool": "netexec"
+    }
+  ],
+  "domain": "pirate.htb",
+  "host": "10.129.244.95",
+  "parsed": {
+    "spn_candidates": [],
+    "users": []
+  },
+  "target": {
+    "created_at": "2026-05-05T02:04:46.452719+00:00",
+    "display_name": "HTB Pirate",
+    "handle": "pirate.htb",
+    "id": "target_19956ec84d56",
+    "in_scope": true,
+    "metadata": {
+      "active_ip": "10.129.244.95",
+      "active_ip_generation": 3,
+      "active_ip_source": "target_update",
+      "methodology_state": {
+        "blockers": [
+          "Lab username/password are not configured, so credentialed SMB/WinRM verification cannot run.",
+          "AI proposal rejected: Verify LDAP unauthenticated bind capability (missing primitive mapping)",
+          "AI proposal rejected: Enumerate LDAP rootDSE for server version and capabilities (missing primitive mapping)",
+          "AI proposal rejected: Refine query to include exact IIS version + AD LDAP context (missing primitive mapping)"
+        ],
+        "candidate_actions": [
+          {
+            "confidence": 0.83,
+            "kind": "kerberos_user_discovery",
+            "metadata": {},
+            "phase": "recon",
+            "prerequisite": "current-generation AD enumeration",
+            "subphase": "principal_discovery",
+            "summary": "Discover candidate AD/Kerberos principals for pirate.htb.",
+            "title": "Run Kerberos/LDAP user discovery",
+            "transition_reason": "AD evidence exists, but current-generation principal discovery has not run yet."
+          }
+        ],
+        "completion": "candidate_actions_ready",
+        "fingerprint": "{\"blockers\": [\"Lab username/password are not configured, so credentialed SMB/WinRM verification cannot run.\", \"AI proposal rejected: Verify LDAP unauthenticated bind capability (missing primitive mapping)\", \"AI proposal rejected: Enumerate LDAP rootDSE for server version and capabilities (missing primitive mapping)\", \"AI proposal rejected: Refine query to include exact IIS version + AD LDAP context (missing primitive mapping)\"], \"candidate_actions\": [{\"confidence\": 0.83, \"kind\": \"kerberos_user_discovery\", \"metadata\": {}, \"phase\": \"recon\", \"prerequisite\": \"current-generation AD enumeration\", \"subphase\": \"principal_discovery\", \"summary\": \"Discover candidate AD/Kerberos principals for pirate.htb.\", \"title\": \"Run Kerberos/LDAP user discovery\", \"transition_reason\": \"AD evidence exists, but current-generation principal discovery has not run yet.\"}], \"completion\": \"candidate_actions_ready\", \"no_progress_reason\": null, \"phase\": \"recon\", \"subphase\": \"principal_discovery\"}",
+        "metadata": {
+          "active_ip_generation": "3",
+          "ai_proposal_admission": {
+            "accepted": [],
+            "rejected": [
+              {
+                "primitive_hint": "ldap_bind_unauthenticated",
+                "reason": "missing primitive mapping",
+                "task_id": "task_0f1c0ab7caa1",
+                "title": "Verify LDAP unauthenticated bind capability"
+              },
+              {
+                "primitive_hint": "ldap_rootdse_enumeration",
+                "reason": "missing primitive mapping",
+                "task_id": "task_0f1c0ab7caa1",
+                "title": "Enumerate LDAP rootDSE for server version and capabilities"
+              },
+              {
+                "primitive_hint": "web_fingerprinting",
+                "reason": "missing primitive mapping",
+                "task_id": "task_0f1c0ab7caa1",
+                "title": "Refine query to include exact IIS version + AD LDAP context"
+              },
+              {
+                "primitive_hint": "ldap_search_bind, ldap_rootdse_query",
+                "reason": "missing primitive mapping",
+                "task_id": "task_b72eb747db11",
+                "title": "Verify AD/LDAP version via unauthenticated LDAP bind + extended control"
+              },
+              {
+                "primitive_hint": "ldap_search, ldap_page_size_control",
+                "reason": "missing primitive mapping",
+                "task_id": "task_b72eb747db11",
+                "title": "Test LDAP anonymous bind and enumeration with bounded filters"
+              },
+              {
+                "primitive_hint": "http_probe, http_headers_capture",
+                "reason": "missing primitive mapping",
+                "task_id": "task_b72eb747db11",
+                "title": "Cross-reference IIS version with AD schema version via HTTP headers or /iisstart.htm"
+              }
+            ]
+          },
+          "current_generation_evidence_count": 8,
+          "verified_interest_count": 0,
+          "waiting_task_count": 1
+        },
+        "next_unblock_action": "Lab username/password are not configured, so credentialed SMB/WinRM verification cannot run.",
+        "no_progress_reason": null,
+        "phase": "recon",
+        "planner_version": 2,
+        "retry_budget": {
+          "analyze_evidence": 2
+        },
+        "subphase": "principal_discovery",
+        "transition_reason": "AD evidence exists, but current-generation principal discovery has not run yet.",
+        "updated_at": "2026-05-05T17:00:22.385402+00:00"
+      },
+      "operator_confirmed_ip": "10.129.244.95",
+      "operator_confirmed_ip_at": "2026-05-05T16:44:44.245468+00:00",
+      "source": "gui_start_work",
+      "stale_evidence_before": "2026-05-05T14:36:25.399151+00:00",
+      "target_kind": "htb_lab"
+    },
+    "profile": "hack_the_box",
+    "updated_at": "2026-05-05T17:00:22.385530+00:00"
+  }
+}

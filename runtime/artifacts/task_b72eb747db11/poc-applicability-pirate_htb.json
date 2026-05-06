@@ -1,0 +1,196 @@
+{
+  "classified_candidates": [
+    {
+      "edb_id": "32586",
+      "executes_poc": false,
+      "path": "/usr/share/exploitdb/exploits/windows/remote/32586.py",
+      "reasons": [
+        "AD/LDAP surface exists, but exact version/configuration still needs bounded verification"
+      ],
+      "status": "ready_for_review",
+      "title": "Microsoft Active Directory LDAP Server - 'Username' Enumeration"
+    }
+  ],
+  "guardrails": {
+    "executes_pocs": false,
+    "requires_exact_version_or_prerequisite_match": true,
+    "requires_policy_approval_before_execution": true,
+    "writes_exploit_code": false
+  },
+  "service_facts": {
+    "has_ad": true,
+    "has_exchange": false,
+    "has_iis": true,
+    "has_windows_2000": false,
+    "services": [
+      {
+        "banner": "Simple DNS Plus",
+        "host": "10.129.244.95",
+        "port": 53,
+        "service": "domain"
+      },
+      {
+        "banner": "Microsoft IIS httpd 10.0",
+        "host": "10.129.244.95",
+        "port": 80,
+        "service": "http"
+      },
+      {
+        "banner": "Microsoft Windows Kerberos server time: 2026-05-05 23:45:15Z",
+        "host": "10.129.244.95",
+        "port": 88,
+        "service": "kerberos-sec"
+      },
+      {
+        "banner": "Microsoft Windows RPC",
+        "host": "10.129.244.95",
+        "port": 135,
+        "service": "msrpc"
+      },
+      {
+        "banner": "Microsoft Windows netbios-ssn",
+        "host": "10.129.244.95",
+        "port": 139,
+        "service": "netbios-ssn"
+      },
+      {
+        "banner": "Microsoft Windows Active Directory LDAP Domain: pirate.htb, Site: Default-First-Site-Name",
+        "host": "10.129.244.95",
+        "port": 389,
+        "service": "ldap"
+      },
+      {
+        "banner": "",
+        "host": "10.129.244.95",
+        "port": 443,
+        "service": "https"
+      },
+      {
+        "banner": "",
+        "host": "10.129.244.95",
+        "port": 445,
+        "service": "microsoft-ds"
+      },
+      {
+        "banner": "",
+        "host": "10.129.244.95",
+        "port": 464,
+        "service": "kpasswd5"
+      },
+      {
+        "banner": "Microsoft Windows RPC over HTTP 1.0",
+        "host": "10.129.244.95",
+        "port": 593,
+        "service": "ncacn_http"
+      },
+      {
+        "banner": "Microsoft Windows Active Directory LDAP Domain: pirate.htb, Site: Default-First-Site-Name",
+        "host": "10.129.244.95",
+        "port": 636,
+        "service": "ldap"
+      },
+      {
+        "banner": "Microsoft Windows Active Directory LDAP Domain: pirate.htb, Site: Default-First-Site-Name",
+        "host": "10.129.244.95",
+        "port": 3268,
+        "service": "ldap"
+      },
+      {
+        "banner": "Microsoft Windows Active Directory LDAP Domain: pirate.htb, Site: Default-First-Site-Name",
+        "host": "10.129.244.95",
+        "port": 3269,
+        "service": "ldap"
+      },
+      {
+        "banner": "Microsoft HTTPAPI httpd 2.0 SSDP/UPnP",
+        "host": "10.129.244.95",
+        "port": 5985,
+        "service": "http"
+      }
+    ],
+    "text": "dns enumeration: pirate.htb dns enumeration queried pirate.htb via 10.129.244.95; parsed 7 record(s). axfr did not succeed. tcp service discovery: pirate.htb tcp service discovery observed 14 open service(s): 10.129.244.95:53/domain, 10.129.244.95:80/http, 10.129.244.95:88/kerberos-sec, 10.129.244.95:135/msrpc, 10.129.244.95:139/netbios-ssn, 10.129.244.95:389/ldap, 10.129.244.95:443/https, 10.129.244.95:445/microsoft-ds, 10.129.244.95:464/kpasswd5, 10.129.244.95:593/ncacn_http, 10.129.244.95:636/ldap, 10.129.244.95:3268/ldap, 10.129.244.95:3269/ldap, 10.129.244.95:5985/http. {\"banner\": \"simple dns plus\", \"host\": \"10.129.244.95\", \"port\": 53, \"scanner\": \"nmap\", \"service\": \"domain\", \"source_asset\": \"10.129.244.95\"} {\"banner\": \"microsoft iis httpd 10.0\", \"host\": \"10.129.244.95\", \"port\": 80, \"scanner\": \"nmap\", \"service\": \"http\", \"source_asset\": \"10.129.244.95\"} {\"banner\": \"microsoft windows kerberos server time: 2026-05-05 23:45:15z\", \"host\": \"10.129.244.95\", \"port\": 88, \"scanner\": \"nmap\", \"service\": \"kerberos-sec\", \"source_asset\": \"10.129.244.95\"} {\"banner\": \"microsoft windows rpc\", \"host\": \"10.129.244.95\", \"port\": 135, \"scanner\": \"nmap\", \"service\": \"msrpc\", \"source_asset\": \"10.129.244.95\"} {\"banner\": \"microsoft windows netbios-ssn\", \"host\": \"10.129.244.95\", \"port\": 139, \"scanner\": \"nmap\", \"service\": \"netbios-ssn\", \"source_asset\": \"10.129.244.95\"} {\"banner\": \"microsoft windows active directory ldap domain: pirate.htb, site: default-first-site-name\", \"host\": \"10.129.244.95\", \"port\": 389, \"scanner\": \"nmap\", \"service\": \"ldap\", \"source_asset\": \"10.129.244.95\"} {\"banner\": \"\", \"host\": \"10.129.244.95\", \"port\": 443, \"scanner\": \"nmap\", \"service\": \"https\", \"source_asset\": \"10.129.244.95\"} {\"banner\": \"\", \"host\": \"10.129.244.95\", \"port\": 445, \"scanner\": \"nmap\", \"service\": \"microsoft-ds\", \"source_asset\": \"10.129.244.95\"} {\"banner\": \"\", \"host\": \"10.129.244.95\", \"port\": 464, \"scanner\": \"nmap\", \"service\": \"kpasswd5\", \"source_asset\": \"10.129.244.95\"} {\"banner\": \"microsoft windows rpc over http 1.0\", \"host\": \"10.129.244.95\", \"port\": 593, \"scanner\": \"nmap\", \"service\": \"ncacn_http\", \"source_asset\": \"10.129.244.95\"} {\"banner\": \"microsoft windows active directory ldap domain: pirate.htb, site: default-first-site-name\", \"host\": \"10.129.244.95\", \"port\": 636, \"scanner\": \"nmap\", \"service\": \"ldap\", \"source_asset\": \"10.129.244.95\"} {\"banner\": \"microsoft windows active directory ldap domain: pirate.htb, site: default-first-site-name\", \"host\": \"10.129.244.95\", \"port\": 3268, \"scanner\": \"nmap\", \"service\": \"ldap\", \"source_asset\": \"10.129.244.95\"} {\"banner\": \"microsoft windows active directory ldap domain: pirate.htb, site: default-first-site-name\", \"host\": \"10.129.244.95\", \"port\": 3269, \"scanner\": \"nmap\", \"service\": \"ldap\", \"source_asset\": \"10.129.244.95\"} {\"banner\": \"microsoft httpapi httpd 2.0 ssdp/upnp\", \"host\": \"10.129.244.95\", \"port\": 5985, \"scanner\": \"nmap\", \"service\": \"http\", \"source_asset\": \"10.129.244.95\"}"
+  },
+  "target": {
+    "created_at": "2026-05-05T02:04:46.452719+00:00",
+    "display_name": "HTB Pirate",
+    "handle": "pirate.htb",
+    "id": "target_19956ec84d56",
+    "in_scope": true,
+    "metadata": {
+      "active_ip": "10.129.244.95",
+      "active_ip_generation": 3,
+      "active_ip_source": "target_update",
+      "methodology_state": {
+        "blockers": [
+          "Lab username/password are not configured, so credentialed SMB/WinRM verification cannot run.",
+          "AI proposal rejected: Verify LDAP unauthenticated bind capability (missing primitive mapping)",
+          "AI proposal rejected: Enumerate LDAP rootDSE for server version and capabilities (missing primitive mapping)",
+          "AI proposal rejected: Refine query to include exact IIS version + AD LDAP context (missing primitive mapping)"
+        ],
+        "candidate_actions": [
+          {
+            "confidence": 0.79,
+            "kind": "poc_applicability_validation",
+            "metadata": {},
+            "phase": "analysis",
+            "prerequisite": "current-generation exploit research",
+            "subphase": "poc_gating",
+            "summary": "Classify retained public exploit references against exact service/version evidence, foothold prerequisites, and policy gates for pirate.htb.",
+            "title": "Validate public PoC applicability",
+            "transition_reason": "Retained public PoC research exists, but deterministic applicability gating has not run."
+          }
+        ],
+        "completion": "candidate_actions_ready",
+        "fingerprint": "{\"blockers\": [\"Lab username/password are not configured, so credentialed SMB/WinRM verification cannot run.\", \"AI proposal rejected: Verify LDAP unauthenticated bind capability (missing primitive mapping)\", \"AI proposal rejected: Enumerate LDAP rootDSE for server version and capabilities (missing primitive mapping)\", \"AI proposal rejected: Refine query to include exact IIS version + AD LDAP context (missing primitive mapping)\"], \"candidate_actions\": [{\"confidence\": 0.79, \"kind\": \"poc_applicability_validation\", \"metadata\": {}, \"phase\": \"analysis\", \"prerequisite\": \"current-generation exploit research\", \"subphase\": \"poc_gating\", \"summary\": \"Classify retained public exploit references against exact service/version evidence, foothold prerequisites, and policy gates for pirate.htb.\", \"title\": \"Validate public PoC applicability\", \"transition_reason\": \"Retained public PoC research exists, but deterministic applicability gating has not run.\"}], \"completion\": \"candidate_actions_ready\", \"no_progress_reason\": null, \"phase\": \"analysis\", \"subphase\": \"poc_gating\"}",
+        "metadata": {
+          "active_ip_generation": "3",
+          "ai_proposal_admission": {
+            "accepted": [],
+            "rejected": [
+              {
+                "primitive_hint": "ldap_bind_unauthenticated",
+                "reason": "missing primitive mapping",
+                "task_id": "task_0f1c0ab7caa1",
+                "title": "Verify LDAP unauthenticated bind capability"
+              },
+              {
+                "primitive_hint": "ldap_rootdse_enumeration",
+                "reason": "missing primitive mapping",
+                "task_id": "task_0f1c0ab7caa1",
+                "title": "Enumerate LDAP rootDSE for server version and capabilities"
+              },
+              {
+                "primitive_hint": "web_fingerprinting",
+                "reason": "missing primitive mapping",
+                "task_id": "task_0f1c0ab7caa1",
+                "title": "Refine query to include exact IIS version + AD LDAP context"
+              }
+            ]
+          },
+          "current_generation_evidence_count": 5,
+          "verified_interest_count": 0,
+          "waiting_task_count": 3
+        },
+        "next_unblock_action": "Lab username/password are not configured, so credentialed SMB/WinRM verification cannot run.",
+        "no_progress_reason": null,
+        "phase": "analysis",
+        "planner_version": 2,
+        "retry_budget": {
+          "ad_enumeration": 1,
+          "analyze_evidence": 2,
+          "web_content_discovery": 1
+        },
+        "subphase": "poc_gating",
+        "transition_reason": "Retained public PoC research exists, but deterministic applicability gating has not run.",
+        "updated_at": "2026-05-05T16:52:20.333144+00:00"
+      },
+      "operator_confirmed_ip": "10.129.244.95",
+      "operator_confirmed_ip_at": "2026-05-05T16:44:44.245468+00:00",
+      "source": "gui_start_work",
+      "stale_evidence_before": "2026-05-05T14:36:25.399151+00:00",
+      "target_kind": "htb_lab"
+    },
+    "profile": "hack_the_box",
+    "updated_at": "2026-05-05T16:52:20.333286+00:00"
+  }
+}

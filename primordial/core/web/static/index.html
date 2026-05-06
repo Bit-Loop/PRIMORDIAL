@@ -19,6 +19,26 @@
         <div class="hero-status">
           <span id="health-pill" class="pill">checking</span>
           <p id="runtime-meta" class="muted"></p>
+          <div class="hero-monitors">
+            <article class="load-monitor">
+              <div class="load-monitor-head">
+                <strong>CPU</strong>
+                <span id="cpu-load-text" class="mono muted">sampling</span>
+              </div>
+              <div class="meter">
+                <div id="cpu-load-bar" class="meter-fill cpu-fill"></div>
+              </div>
+            </article>
+            <article class="load-monitor">
+              <div class="load-monitor-head">
+                <strong>GPU</strong>
+                <span id="gpu-load-text" class="mono muted">sampling</span>
+              </div>
+              <div class="meter">
+                <div id="gpu-load-bar" class="meter-fill gpu-fill"></div>
+              </div>
+            </article>
+          </div>
         </div>
       </header>
 
@@ -42,7 +62,7 @@
             </label>
             <label class="field">
               <span>Continuous Interval</span>
-              <input id="continuous-interval" type="number" min="2" value="10" />
+              <input id="continuous-interval" type="number" min="2" value="30" />
             </label>
             <button id="mode-toggle-button" class="ghost-button" type="button">Enable Continuous Mode</button>
             <button id="tick-button" type="button">Run Tick</button>
@@ -52,6 +72,24 @@
             <button id="clear-models-button" class="ghost-button" type="button">Clear Models</button>
             <button id="stop-work-button" class="danger-button" type="button">Stop Work</button>
           </div>
+          <form id="runtime-settings-form" class="runtime-settings-form">
+            <label class="field">
+              <span>GPU AI Timeout</span>
+              <input id="gpu-ai-timeout" type="number" min="15" value="120" />
+            </label>
+            <label class="field">
+              <span>CPU AI Timeout</span>
+              <input id="cpu-ai-timeout" type="number" min="30" value="300" />
+            </label>
+            <label class="field">
+              <span>Stale Run Timeout</span>
+              <input id="stale-run-timeout" type="number" min="60" value="3600" />
+            </label>
+            <button id="runtime-settings-apply" class="ghost-button" type="submit">Apply Runtime Tuning</button>
+          </form>
+          <p class="form-note">
+            CPU timeout covers slower local code/reviewer models. Stale run timeout recovers orphaned running tasks when a worker dies or never heartbeats back.
+          </p>
           <pre id="action-log" class="action-log">Awaiting operator action.</pre>
         </section>
 

@@ -96,6 +96,9 @@ class PrimordialWebApp:
         if method == "GET" and path == "/api/execution-mode":
             with self._lock:
                 return self._json_response(self.runtime.execution_mode_payload())
+        if method == "GET" and path == "/api/runtime-settings":
+            with self._lock:
+                return self._json_response(self.runtime.runtime_tuning_payload())
         if method == "GET" and path == "/api/scope":
             with self._lock:
                 return self._json_response(self.runtime.scope_payload())
@@ -170,6 +173,18 @@ class PrimordialWebApp:
                 with self._lock:
                     outcome = self.runtime.update_execution_mode(mode, interval_seconds=interval_seconds)
                     return self._action_response("execution-mode", {"execution_mode": outcome})
+            except (TypeError, ValueError) as exc:
+                return self._json_response({"error": str(exc)}, status=400)
+        if method == "POST" and path == "/api/runtime-settings":
+            payload = self._parse_json_body(body)
+            try:
+                with self._lock:
+                    outcome = self.runtime.update_runtime_tuning(
+                        gpu_ai_timeout_seconds=self._optional_int(payload, "gpu_ai_timeout_seconds"),
+                        cpu_ai_timeout_seconds=self._optional_int(payload, "cpu_ai_timeout_seconds"),
+                        stale_run_timeout_seconds=self._optional_int(payload, "stale_run_timeout_seconds"),
+                    )
+                    return self._action_response("runtime-settings", {"runtime_tuning": outcome})
             except (TypeError, ValueError) as exc:
                 return self._json_response({"error": str(exc)}, status=400)
         if method == "POST" and path == "/api/models":
@@ -446,6 +461,12 @@ class PrimordialWebApp:
         if value is None:
             return None
         return str(value).strip() or None
+
+    def _optional_int(self, payload: dict[str, Any], key: str) -> int | None:
+        value = payload.get(key)
+        if value is None or value == "":
+            return None
+        return int(value)
 
     def _optional_query_string(self, query: dict[str, list[str]], key: str) -> str | None:
         values = query.get(key, [])

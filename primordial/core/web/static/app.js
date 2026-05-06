@@ -9,6 +9,7 @@ const state = {
   models: null,
   executionMode: null,
   workStatus: null,
+  runtimeTuning: null,
   chat: null,
   selectedTaskId: null,
   refreshTimer: null,
@@ -20,6 +21,10 @@ const state = {
 const elements = {
   healthPill: document.getElementById("health-pill"),
   runtimeMeta: document.getElementById("runtime-meta"),
+  cpuLoadText: document.getElementById("cpu-load-text"),
+  cpuLoadBar: document.getElementById("cpu-load-bar"),
+  gpuLoadText: document.getElementById("gpu-load-text"),
+  gpuLoadBar: document.getElementById("gpu-load-bar"),
   countsGrid: document.getElementById("counts-grid"),
   currentWorkSummary: document.getElementById("current-work-summary"),
   currentWorkList: document.getElementById("current-work-list"),
@@ -92,6 +97,10 @@ const elements = {
   warmModelsButton: document.getElementById("warm-models-button"),
   clearModelsButton: document.getElementById("clear-models-button"),
   stopWorkButton: document.getElementById("stop-work-button"),
+  runtimeSettingsForm: document.getElementById("runtime-settings-form"),
+  gpuAiTimeout: document.getElementById("gpu-ai-timeout"),
+  cpuAiTimeout: document.getElementById("cpu-ai-timeout"),
+  staleRunTimeout: document.getElementById("stale-run-timeout"),
 };
 
 function setText(element, value) {
@@ -102,6 +111,18 @@ function setText(element, value) {
 
 function statusClass(value) {
   return String(value || "unknown").replace(/[^a-z0-9_-]/gi, "_").toLowerCase();
+}
+
+function syncInputIfIdle(element, value) {
+  if (!element) return;
+  if (document.activeElement === element) return;
+  element.value = value == null ? "" : String(value);
+}
+
+function clampPercent(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 0;
+  return Math.max(0, Math.min(100, numeric));
 }
 
 async function fetchJson(path, options = {}) {
@@ -168,8 +189,11 @@ async function loadRuntimeState() {
   state.models = models;
   state.executionMode = executionMode;
   state.workStatus = workStatus;
+  state.runtimeTuning = dashboard.runtime_tuning || state.runtimeTuning;
 
   renderDashboard();
+  renderSystemMetrics();
+  renderRuntimeTuning();
   renderExecutionMode();
   renderWorkStatus();
   renderScope();
@@ -191,10 +215,15 @@ function renderDashboard() {
     state.executionMode = dashboard.execution_mode;
     renderExecutionMode();
   }
+  if (dashboard.runtime_tuning) {
+    state.runtimeTuning = dashboard.runtime_tuning;
+    renderRuntimeTuning();
+  }
   if (dashboard.work_status) {
     state.workStatus = dashboard.work_status;
     renderWorkStatus();
   }
+  renderSystemMetrics();
 
   elements.countsGrid.replaceChildren(
     ...Object.entries(dashboard.counts).map(([key, value]) => {
@@ -250,6 +279,36 @@ function renderWorkStatus() {
   elements.currentWorkList.replaceChildren(...sections);
 }
 
+function renderSystemMetrics() {
+  const metrics = state.dashboard?.system_metrics || {};
+  const cpu = metrics.cpu || {};
+  const gpu = metrics.gpu || {};
+  const cpuPercent = clampPercent(cpu.percent);
+  const gpuPercent = clampPercent(gpu.percent);
+  if (elements.cpuLoadBar) {
+    elements.cpuLoadBar.style.width = `${cpuPercent}%`;
+  }
+  if (elements.gpuLoadBar) {
+    elements.gpuLoadBar.style.width = `${gpuPercent}%`;
+  }
+  const cpuText = cpu.available === false
+    ? "CPU unavailable"
+    : `util ${cpuPercent.toFixed(1)}% | load1 ${Number(cpu.load_1 || 0).toFixed(2)} / ${cpu.cpu_count || "?"} cores`;
+  setText(elements.cpuLoadText, cpuText);
+  const gpuText = gpu.available === false
+    ? (gpu.error || "GPU unavailable")
+    : `util ${gpuPercent.toFixed(1)}% | VRAM ${Number(gpu.memory_used_mb || 0).toFixed(0)}/${Number(gpu.memory_total_mb || 0).toFixed(0)} MB`;
+  setText(elements.gpuLoadText, gpuText);
+}
+
+function renderRuntimeTuning() {
+  const tuning = state.runtimeTuning || state.dashboard?.runtime_tuning;
+  if (!tuning) return;
+  syncInputIfIdle(elements.gpuAiTimeout, tuning.gpu_ai_timeout_seconds ?? 120);
+  syncInputIfIdle(elements.cpuAiTimeout, tuning.cpu_ai_timeout_seconds ?? 300);
+  syncInputIfIdle(elements.staleRunTimeout, tuning.stale_run_timeout_seconds ?? 3600);
+}
+
 function workSection(titleText, items, formatter) {
   const card = document.createElement("article");
   card.className = "mini-card work-status-card";
@@ -294,7 +353,7 @@ function renderExecutionMode() {
   const interval = payload.interval_seconds || 30;
   const scheduleKey = `${mode}:${interval}`;
   elements.executionMode.value = mode;
-  elements.continuousInterval.value = interval;
+  syncInputIfIdle(elements.continuousInterval, interval);
   elements.modeToggleButton.textContent = mode === "continuous" ? "Switch To Tick Mode" : "Enable Continuous Mode";
   elements.modeToggleButton.className = mode === "continuous" ? "danger-button" : "ghost-button";
   elements.tickButton.className = mode === "continuous" ? "muted-stop-button" : "";
@@ -839,6 +898,12 @@ function applyActionState(payload, options = { log: true }) {
   if (payload.work_status) {
     state.workStatus = payload.work_status;
   }
+  if (payload.dashboard?.runtime_tuning) {
+    state.runtimeTuning = payload.dashboard.runtime_tuning;
+  }
+  if (payload.result?.runtime_tuning) {
+    state.runtimeTuning = payload.result.runtime_tuning;
+  }
   if (payload.result?.execution_mode) {
     state.executionMode = payload.result.execution_mode;
   }
@@ -849,6 +914,8 @@ function applyActionState(payload, options = { log: true }) {
     setActionLog(payload.result);
   }
   renderDashboard();
+  renderSystemMetrics();
+  renderRuntimeTuning();
   renderWorkStatus();
   renderScope();
   renderAudit();
@@ -1047,6 +1114,14 @@ async function initialize() {
   elements.clearModelsButton.addEventListener("click", async () => runAction("/api/actions/clear-models"));
   elements.stopWorkButton.addEventListener("click", async () => {
     await runAction("/api/actions/stop-work");
+  });
+  elements.runtimeSettingsForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await runAction("/api/runtime-settings", {
+      gpu_ai_timeout_seconds: Number(elements.gpuAiTimeout.value || 120),
+      cpu_ai_timeout_seconds: Number(elements.cpuAiTimeout.value || 300),
+      stale_run_timeout_seconds: Number(elements.staleRunTimeout.value || 3600),
+    });
   });
   elements.modelsForm.addEventListener("submit", async (event) => {
     event.preventDefault();
