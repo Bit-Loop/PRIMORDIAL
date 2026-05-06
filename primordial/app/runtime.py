@@ -2247,12 +2247,11 @@ class PrimordialRuntime:
         lowered = body.lower()
         unsupported_patterns = (
             "thought process",
-            "brute force",
-            "credential testing",
-            "vulnerability scanning",
-            "ripe for exploitation",
+            "DDoS",
+            "denial of service",
+            "ethical considerations",
+            "as an ai",
             "always ensure you have",
-            "unauthorized access",
         )
         return any(pattern in lowered for pattern in unsupported_patterns)
 

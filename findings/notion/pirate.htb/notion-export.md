@@ -2,7 +2,7 @@
 
 Target: `pirate.htb`
 Profile: `hack_the_box`
-Generated: 2026-05-06T05:25:44.877874+00:00
+Generated: 2026-05-06T07:03:05.183607+00:00
 
 ## AI Agent Guidance
 
@@ -51,6 +51,9 @@ Generated: 2026-05-06T05:25:44.877874+00:00
 
 ## Recent Notes
 
+- Behavior verification note: Verifier reviewed 0 trace records. No unsupported durable claim promotion occurred in this branch.
+- Compaction audit: Memory compaction merged recent task context into episodic and semantic layers while preserving evidence lineage.
+- Behavior verification note: Verifier reviewed 0 trace records. No unsupported durable claim promotion occurred in this branch.
 - AI PoC applicability review: ## Summary
 Public PoC (EDB 32586) for AD LDAP username enumeration is technically applicable in principle due to AD/LDAP services being present, but lacks version/configuration validation, requires authenticated or pre-authentication context, and has no evidence of exploitable misconfiguration or vulnerable banner. Current recon shows no user enumeration success and no exposed vulnerable endpoints.
 
@@ -182,14 +185,6 @@ Scan errors retained: 0
 - 10.129.244.95:135 -> msrpc banner='Microsoft Windows RPC'
 - 10.129.244.95:139 -> netbios-ssn banner='Microsoft Windows netbios-ssn'
 - 10.129.244.95:389 -> ldap banner='Microsoft Windows Active Directory LDA
-- Recon summary: Reachable endpoints: 2
-Observed auth-adjacent surfaces: /admin, /login
-Observed paths: /.well-known/security.txt, /admin, /api/, /fwlink/, /login, /robots.txt, /sitemap.xml
-Observed query parameters: clcid, linkid
-- http://10.129.244.95/ -> 200 text/html
-- http://10.129.244.95/ -> 200 text/html
-- Behavior verification note: Verifier reviewed 0 trace records. No unsupported durable claim promotion occurred in this branch.
-- Compaction audit: Memory compaction merged recent task context into episodic and semantic layers while preserving evidence lineage.
 
 ## Evidence References
 

@@ -1,6 +1,6 @@
 # HTB Pirate Evidence Index
 
-Generated: 2026-05-06T05:25:44.877747+00:00
+Generated: 2026-05-06T07:03:05.183552+00:00
 
 - `evidence_8a080eb13bb0` PoC applicability validation: pirate.htb: Classified 1 retained public PoC candidate(s): 1 ready for gated review, 0 blocked or research-only. No PoC was executed and no exploit code was generated.
 - `evidence_5179c46c4cee` Kerberos user discovery: pirate.htb: Kerberos user discovery against 10.129.48.145 found 0 user principal(s) and 0 SPN candidate(s).
