@@ -1894,6 +1894,13 @@ class PrimordialLauncher:
         finally:
             self._agent_monitor_refresh_running = False
 
+    @staticmethod
+    def _as_utc(dt: datetime) -> datetime:
+        """Ensure a datetime is UTC-aware; treat naive as UTC."""
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt
+
     def _render_agent_monitor(self, data: dict) -> None:
         processor_map = data["processor_map"]
         runs = data["runs"]
@@ -1903,8 +1910,11 @@ class PrimordialLauncher:
         events = data["events"]
         clear_after = data["clear_after"]
 
-        def after_clear(dt) -> bool:
-            return clear_after is None or dt > clear_after
+        # Normalise clear_after to aware so comparisons are safe regardless of record timezone
+        clear_after_utc = self._as_utc(clear_after) if clear_after is not None else None
+
+        def after_clear(dt: datetime) -> bool:
+            return clear_after_utc is None or self._as_utc(dt) > clear_after_utc
 
         widget = self.agent_output
         original_state = str(widget.cget("state"))
@@ -1924,7 +1934,8 @@ class PrimordialLauncher:
         insert("━━ TASK STATUS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", "mon_section_head")
         status_buckets: dict[str, list] = {}
         for task in tasks:
-            status_buckets.setdefault(task.status.value, []).append(task)
+            key = task.status.value if task.status else "unknown"
+            status_buckets.setdefault(key, []).append(task)
         ordered_statuses = ["running", "needs_approval", "pending", "waiting", "succeeded", "failed", "cancelled"]
         for status in ordered_statuses:
             bucket = status_buckets.get(status, [])
@@ -1933,7 +1944,8 @@ class PrimordialLauncher:
             tag = f"mon_{status}" if f"mon_{status}" in widget.tag_names() else "mon_dim"
             insert(f"  [{status.upper()}] {len(bucket)}", tag)
             for task in bucket[:5]:
-                insert(f"  {task.kind.value} | {task.title[:60]}\n", "mon_dim")
+                kind_label = task.kind.value if task.kind else "?"
+                insert(f"  {kind_label} | {task.title[:60]}\n", "mon_dim")
             if len(bucket) > 5:
                 insert(f"  … and {len(bucket) - 5} more\n", "mon_dim")
         insert("\n")
@@ -1945,14 +1957,19 @@ class PrimordialLauncher:
             for run in visible_runs[:40]:
                 task = task_map.get(str(run.task_id))
                 title = task.title if task else "unknown task"
-                kind = task.kind.value if task else "?"
+                kind = task.kind.value if task and task.kind else "?"
                 processor = self._processor_for_task(task, processor_map)
-                status_tag = f"mon_{run.status.value}" if f"mon_{run.status.value}" in widget.tag_names() else "mon_dim"
-                age = (now - run.started_at).total_seconds()
-                age_text = f"{age:.0f}s ago" if age < 3600 else f"{age/3600:.1f}h ago"
+                status_val = run.status.value if run.status else "unknown"
+                role_val = run.role.value if run.role else "unknown-role"
+                status_tag = f"mon_{status_val}" if f"mon_{status_val}" in widget.tag_names() else "mon_dim"
+                try:
+                    age = (now - self._as_utc(run.started_at)).total_seconds()
+                    age_text = f"{age:.0f}s ago" if age < 3600 else f"{age / 3600:.1f}h ago"
+                except Exception:  # noqa: BLE001
+                    age_text = "?"
                 insert(f"  {run.started_at.strftime('%H:%M:%S')} [{age_text}]  ", "mon_dim")
-                insert(f"{run.status.value:<12}", status_tag)
-                insert(f"  {run.role.value}  {run.model_name}  ({processor})\n", "mon_dim")
+                insert(f"{status_val:<12}", status_tag)
+                insert(f"  {role_val}  {run.model_name}  ({processor})\n", "mon_dim")
                 insert(f"    {kind} → {title[:70]}\n", "mon_dim")
                 if run.error:
                     insert(f"    ERR: {run.error[:120]}\n", "mon_err")
@@ -1969,8 +1986,9 @@ class PrimordialLauncher:
                 title = task.title if task else "no task"
                 model = trace.metadata.get("model") or (task.provider_model if task else "—")
                 route = task.provider_route.value if task and task.provider_route else "—"
+                role_val = trace.role.value if trace.role else "unknown-role"
                 insert(f"  {trace.created_at.strftime('%H:%M:%S')}  ", "mon_dim")
-                insert(f"{trace.role.value}", "mon_pending")
+                insert(f"{role_val}", "mon_pending")
                 insert(f"  {trace.status}  {model}  {route}\n", "mon_dim")
                 insert(f"    {title[:60]} → {trace.summary[:80]}\n", "mon_dim")
         else:
@@ -1984,7 +2002,8 @@ class PrimordialLauncher:
             for event in visible_events:
                 is_err = "fail" in event.summary.lower() or "error" in event.summary.lower()
                 tag = "mon_err" if is_err else "mon_dim"
-                insert(f"  {event.created_at.strftime('%H:%M:%S')}  {event.type.value}  {event.summary[:90]}\n", tag)
+                type_val = event.type.value if event.type else "event"
+                insert(f"  {event.created_at.strftime('%H:%M:%S')}  {type_val}  {event.summary[:90]}\n", tag)
         else:
             insert("  No events in current window.\n", "mon_dim")
 
@@ -2115,9 +2134,10 @@ class PrimordialLauncher:
             clear_after = self._ai_thinking_clear_after
             processor_map = self._processor_map_snapshot()
             task_map = {t.id: t for t in store.list_tasks(limit=500)}
+            clear_after_utc = self._as_utc(clear_after) if clear_after is not None else None
 
             def after_clear(dt: datetime) -> bool:
-                return clear_after is None or dt > clear_after
+                return clear_after_utc is None or self._as_utc(dt) > clear_after_utc
 
             model_runs = [
                 item for item in store.list_task_runs(limit=160)
@@ -2478,49 +2498,57 @@ class PrimordialLauncher:
         try:
             while True:
                 status, message = self._queue.get_nowait()
-                if status == "error":
-                    self.work_status_var.set("Work status: failed")
-                    messagebox.showerror("Primordial action failed", message)
-                elif status == "refresh_tabs":
-                    self._refresh_all_tabs_nonblocking()
-                elif status == "refresh_scope_profiles":
-                    self._refresh_scope_profiles()
-                elif status == "reschedule_execution_mode_poll":
-                    self._schedule_execution_mode_poll()
-                elif status == "system_status":
-                    payload = message if isinstance(message, dict) else {}
-                    metrics = payload.get("metrics")
-                    tuning = payload.get("tuning")
-                    if isinstance(metrics, dict):
-                        self._apply_system_metrics(metrics)
-                    if isinstance(tuning, dict):
-                        self._apply_runtime_tuning_payload(tuning)
-                elif status == "system_status_done":
-                    self._system_status_refresh_running = False
-                elif status == "agent_monitor_data":
-                    if isinstance(message, dict):
-                        self._render_agent_monitor(message)
-                elif status == "ai_thinking_data":
-                    if isinstance(message, dict):
-                        self._render_ai_thinking(message)
-                elif status == "chat_data":
-                    if isinstance(message, list):
-                        self._render_chat_data(message)
-                elif status == "set_guidance":
-                    self.guidance_input.delete("1.0", tk.END)
-                    self.guidance_input.insert(tk.END, message)
-                elif status == "hydrate_target":
-                    self._hydrate_target_fields_from_store()
-                elif status == "operation_done":
-                    self._active_operations.pop(message, None)
-                    self._refresh_current_work()
-                else:
-                    self._write_output(message + "\n")
-                    self._refresh_current_work()
+                try:
+                    self._dispatch_queue_message(status, message)
+                except Exception as exc:  # noqa: BLE001
+                    # A render error must never kill the poll loop — that would
+                    # starve system_status_done and freeze the metrics display.
+                    self._write_output(f"[queue handler error] {status}: {exc}\n")
         except Empty:
             pass
         if not self._closed:
             self.root.after(250, self._poll_queue)
+
+    def _dispatch_queue_message(self, status: str, message: object) -> None:
+        if status == "error":
+            self.work_status_var.set("Work status: failed")
+            messagebox.showerror("Primordial action failed", message)
+        elif status == "refresh_tabs":
+            self._refresh_all_tabs_nonblocking()
+        elif status == "refresh_scope_profiles":
+            self._refresh_scope_profiles()
+        elif status == "reschedule_execution_mode_poll":
+            self._schedule_execution_mode_poll()
+        elif status == "system_status":
+            payload = message if isinstance(message, dict) else {}
+            metrics = payload.get("metrics")
+            tuning = payload.get("tuning")
+            if isinstance(metrics, dict):
+                self._apply_system_metrics(metrics)
+            if isinstance(tuning, dict):
+                self._apply_runtime_tuning_payload(tuning)
+        elif status == "system_status_done":
+            self._system_status_refresh_running = False
+        elif status == "agent_monitor_data":
+            if isinstance(message, dict):
+                self._render_agent_monitor(message)
+        elif status == "ai_thinking_data":
+            if isinstance(message, dict):
+                self._render_ai_thinking(message)
+        elif status == "chat_data":
+            if isinstance(message, list):
+                self._render_chat_data(message)
+        elif status == "set_guidance":
+            self.guidance_input.delete("1.0", tk.END)
+            self.guidance_input.insert(tk.END, message)
+        elif status == "hydrate_target":
+            self._hydrate_target_fields_from_store()
+        elif status == "operation_done":
+            self._active_operations.pop(message, None)
+            self._refresh_current_work()
+        else:
+            self._write_output(str(message) + "\n")
+            self._refresh_current_work()
 
     def _poll_current_work(self) -> None:
         try:

@@ -1,27 +1,10 @@
 # Primordial
 
-Primordial is a local-first control plane for AI-assisted authorized security workflows. It is being built from the PRD and current-context documents in this directory, with autonomy treated as a staged capability behind deterministic policy, durable workflow state, evidence lineage, and operator controls.
+Primordial is a local-first control plane for AI-assisted authorized security testing (HackerOne, Hack The Box, pentesting engagements). It is a deterministic workflow system that uses LLMs at bounded decision points — not an always-on chat agent or a monolithic prompt session.
 
-## Current Implementation
+Autonomy is staged behind deterministic policy, durable workflow state, evidence lineage, and explicit operator controls.
 
-This first cut is a real application scaffold, not a mockup:
-
-- Python package and CLI entrypoint
-- durable local bootstrap store using `sqlite3` for development
-- control-plane domain models for targets, tasks, evidence, notes, interests, findings, memory, policy, and traces
-- methodology-aware task planner
-- autonomy-aware policy engine
-- provider router for hot-path vs cold-path model selection
-- primitive manifest catalog
-- memory compaction and promotion service
-- task run lifecycle with checkpoints, traces, heartbeats, and replayable local state
-- structured handoffs, notifications, sync jobs, artifacts, and session state
-- Textual TUI entrypoint with a plain terminal fallback
-- local adapter implementations for Notion sync, Discord delivery, and premium-review routing semantics
-
-The long-term canonical live store remains `PostgreSQL + pgvector`, but the bootstrap implementation uses SQLite so the system can run immediately without external services. That keeps the architecture direction from the docs while still giving you a working baseline to extend.
-
-## Core Principles Embedded In Code
+## Core Principles
 
 - No risky action without policy evaluation
 - No durable memory without evidence and metadata
@@ -30,116 +13,82 @@ The long-term canonical live store remains `PostgreSQL + pgvector`, but the boot
 - Autonomy must be event-driven, inspectable, and reversible
 - PoC execution requires scope binding, non-DoS classification, bounded runtime limits, and approval
 
-## Autonomy Roadmap
+## What Is Implemented
 
-Autonomy is treated as core, but not as unrestricted execution:
-
-1. `assisted`
-   - Orchestrator plans work and keeps context compact.
-   - Risky phases remain approval-gated.
-2. `supervised`
-   - Recon and low-risk analysis can run continuously inside deterministic policy bounds.
-   - Exploitation, chaining, and premium escalation stay gated.
-3. `supervised_auto`
-   - More phases run without constant operator input.
-   - Exploitative work still requires explicit `PRIMORDIAL_ALLOW_EXPLOITATIVE_ACTIONS=1` plus a valid agent safety review or human approval.
-4. `high-autonomy`
-   - Reserved for later after evidence quality, primitive safety, and recovery loops are proven.
-
-The present codebase is designed so autonomy grows from the workflow engine and policy layer, not from a bigger prompt.
-
-## AI Runtime Policy
-
-Primordial does not run an always-on chat agent. AI calls are reserved for bounded moments: operator questions, task workers, verifier reviews, compaction/reconciliation, and explicit model warmup. This avoids wasting context and keeps durable storage as the source of truth.
-
-Operator AI chat is stored in the runtime database and mirrored as per-message JSON files under `chat_log/YYYY-MM-DD/` for later analysis.
-
-The intended model split is:
-
-- `local_fast` on GPU for quick orchestration and broad analysis.
-- `local_code_cold` on CPU for mission-critical code/exploit research, exploit synthesis, and high-consequence adaptation work.
-- `local_deep` for harder reasoning and operator questions that cannot be answered deterministically from state.
-- `local_compact` on CPU for notes, compaction, verifier checks, and slower background review.
-
-Low CPU usage is expected when there are no compaction, verifier, or cold-review jobs. A high CPU burn rate should come from an explicit scheduled review or model invocation, not an idle loop.
-
-## PoC Safety Gate
-
-Exploit research is allowed to collect public examples, but it does not execute them. If non-DoS PoC candidates are found, Primordial writes evidence, creates an interest, and queues a high-priority Discord notification.
-
-Automatic PoC execution is not a default behavior. For an exploitation task to pass without human approval, all of the following must be true:
-
-- `PRIMORDIAL_AUTONOMY_MODE` is `supervised_auto` or `high_autonomy`.
-- `PRIMORDIAL_ALLOW_EXPLOITATIVE_ACTIONS=1` is set.
-- The task includes an `agent_safety_approval` from `behavior_verifier`, `policy_verifier`, or `exploit_safety_reviewer`.
-- Scope, evidence linkage, non-DoS classification, request limits, and timeout limits are explicit in that approval.
-- HackerOne targets additionally require target metadata allowing agent PoC execution because program rules differ.
+- Python package and CLI entrypoint (`cli.py`)
+- Durable local store using SQLite (`runtime/primordial.db`)
+- Control-plane domain models: targets, tasks, evidence, notes, interests, findings, memory, policy, and traces
+- Methodology-aware task planner with phase/exit conditions and dead-end detection
+- Autonomy-aware policy engine with structured approval metadata
+- Provider router for four AI model routes (fast, deep, code, compact)
+- Primitive manifest catalog with capability tags, risk tiers, side effects, and evidence adapters
+- Memory compaction and promotion service
+- Task run lifecycle with checkpoints, traces, heartbeats, and replayable local state
+- Behavior verifier for loop detection and evidence quality checks
+- Structured handoffs, notifications, sync jobs, artifacts, and session state
+- Operator Q&A via `ask` with per-session chat log
+- Textual TUI and plain terminal fallback
+- HTML5 web console for remote control and audit
+- Local Tk GUI launcher
+- Notion sync, Discord delivery, and Caido adapters
 
 ## Quick Start
 
-From this directory:
-
 ```bash
-python3 -m primordial.cli show
-python3 -m primordial.cli scope
-python3 -m primordial.cli tick
-python3 -m primordial.cli run-loop --cycles 3
-python3 -m primordial.cli compact
-python3 -m primordial.cli process-queues
-python3 -m primordial.cli add-target pirate.htb --profile hack_the_box --asset pirate.htb --asset 10.129.47.117
-python3 -m primordial.cli approve <task_id>
-python3 -m primordial.cli tui
-python3 -m primordial.cli web --port 1337
+python3 cli.py show
+python3 cli.py scope
+python3 cli.py tick
+python3 cli.py run-loop --cycles 3
+python3 cli.py compact
+python3 cli.py process-queues
+python3 cli.py add-target pirate.htb --profile hack_the_box --asset pirate.htb --asset 10.129.47.117
+python3 cli.py approve <task_id>
+python3 cli.py ask "status and next step" --target pirate.htb
+python3 cli.py tui
+python3 cli.py web --port 1337
+python3 cli.py models warm --keep-alive 8h
 ```
 
-If `textual` is not installed, the `tui` command falls back to a plain terminal dashboard instead of failing.
+If `textual` is not installed, the `tui` command falls back to a plain terminal dashboard.
 
-## Layout
+## Autonomy Modes
 
-- `primordial/core/`: reusable control-plane code
-  - `domain/`: enums, dataclasses, IDs, serialization helpers
-  - `events/`: typed internal runtime event bus
-  - `modules/`: lazy module registration and lifecycle
-  - `orchestration/`: workflow engine, policy, verifier
-  - `providers/`: route selection and hot-path scheduling
-  - `recovery/`: crash journal and recovery helpers
-  - `primitives/`: manifest catalog and capability lookup
-  - `storage/`: schema and durable runtime store
-  - `web/`: HTML5 remote controller and audit console
-- `primordial/modes/security/`: the current authorized security-testing mode
-  - `methodology.py`: phase/task blueprints
-  - `execution.py`: security-task execution and evidence write-back
-  - `memory.py`: security-mode memory compaction/promotion rules
-- `primordial/adapters/`: Notion and Discord service adapters
-- `primordial/app/`: runtime assembly and dependency wiring
-- `primordial/ui/`: Textual UI shell and terminal fallback
-- `primordial/config.py` and `primordial/runtime.py`: thin compatibility facades
-- `manifests/`: sample primitive manifests
-- `scopes/`: sample scope input
+Autonomy is a staged capability, not a default:
 
-The intent is:
+1. `assisted` — Orchestrator plans work and keeps context compact. Risky phases remain approval-gated.
+2. `supervised` — Recon and low-risk analysis run continuously inside deterministic policy bounds. Exploitation, chaining, and premium escalation stay gated.
+3. `supervised_auto` — More phases run without constant operator input. Exploitative work still requires `PRIMORDIAL_ALLOW_EXPLOITATIVE_ACTIONS=1` plus a valid agent safety review or human approval.
+4. `high_autonomy` — Reserved for after evidence quality, primitive safety, and recovery loops are proven stable.
 
-- `core` is the reusable control plane
-- `modes/security` preserves the current product behavior
-- `adapters` isolate outside systems
-- `app` wires the whole runtime together
-- `ui` stays operator-facing
+Autonomy grows from the workflow engine and policy layer, not from a bigger prompt.
 
-Contributor docs:
+## AI Model Routes
 
-- `docs/HOW_PRIMORDIAL_WORKS.md`
-- `docs/FLOOR_PLAN.md`
-- `docs/HUMAN_CHANGE_GUIDE.md`
+Four configured routes; route work based on role, not habit:
+
+| Route | Purpose | Typical model |
+|---|---|---|
+| `local_fast` | Hot-path orchestration, broad analysis | `gemma3:12b` (GPU) |
+| `local_deep` | Harder reasoning, operator Q&A | `deepseek-r1:8b` (GPU) |
+| `local_code` | PoC research, exploit adaptation | `qwen2.5-coder:7b` (GPU, cold) |
+| `local_compact` | Memory compaction, verifier checks | `phi4-mini` (CPU) |
+
+`remote_premium` is policy-disabled by default.
+
+AI calls are reserved for bounded moments: operator questions, task workers, verifier reviews, compaction/reconciliation, and explicit model warmup. Durable storage is always the source of truth.
+
+## PoC Safety Gate
+
+For an exploitation task to run without human approval, **all** of the following must be true:
+
+- `PRIMORDIAL_AUTONOMY_MODE` is `supervised_auto` or `high_autonomy`
+- `PRIMORDIAL_ALLOW_EXPLOITATIVE_ACTIONS=1` is set
+- Task carries an `agent_safety_approval` from the behavior verifier
+- Scope, evidence linkage, non-DoS classification, request limits, and timeout limits are explicit in that approval
+
+Exploit research collects public examples only. PoC execution is never a default behavior.
 
 ## Local Model Setup
-
-Primordial now expects local Ollama models to live in:
-
-```bash
-/home/bitloop/Desktop/PRIMORDIAL/AI_MODELS/ollama
-```
-
-Manual setup:
 
 ```bash
 mkdir -p /home/bitloop/Desktop/PRIMORDIAL/AI_MODELS/ollama
@@ -157,39 +106,72 @@ ollama pull deepseek-r1:8b
 Or use the bundled setup script:
 
 ```bash
-bash /home/bitloop/Desktop/PRIMORDIAL/scripts/setup_ollama_models.sh
+bash scripts/setup_ollama_models.sh
 ```
 
-After the server is running, warm Primordial's configured routes:
+Then warm Primordial's configured routes:
 
 ```bash
-python3 /home/bitloop/Desktop/PRIMORDIAL/cli.py models warm --keep-alive 8h
+python3 cli.py models warm --keep-alive 8h
 ollama ps
 ```
 
-Ollama may still evict models if the requested set does not fit available VRAM/RAM. Primordial treats warmup as an operational check and records failures instead of crashing the runtime.
+## Running Tests
 
-## V1 Direction
+```bash
+python3 -m unittest discover -s tests -t . -v     # full suite
+python3 -m unittest tests.test_workflow -v
+python3 -m unittest tests.test_policy -v
+python3 -m unittest tests.test_runtime_integration -v
+python3 -m unittest tests.test_web_console -v
+```
 
-The near-term target is a narrow but real operator platform:
+Tests create temporary runtime directories and do not touch the live `runtime/primordial.db`.
 
-- scope import
-- task planning
-- policy gating
-- durable notes and evidence
-- context compaction
-- per-target workflow visibility
-- selective escalation routing
+## Layout
 
-That is the base needed before deeper autonomy, chaining, or broad tool onboarding can become trustworthy.
+```
+primordial/core/
+  domain/          enums, dataclasses, IDs, serialization
+  events/          typed internal runtime event bus
+  modules/         lazy module registration and lifecycle
+  orchestration/   workflow engine, policy, verifier
+  providers/       route selection and hot-path scheduling
+  recovery/        crash journal and recovery helpers
+  primitives/      manifest catalog and capability lookup
+  storage/         schema and durable runtime store (SQLite)
+  validation/      input and output validation helpers
+  web/             HTML5 remote controller and audit console
+  skills.py        skill surface registry
+  credentials.py   secret storage and redaction
+  findings_context.py  durable findings/guidance workspace
 
-## Current Integration Boundary
+primordial/modes/security/
+  methodology.py   phase/task blueprints
+  execution.py     security-task execution and evidence write-back
+  memory.py        memory compaction/promotion rules
 
-The repository now implements the workflow, state, routing, and write-back paths for:
+primordial/adapters/   Notion, Discord, Caido adapters
+primordial/app/        runtime assembly and dependency wiring
+primordial/gui/        local Tk GUI launcher
+primordial/ui/         Textual TUI shell and terminal fallback
 
-- local-fast, local-deep, local-compact, and remote-premium routes
-- Notion sync jobs and target-subtree page generation
-- Discord notification queuing, live webhook delivery, and delivery records
-- premium review packaging and teach-back write-back
+manifests/         primitive manifests (capability tags, risk tiers, schemas)
+scopes/            sample scope input files
+tests/             test suite (CI-ready)
+docs/              contributor documentation
+```
 
-Notion and Discord adapters now use locally stored credentials when configured. Remote premium/Anthropic execution remains policy-disabled by default and is not used until explicitly enabled later.
+The intent is `core` stays reusable, `modes/security` preserves product behavior, `adapters` isolate outside systems, `app` wires the runtime, and UI layers stay thin.
+
+## Contributor Docs
+
+- [docs/HOW_PRIMORDIAL_WORKS.md](docs/HOW_PRIMORDIAL_WORKS.md)
+- [docs/FLOOR_PLAN.md](docs/FLOOR_PLAN.md)
+- [docs/HUMAN_CHANGE_GUIDE.md](docs/HUMAN_CHANGE_GUIDE.md)
+
+## Hard Boundaries
+
+- **DDoS is always forbidden.** The system will never propose, automate, or assist with DDoS in any form.
+- Only targets explicitly authorized within scope are supported.
+- If scope is ambiguous, the system stops and requires operator clarification before proceeding.
