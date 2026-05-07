@@ -148,6 +148,33 @@ class WebConsoleTests(unittest.TestCase):
         self.assertEqual(health_response.status, 200)
         self.assertEqual(health["status"], "ok")
 
+    def test_control_plane_endpoint_returns_live_new_gui_shape(self) -> None:
+        response = self.app.dispatch("GET", "/api/control-plane")
+        payload = json.loads(response.body)
+
+        self.assertEqual(response.status, 200)
+        for key in (
+            "runtime",
+            "models",
+            "tasks",
+            "approvals",
+            "events",
+            "scope",
+            "graph",
+            "traces",
+            "geo",
+            "plan",
+            "notes",
+            "interests",
+            "caido",
+        ):
+            self.assertIn(key, payload)
+        self.assertEqual(payload["mode"], "real")
+        self.assertEqual(payload["scope"][0]["handle"], "pirate.htb")
+        self.assertNotIn("acme.bug", {item["handle"] for item in payload["scope"]})
+        self.assertNotIn("driftnet.io", {item["handle"] for item in payload["scope"]})
+        self.assertNotIn("tomcat:s3cret_2024", response.body.decode("utf-8"))
+
     def test_target_registration_endpoint_updates_scope(self) -> None:
         response = self.app.dispatch(
             "POST",

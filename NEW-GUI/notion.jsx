@@ -83,6 +83,7 @@ function PageBody({ body }) {
 
 function NotesMode() {
   const D = window.PD_DATA.notes;
+  const API = window.PD_API || {};
   const [activeTgt, setActiveTgt] = useStateN('pirate.htb');
   const [sel, setSel] = useStateN('pirate_notes');
   const [editing, setEditing] = useStateN(false);
@@ -95,6 +96,7 @@ function NotesMode() {
   const saveEdit = () => { setEditing(false); };
 
   const sync = D.syncStatus;
+  const syncFindings = () => API.action?.('sync-findings-context');
 
   return (
     <>
@@ -155,7 +157,7 @@ function NotesMode() {
             </div>
             <div className="dim" style={{ fontSize: 10 }}>last sync {sync.lastSync}</div>
             <div style={{ display: 'flex', gap: 4, marginTop: 6 }}>
-              <button className="btn primary sm" style={{ flex: 1 }}>↑ PUSH</button>
+              <button className="btn primary sm" style={{ flex: 1 }} onClick={syncFindings}>↑ PUSH</button>
               <button className="btn ghost sm" style={{ flex: 1 }}>↓ PULL</button>
             </div>
           </div>
@@ -180,7 +182,7 @@ function NotesMode() {
                   ) : (
                     <>
                       <button className="btn ghost sm" onClick={startEdit}>EDIT</button>
-                      <button className="btn ghost sm">↑ PUSH TO NOTION</button>
+                      <button className="btn ghost sm" onClick={syncFindings}>↑ PUSH TO NOTION</button>
                       <button className="btn ghost sm">↗ OPEN IN NOTION</button>
                     </>
                   )}
@@ -217,7 +219,7 @@ function NotesMode() {
             <span className="upper" style={{ fontSize: 10, fontWeight: 600, color: 'var(--txt-strong)' }}>ACTIONS</span>
           </div>
           <div style={{ padding: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <button className="btn sm" style={{ justifyContent: 'flex-start' }}>↑ PUSH ALL PAGES</button>
+            <button className="btn sm" style={{ justifyContent: 'flex-start' }} onClick={syncFindings}>↑ PUSH ALL PAGES</button>
             <button className="btn ghost sm" style={{ justifyContent: 'flex-start' }}>↓ PULL FROM NOTION</button>
             <button className="btn ghost sm" style={{ justifyContent: 'flex-start' }}>+ NEW PAGE</button>
             <button className="btn ghost sm" style={{ justifyContent: 'flex-start' }}>⊞ BULK SYNC</button>

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import html
 import json
 from pathlib import Path
 from threading import RLock
@@ -41,12 +42,15 @@ class PrimordialWebApp:
 
         if method == "GET" and path == "/":
             return self._static_response("index.html", "text/html; charset=utf-8")
-        if method == "GET" and path == "/app.js":
-            return self._static_response("app.js", "text/javascript; charset=utf-8")
-        if method == "GET" and path == "/styles.css":
-            return self._static_response("styles.css", "text/css; charset=utf-8")
+        if method == "GET" and not path.startswith("/api/"):
+            static = self._static_asset_response(path)
+            if static is not None:
+                return static
         if method == "GET" and path == "/api/health":
             return self._json_response(self.runtime.health_payload())
+        if method == "GET" and path == "/api/control-plane":
+            with self._lock:
+                return self._json_response(self._control_plane_payload())
         if method == "GET" and path == "/api/operator-intent":
             with self._lock:
                 return self._json_response(self.runtime.operator_intent_payload())
@@ -425,19 +429,56 @@ class PrimordialWebApp:
                 "execution_mode": self.runtime.execution_mode_payload(),
                 "operator_intent": self.runtime.operator_intent_payload(),
                 "work_status": self.work_status_payload(),
+                "control_plane": self._control_plane_payload(),
             }
         )
+
+    def _static_asset_response(self, raw_path: str) -> WebResponse | None:
+        asset = unquote(raw_path.lstrip("/"))
+        if not asset or asset.endswith("/"):
+            return self._static_response("index.html", "text/html; charset=utf-8")
+        path = (self._static_dir / asset).resolve()
+        try:
+            path.relative_to(self._static_dir.resolve())
+        except ValueError:
+            return self._json_response({"error": "not found", "path": raw_path}, status=404)
+        if not path.is_file():
+            return self._static_response("index.html", "text/html; charset=utf-8")
+        return self._file_response(path, self._content_type(path))
 
     def _static_response(self, filename: str, content_type: str) -> WebResponse:
         path = self._static_dir / filename
         if not path.exists():
             return self._json_response({"error": "asset missing", "asset": filename}, status=404)
+        return self._file_response(path, content_type)
+
+    def _file_response(self, path: Path, content_type: str) -> WebResponse:
         return WebResponse(
             status=200,
             body=path.read_bytes(),
             content_type=content_type,
             headers={"Cache-Control": "no-store"},
         )
+
+    def _content_type(self, path: Path) -> str:
+        suffix = path.suffix.lower()
+        if suffix == ".html":
+            return "text/html; charset=utf-8"
+        if suffix == ".js":
+            return "text/javascript; charset=utf-8"
+        if suffix == ".css":
+            return "text/css; charset=utf-8"
+        if suffix == ".json":
+            return "application/json; charset=utf-8"
+        if suffix == ".svg":
+            return "image/svg+xml"
+        if suffix == ".png":
+            return "image/png"
+        if suffix in {".jpg", ".jpeg"}:
+            return "image/jpeg"
+        if suffix == ".woff2":
+            return "font/woff2"
+        return "application/octet-stream"
 
     def _json_response(self, payload: dict[str, Any], status: int = 200) -> WebResponse:
         return WebResponse(
@@ -490,3 +531,792 @@ class PrimordialWebApp:
         if not values:
             return None
         return values[0].strip() or None
+
+    def _control_plane_payload(self) -> dict[str, Any]:
+        dashboard = self.runtime.dashboard_payload()
+        work_status = self.work_status_payload()
+        scope = self.runtime.scope_payload()
+        audit = self.runtime.audit_payload(limit=50)
+        records = self.runtime.records_payload(limit=100)
+        credentials = self.runtime.credentials_payload()
+        caido_status = self.runtime.caido_status_payload(check_health=False)
+        models = self.runtime.models_payload()
+        intent = self.runtime.operator_intent_payload()
+        execution_mode = self.runtime.execution_mode_payload()
+        runtime_tuning = self.runtime.runtime_tuning_payload()
+        findings_context = self.runtime.findings_context_payload(include_guidance=False)
+        skills = self.runtime.skills_payload(include_body=False)
+        metrics = dashboard.get("system_metrics", {})
+        counts = dashboard.get("counts", {}) if isinstance(dashboard.get("counts"), dict) else {}
+        targets = [item for item in scope.get("targets", []) if self._target_handle(item)]
+        task_items = self._tasks_view(dashboard, work_status, targets)
+        approval_items = self._approvals_view(work_status, task_items)
+        event_items = self._events_view(audit)
+        notes = self._notes_view(targets, findings_context, credentials, audit)
+        interests = self._interests_view(records, targets)
+        graph = self._graph_view(targets, records)
+        traces = self._traces_view(audit, task_items)
+        geo = self._geo_view(targets, caido_status, models)
+        model_rows = self._models_view(models)
+        plan = self._plan_view(intent, dashboard, skills, work_status, records)
+
+        return {
+            "mode": "real",
+            "runtime": {
+                "autonomy": str(self.runtime.config.autonomy.mode.value),
+                "intent": str(intent.get("active", {}).get("id") or intent.get("default") or "recon_only"),
+                "health": str(self.runtime.health_payload().get("status", "ok")).upper(),
+                "uptime": "live",
+                "cpu": self._metric_ratio(metrics, "cpu"),
+                "gpu": self._metric_ratio(metrics, "gpu"),
+                "mem": self._memory_ratio(metrics),
+                "diskWrites": int(counts.get("events", 0) or 0),
+                "netIn": "0 B/s",
+                "netOut": "0 B/s",
+                "activeTasks": int(work_status.get("counts", {}).get("active", 0) or 0),
+                "queued": int(work_status.get("counts", {}).get("queued", 0) or 0),
+                "approvals": len(approval_items),
+                "counts": counts,
+                "executionMode": execution_mode,
+                "runtimeTuning": runtime_tuning,
+                "operatorIntent": intent,
+                "workStatus": work_status,
+                "systemMetrics": metrics,
+            },
+            "models": model_rows,
+            "modelPayload": models,
+            "tasks": task_items,
+            "approvals": approval_items,
+            "events": event_items,
+            "scope": self._scope_view(targets),
+            "scopePayload": scope,
+            "graph": graph,
+            "traces": traces,
+            "geo": geo,
+            "plan": plan,
+            "notes": notes,
+            "interests": interests,
+            "caido": self._caido_view(caido_status, records, targets),
+            "approvalChat": self._approval_chat_view(approval_items),
+            "inquiryChat": self._operator_chat_view(),
+            "signals": self._signals_view(audit),
+            "credentials": credentials,
+            "api": {
+                "generatedAt": datetime.now(timezone.utc).isoformat(),
+                "endpoints": {
+                    "controlPlane": "/api/control-plane",
+                    "tick": "/api/actions/tick",
+                    "stopWork": "/api/actions/stop-work",
+                    "compact": "/api/actions/compact",
+                    "processQueues": "/api/actions/process-queues",
+                    "warmModels": "/api/actions/warm-models",
+                    "clearModels": "/api/actions/clear-models",
+                },
+            },
+        }
+
+    def _models_view(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        roles = payload.get("roles", [])
+        if not isinstance(roles, list):
+            return []
+        ollama = payload.get("ollama", {}) if isinstance(payload.get("ollama"), dict) else {}
+        return [
+            {
+                "route": str(role.get("role", "")),
+                "label": str(role.get("label", role.get("role", ""))),
+                "model": str(role.get("selected_model") or role.get("default_model") or ""),
+                "loaded": bool(ollama.get("ok")),
+                "hot": bool(ollama.get("ok")),
+                "ctx": int(role.get("context_window", 0) or 0),
+                "processor": str(role.get("processor", "")),
+                "available": payload.get("available_models", []),
+            }
+            for role in roles
+            if isinstance(role, dict)
+        ]
+
+    def _tasks_view(
+        self,
+        dashboard: dict[str, Any],
+        work_status: dict[str, Any],
+        targets: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        by_id: dict[str, dict[str, Any]] = {}
+        for group in ("active", "queued", "waiting", "recent"):
+            for item in work_status.get(group, []) if isinstance(work_status.get(group, []), list) else []:
+                if not isinstance(item, dict):
+                    continue
+                task_id = str(item.get("task_id") or item.get("run_id") or "")
+                if not task_id:
+                    continue
+                by_id[task_id] = {
+                    "id": task_id,
+                    "kind": str(item.get("task_kind") or item.get("kind") or "task"),
+                    "route": str(item.get("route") or ""),
+                    "status": self._task_status_for_gui(str(item.get("status") or "")),
+                    "target": str(item.get("target") or "*"),
+                    "model": str(item.get("model") or ""),
+                    "title": str(item.get("title") or item.get("summary") or task_id),
+                    "ms": 0,
+                    "raw": item,
+                }
+        target_lookup = self._target_lookup(targets)
+        for task in dashboard.get("tasks", []) if isinstance(dashboard.get("tasks", []), list) else []:
+            if not isinstance(task, dict):
+                continue
+            task_id = str(task.get("id") or "")
+            if not task_id:
+                continue
+            target = target_lookup.get(str(task.get("target_id") or ""), "*")
+            by_id.setdefault(
+                task_id,
+                {
+                    "id": task_id,
+                    "kind": str(task.get("kind") or "task"),
+                    "route": str(task.get("provider_route") or ""),
+                    "status": self._task_status_for_gui(str(task.get("status") or "")),
+                    "target": target,
+                    "model": str(task.get("provider_model") or ""),
+                    "title": str(task.get("title") or task.get("summary") or task_id),
+                    "ms": 0,
+                    "raw": task,
+                },
+            )
+        return list(by_id.values())[:100]
+
+    def _approvals_view(self, work_status: dict[str, Any], tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        pending = []
+        waiting = work_status.get("waiting", []) if isinstance(work_status.get("waiting", []), list) else []
+        for item in waiting:
+            if not isinstance(item, dict):
+                continue
+            task_id = str(item.get("task_id") or "")
+            if not task_id:
+                continue
+            pending.append(
+                {
+                    "id": task_id,
+                    "risk": "med",
+                    "task": task_id,
+                    "title": str(item.get("title") or "Approval required"),
+                    "detail": str(item.get("summary") or "Task is waiting for operator approval."),
+                    "reason": str(item.get("worker_contract") or "Runtime policy requires explicit operator decision."),
+                    "target": str(item.get("target") or "*"),
+                    "primitive": str(item.get("task_kind") or "task"),
+                    "limits": "bounded by active operator intent",
+                }
+            )
+        if pending:
+            return pending[:50]
+        return [
+            {
+                "id": item["id"],
+                "risk": "low",
+                "task": item["id"],
+                "title": item["title"],
+                "detail": item.get("raw", {}).get("summary") or item["title"],
+                "reason": "No pending approval; shown for inspection only.",
+                "target": item.get("target", "*"),
+                "primitive": item.get("kind", "task"),
+                "limits": "not blocked",
+            }
+            for item in tasks
+            if item.get("status") == "await_approval"
+        ][:50]
+
+    def _events_view(self, audit: dict[str, Any]) -> list[dict[str, str]]:
+        events: list[dict[str, str]] = []
+        for item in audit.get("recent_events", []) if isinstance(audit.get("recent_events", []), list) else []:
+            if not isinstance(item, dict):
+                continue
+            events.append(
+                {
+                    "t": self._time_label(item.get("created_at")),
+                    "lvl": self._event_level(str(item.get("type", ""))),
+                    "msg": html.escape(str(item.get("summary") or item.get("type") or "event")),
+                }
+            )
+        for item in audit.get("recent_runtime_events", []) if isinstance(audit.get("recent_runtime_events", []), list) else []:
+            if not isinstance(item, dict):
+                continue
+            events.append(
+                {
+                    "t": self._time_label(item.get("created_at")),
+                    "lvl": "info",
+                    "msg": html.escape(str(item.get("signal") or "runtime event")),
+                }
+            )
+        return events[:80]
+
+    def _scope_view(self, targets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        rows = []
+        for item in targets:
+            target = item.get("target", {}) if isinstance(item.get("target"), dict) else {}
+            counts = item.get("counts", {}) if isinstance(item.get("counts"), dict) else {}
+            assets = item.get("assets", []) if isinstance(item.get("assets"), list) else []
+            rows.append(
+                {
+                    "handle": str(target.get("handle") or ""),
+                    "profile": str(target.get("profile") or ""),
+                    "ip": str(target.get("metadata", {}).get("active_ip") or self._first_asset(assets, "ip") or ""),
+                    "assets": int(counts.get("assets", len(assets)) or 0),
+                    "evidence": int(counts.get("evidence", 0) or 0),
+                    "findings": int(counts.get("findings", 0) or 0),
+                    "status": "active" if target.get("in_scope", True) else "paused",
+                }
+            )
+        return rows
+
+    def _graph_view(self, targets: list[dict[str, Any]], records: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+        nodes: list[dict[str, Any]] = []
+        edges: list[dict[str, Any]] = []
+        x = 180
+        y = 90
+        for index, item in enumerate(targets):
+            target = item.get("target", {}) if isinstance(item.get("target"), dict) else {}
+            handle = str(target.get("handle") or "")
+            if not handle:
+                continue
+            node_id = f"target_{index}"
+            nodes.append({"id": node_id, "kind": "domain", "label": handle, "sub": str(target.get("profile") or ""), "x": x, "y": y})
+            assets = item.get("assets", []) if isinstance(item.get("assets"), list) else []
+            for asset_index, asset in enumerate(assets[:12]):
+                if not isinstance(asset, dict):
+                    continue
+                kind = "host" if asset.get("asset_type") == "ip" else "svc" if asset.get("asset_type") in {"url", "webapp"} else "domain"
+                asset_id = f"{node_id}_asset_{asset_index}"
+                nodes.append(
+                    {
+                        "id": asset_id,
+                        "kind": kind,
+                        "label": str(asset.get("asset") or ""),
+                        "sub": str(asset.get("asset_type") or "asset"),
+                        "x": x + 220 + (asset_index % 4) * 150,
+                        "y": y + (asset_index // 4) * 95,
+                    }
+                )
+                edges.append({"a": node_id, "b": asset_id, "label": "scope"})
+            x += 150
+            y += 90
+        for index, finding in enumerate(records.get("findings", []) if isinstance(records.get("findings", []), list) else []):
+            if not isinstance(finding, dict):
+                continue
+            node_id = f"finding_{index}"
+            nodes.append(
+                {
+                    "id": node_id,
+                    "kind": "finding",
+                    "label": str(finding.get("title") or finding.get("id") or "finding"),
+                    "sub": str(finding.get("severity") or finding.get("status") or ""),
+                    "x": 280 + (index % 5) * 180,
+                    "y": 440 + (index // 5) * 90,
+                }
+            )
+        return {"nodes": nodes, "edges": edges}
+
+    def _traces_view(self, audit: dict[str, Any], tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        children = [
+            {
+                "id": str(trace.get("id") or f"trace_{index}"),
+                "kind": str(trace.get("kind") or trace.get("summary") or "trace"),
+                "status": self._trace_status_for_gui(str(trace.get("status") or "pass")),
+                "time": self._time_label(trace.get("created_at") or trace.get("updated_at")),
+                "summary": str(trace.get("summary") or trace.get("prompt") or "Runtime trace"),
+                "task": str(trace.get("task_id") or ""),
+                "route": str(trace.get("provider_route") or ""),
+            }
+            for index, trace in enumerate(
+                audit.get("recent_traces", []) if isinstance(audit.get("recent_traces", []), list) else []
+            )
+            if isinstance(trace, dict)
+        ]
+        if not children:
+            children = [
+                {
+                    "id": f"task_trace_{index}",
+                    "kind": item.get("kind", "task"),
+                    "status": self._trace_status_for_gui(item.get("status", "queued")),
+                    "time": "live",
+                    "summary": item.get("title", "Task"),
+                    "task": item.get("id", ""),
+                    "route": item.get("route", ""),
+                }
+                for index, item in enumerate(tasks[:16])
+            ]
+        return [
+            {
+                "id": "tr_root",
+                "kind": "workflow.runtime",
+                "status": "run" if any(item.get("status") == "run" for item in children) else "pass",
+                "time": datetime.now(timezone.utc).strftime("%H:%M:%S"),
+                "summary": "Live runtime trace view",
+                "route": "",
+                "model": "",
+                "children": children,
+            }
+        ]
+
+    def _plan_view(
+        self,
+        intent: dict[str, Any],
+        dashboard: dict[str, Any],
+        skills: dict[str, Any],
+        work_status: dict[str, Any],
+        records: dict[str, Any],
+    ) -> dict[str, Any]:
+        active_intent = intent.get("active", {}) if isinstance(intent.get("active"), dict) else {}
+        policy = active_intent.get("policy", {}) if isinstance(active_intent.get("policy"), dict) else {}
+        task_counts = work_status.get("counts", {}) if isinstance(work_status.get("counts"), dict) else {}
+        total_tasks = int(task_counts.get("active", 0) or 0) + int(task_counts.get("queued", 0) or 0) + int(task_counts.get("waiting", 0) or 0)
+        return {
+            "methodology": {
+                "id": str(dashboard.get("sessions", [{}])[0].get("methodology", "runtime") if dashboard.get("sessions") else "runtime"),
+                "label": "Runtime Methodology",
+                "description": "Live methodology state derived from runtime tasks and target progress.",
+                "phases": [
+                    {"id": "active", "label": "Active", "status": "active" if total_tasks else "done", "tasks": total_tasks, "done": 0},
+                    {"id": "waiting", "label": "Waiting", "status": "active" if task_counts.get("waiting") else "done", "tasks": int(task_counts.get("waiting", 0) or 0), "done": 0},
+                    {"id": "queued", "label": "Queued", "status": "active" if task_counts.get("queued") else "done", "tasks": int(task_counts.get("queued", 0) or 0), "done": 0},
+                    {"id": "complete", "label": "Complete", "status": "done", "tasks": len(records.get("evidence", []) or []), "done": len(records.get("evidence", []) or [])},
+                ],
+            },
+            "intent": {
+                "id": str(active_intent.get("id") or "recon_only"),
+                "label": str(active_intent.get("label") or active_intent.get("id") or "Recon Only"),
+                "flags": policy,
+            },
+            "autonomy": str(self.runtime.config.autonomy.mode.value),
+            "autonomyModes": ["manual", "assisted", "supervised", "supervised_auto", "high_autonomy"],
+            "pinnedAssets": self._pinned_assets_view(records),
+            "playbooks": self._playbooks_view(skills),
+            "skills": self._skills_view(skills),
+            "criticalThinking": self._critical_thinking_view(work_status),
+        }
+
+    def _notes_view(
+        self,
+        targets: list[dict[str, Any]],
+        findings_context: dict[str, Any],
+        credentials: dict[str, Any],
+        audit: dict[str, Any],
+    ) -> dict[str, Any]:
+        credential_services = credentials.get("services", {}) if isinstance(credentials.get("services"), dict) else {}
+        notion_fields = credential_services.get("notion", {}) if isinstance(credential_services.get("notion"), dict) else {}
+        notion_configured = any(
+            isinstance(field, dict) and field.get("configured")
+            for field in notion_fields.values()
+        )
+        target_rows = []
+        folders = []
+        pages: dict[str, dict[str, str]] = {}
+        context_targets = findings_context.get("targets", []) if isinstance(findings_context.get("targets", []), list) else []
+        context_by_id = {
+            str(item.get("target", {}).get("id") or item.get("target", {}).get("handle")): item.get("workspace", {})
+            for item in context_targets
+            if isinstance(item, dict) and isinstance(item.get("target"), dict)
+        }
+        for index, item in enumerate(targets):
+            target = item.get("target", {}) if isinstance(item.get("target"), dict) else {}
+            handle = str(target.get("handle") or "")
+            if not handle:
+                continue
+            target_rows.append(
+                {
+                    "id": handle,
+                    "label": str(target.get("display_name") or handle),
+                    "profile": str(target.get("profile") or ""),
+                    "active": index == 0,
+                }
+            )
+            root_id = f"{handle}_root"
+            page_id = f"{handle}_findings"
+            folders.append(
+                {
+                    "id": root_id,
+                    "label": f"{handle} Workspace",
+                    "target": handle,
+                    "kind": "target-root",
+                    "synced": False,
+                    "url": "#",
+                    "children": [
+                        {"id": page_id, "label": "Findings Context", "kind": "findings", "synced": False, "url": "#"},
+                    ],
+                }
+            )
+            workspace = context_by_id.get(str(target.get("id")), {})
+            pages[page_id] = {
+                "title": f"{handle} Findings Context",
+                "body": self._workspace_body(target, workspace),
+            }
+        if not target_rows:
+            pages["workspace_empty"] = {
+                "title": "Findings Context",
+                "body": "No targets are currently registered in the runtime.",
+            }
+        return {
+            "targets": target_rows,
+            "syncStatus": {
+                "ok": notion_configured,
+                "lastSync": self._time_label((audit.get("recent_sync_jobs") or [{}])[0].get("updated_at") if audit.get("recent_sync_jobs") else None),
+                "pendingJobs": 0,
+                "failedJobs": len(audit.get("recent_sync_jobs", []) or []),
+                "configured": notion_configured,
+            },
+            "folders": folders,
+            "pages": pages,
+        }
+
+    def _interests_view(self, records: dict[str, Any], targets: list[dict[str, Any]]) -> dict[str, Any]:
+        surfaces = []
+        for index, item in enumerate(targets):
+            target = item.get("target", {}) if isinstance(item.get("target"), dict) else {}
+            assets = item.get("assets", []) if isinstance(item.get("assets"), list) else []
+            handle = str(target.get("handle") or "")
+            for asset in assets[:20]:
+                if not isinstance(asset, dict):
+                    continue
+                surfaces.append(
+                    {
+                        "id": str(asset.get("id") or f"srf_{index}_{len(surfaces)}"),
+                        "target": handle,
+                        "kind": str(asset.get("asset_type") or "asset"),
+                        "ports": str(asset.get("metadata", {}).get("ports") or "*"),
+                        "severity": "info",
+                        "status": "active" if target.get("in_scope", True) else "paused",
+                        "desc": str(asset.get("asset") or ""),
+                    }
+                )
+        findings = [
+            {
+                "id": str(item.get("id") or ""),
+                "severity": str(item.get("severity") or "info"),
+                "title": str(item.get("title") or "Finding"),
+                "status": str(item.get("verification_status") or item.get("status") or "unverified"),
+                "evidence": item.get("evidence_ids", []) if isinstance(item.get("evidence_ids", []), list) else [],
+                "desc": str(item.get("summary") or item.get("description") or ""),
+            }
+            for item in records.get("findings", []) if isinstance(item, dict)
+        ]
+        pocs = [
+            {
+                "id": str(item.get("id") or ""),
+                "edb": str(item.get("metadata", {}).get("edb") or "N/A"),
+                "title": str(item.get("title") or item.get("summary") or "Interest"),
+                "platform": str(item.get("metadata", {}).get("platform") or ""),
+                "status": str(item.get("status") or "open"),
+                "gated": bool(item.get("metadata", {}).get("gated", False)),
+                "applicability": str(item.get("summary") or item.get("description") or ""),
+                "evidence": item.get("evidence_ids", []) if isinstance(item.get("evidence_ids", []), list) else [],
+                "generated": False,
+                "downloadable": False,
+            }
+            for item in records.get("interests", []) if isinstance(item, dict)
+        ]
+        artifacts = [
+            {
+                "id": str(item.get("id") or ""),
+                "kind": str(item.get("kind") or "artifact"),
+                "task": str(item.get("task_id") or ""),
+                "title": str(item.get("title") or item.get("path") or "Artifact"),
+                "target": str(item.get("target_id") or ""),
+                "size": str(item.get("size") or ""),
+                "downloadable": False,
+            }
+            for item in records.get("artifacts", []) if isinstance(item, dict)
+        ]
+        return {"surfaces": surfaces, "findings": findings, "pocs": pocs, "artifacts": artifacts}
+
+    def _caido_view(self, status: dict[str, Any], records: dict[str, Any], targets: list[dict[str, Any]]) -> dict[str, Any]:
+        host = self._scope_view(targets)[0]["handle"] if targets else ""
+        requests = [
+            {
+                "id": str(item.get("id") or f"req_{index}"),
+                "method": str(item.get("metadata", {}).get("method") or item.get("type") or "GET"),
+                "host": host,
+                "path": str(item.get("metadata", {}).get("path") or item.get("title") or "/"),
+                "status": int(item.get("metadata", {}).get("status_code", 0) or 0),
+                "length": 0,
+                "time": self._time_label(item.get("created_at")),
+                "source": "runtime",
+                "mime": str(item.get("metadata", {}).get("content_type") or ""),
+            }
+            for index, item in enumerate(records.get("evidence", []) if isinstance(records.get("evidence", []), list) else [])
+            if isinstance(item, dict) and str(item.get("type", "")).lower() in {"http_response", "web_response", "tool_output"}
+        ][:50]
+        return {
+            "connection": status,
+            "requests": requests,
+            "replays": [],
+            "savedFilters": [
+                {"id": "sf_01", "label": "Target host", "httpql": f'req.host.eq:"{host}"' if host else ""},
+                {"id": "sf_02", "label": "Error responses", "httpql": "resp.code.gte:400"},
+                {"id": "sf_03", "label": "Auth surfaces", "httpql": 'req.path.cont:"login" OR req.path.cont:"admin"'},
+            ],
+        }
+
+    def _geo_view(self, targets: list[dict[str, Any]], caido_status: dict[str, Any], models: dict[str, Any]) -> dict[str, Any]:
+        pins = [
+            {
+                "id": "g_self",
+                "kind": "self",
+                "label": "operator",
+                "city": "local",
+                "country": "local",
+                "lat": 37.7749,
+                "lon": -122.4194,
+                "asn": "local",
+                "org": "Primordial",
+                "status": "live",
+            }
+        ]
+        for index, row in enumerate(self._scope_view(targets)):
+            pins.append(
+                {
+                    "id": f"g_target_{index}",
+                    "kind": "target",
+                    "label": row["handle"] if not row["ip"] else f"{row['handle']} ({row['ip']})",
+                    "city": "scope",
+                    "country": row["profile"] or "scope",
+                    "lat": 51.5074 + index * 0.02,
+                    "lon": -0.1278 - index * 0.02,
+                    "asn": "scope",
+                    "org": row["profile"] or "target",
+                    "status": row["status"],
+                }
+            )
+        if caido_status.get("configured"):
+            pins.append(
+                {
+                    "id": "g_caido",
+                    "kind": "tool",
+                    "label": "caido",
+                    "city": "localhost",
+                    "country": "local",
+                    "lat": 37.7649,
+                    "lon": -122.4094,
+                    "asn": "local",
+                    "org": "Caido",
+                    "status": "live" if caido_status.get("ok") else "idle",
+                }
+            )
+        if models.get("ollama", {}).get("ok"):
+            pins.append(
+                {
+                    "id": "g_ollama",
+                    "kind": "tool",
+                    "label": "ollama",
+                    "city": "localhost",
+                    "country": "local",
+                    "lat": 37.7549,
+                    "lon": -122.3994,
+                    "asn": "local",
+                    "org": "Ollama",
+                    "status": "live",
+                }
+            )
+        return {
+            "pins": pins,
+            "traces": [{"from": "g_self", "to": pin["id"], "kind": "ok", "label": "scope"} for pin in pins if pin["id"] != "g_self"],
+            "asns": [{"num": "local", "org": "Local runtime", "country": "local", "refs": len(pins), "role": "operator"}],
+        }
+
+    def _approval_chat_view(self, approvals: list[dict[str, Any]]) -> list[dict[str, str]]:
+        if not approvals:
+            return [{"who": "system", "t": self._time_label(None), "text": "No pending approvals."}]
+        return [
+            {
+                "who": "system",
+                "t": self._time_label(None),
+                "text": f"Approval pending: {item['title']} ({item['id']})",
+            }
+            for item in approvals[:8]
+        ]
+
+    def _operator_chat_view(self) -> list[dict[str, str]]:
+        try:
+            messages = self.runtime.operator_chat_payload(limit=20).get("messages", [])
+        except Exception:
+            messages = []
+        rows = []
+        for item in messages if isinstance(messages, list) else []:
+            if not isinstance(item, dict):
+                continue
+            rows.append(
+                {
+                    "who": "me" if item.get("role") == "operator" else "agent",
+                    "t": self._time_label(item.get("created_at")),
+                    "text": str(item.get("body") or ""),
+                }
+            )
+        return rows or [{"who": "system", "t": self._time_label(None), "text": "Operator chat is ready."}]
+
+    def _signals_view(self, audit: dict[str, Any]) -> list[str]:
+        signals = [
+            str(item.get("signal"))
+            for item in audit.get("recent_runtime_events", []) if isinstance(item, dict) and item.get("signal")
+        ]
+        return signals[:20]
+
+    def _skills_view(self, skills: dict[str, Any]) -> list[dict[str, Any]]:
+        rows = []
+        for item in skills.get("skills", []) if isinstance(skills.get("skills", []), list) else []:
+            if not isinstance(item, dict):
+                continue
+            rows.append(
+                {
+                    "id": str(item.get("id") or item.get("name") or ""),
+                    "title": str(item.get("title") or item.get("name") or item.get("id") or "Skill"),
+                    "summary": str(item.get("summary") or item.get("description") or ""),
+                    "tags": item.get("tags", []) if isinstance(item.get("tags", []), list) else [],
+                }
+            )
+        return rows
+
+    def _playbooks_view(self, skills: dict[str, Any]) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": "runtime",
+                "label": "Runtime Planning",
+                "desc": "Live workflow planner and policy-gated task execution.",
+                "status": "active",
+                "tasks": [item["id"] for item in self._skills_view(skills)[:6]],
+            }
+        ]
+
+    def _pinned_assets_view(self, records: dict[str, Any]) -> list[dict[str, Any]]:
+        pins = []
+        for kind in ("evidence", "interests", "findings", "artifacts"):
+            for item in records.get(kind, []) if isinstance(records.get(kind, []), list) else []:
+                if not isinstance(item, dict):
+                    continue
+                pins.append(
+                    {
+                        "id": str(item.get("id") or f"pin_{len(pins)}"),
+                        "kind": "interest" if kind == "interests" else kind.rstrip("s"),
+                        "ref": str(item.get("id") or ""),
+                        "label": str(item.get("title") or item.get("summary") or item.get("type") or kind),
+                        "target": str(item.get("target_id") or "*"),
+                        "pinned": self._time_label(item.get("created_at")),
+                    }
+                )
+        return pins[:24]
+
+    def _critical_thinking_view(self, work_status: dict[str, Any]) -> list[dict[str, str]]:
+        blockers = work_status.get("blockers", []) if isinstance(work_status.get("blockers", []), list) else []
+        rows = []
+        for index, blocker in enumerate(blockers):
+            if not isinstance(blocker, dict):
+                continue
+            rows.append(
+                {
+                    "id": str(blocker.get("kind") or f"ct_{index}"),
+                    "prompt": str(blocker.get("summary") or "Review runtime blocker."),
+                    "target": str(blocker.get("target") or "*"),
+                    "phase": "analysis",
+                    "status": "open",
+                }
+            )
+        return rows or [
+            {
+                "id": "ct_scope",
+                "prompt": "What evidence is missing before the next runtime action?",
+                "target": "*",
+                "phase": "recon",
+                "status": "open",
+            }
+        ]
+
+    def _workspace_body(self, target: dict[str, Any], workspace: dict[str, Any]) -> str:
+        lines = [
+            f"# {target.get('handle', 'Target')}",
+            f"Profile: {target.get('profile', '')}",
+            f"Findings path: {workspace.get('findings_path', 'not generated') if isinstance(workspace, dict) else 'not generated'}",
+            f"Guidance path: {workspace.get('guidance_path', 'not generated') if isinstance(workspace, dict) else 'not generated'}",
+        ]
+        if isinstance(workspace, dict) and workspace.get("summary"):
+            lines.extend(["", str(workspace["summary"])])
+        return "\n".join(lines)
+
+    def _target_lookup(self, targets: list[dict[str, Any]]) -> dict[str, str]:
+        lookup = {}
+        for item in targets:
+            target = item.get("target", {}) if isinstance(item.get("target"), dict) else {}
+            lookup[str(target.get("id") or "")] = str(target.get("handle") or "")
+        return lookup
+
+    def _target_handle(self, item: dict[str, Any]) -> str:
+        target = item.get("target", {}) if isinstance(item.get("target"), dict) else {}
+        return str(target.get("handle") or "").strip()
+
+    def _first_asset(self, assets: list[Any], asset_type: str) -> str:
+        for item in assets:
+            if isinstance(item, dict) and item.get("asset_type") == asset_type:
+                return str(item.get("asset") or "")
+        return ""
+
+    def _metric_ratio(self, metrics: dict[str, Any], key: str) -> float:
+        payload = metrics.get(key, {}) if isinstance(metrics, dict) else {}
+        if not isinstance(payload, dict):
+            return 0.0
+        for field_name in ("load_ratio", "utilization_ratio", "usage_ratio"):
+            value = payload.get(field_name)
+            if isinstance(value, int | float):
+                return max(0.0, min(1.0, float(value)))
+        percent = payload.get("percent")
+        if isinstance(percent, int | float):
+            return max(0.0, min(1.0, float(percent) / 100.0))
+        return 0.0
+
+    def _memory_ratio(self, metrics: dict[str, Any]) -> float:
+        cpu = metrics.get("cpu", {}) if isinstance(metrics, dict) else {}
+        if isinstance(cpu, dict):
+            memory = cpu.get("memory", {})
+            if isinstance(memory, dict):
+                percent = memory.get("percent")
+                if isinstance(percent, int | float):
+                    return max(0.0, min(1.0, float(percent) / 100.0))
+        return 0.0
+
+    def _task_status_for_gui(self, status: str) -> str:
+        normalized = status.lower()
+        if normalized in {"running", "claimed"}:
+            return "running"
+        if normalized in {"pending", "queued"}:
+            return "queued"
+        if normalized in {"needs_approval", "waiting", "await_approval"}:
+            return "await_approval"
+        if normalized in {"completed", "done", "succeeded"}:
+            return "done"
+        if normalized in {"failed", "denied"}:
+            return "failed"
+        return normalized or "queued"
+
+    def _trace_status_for_gui(self, status: str) -> str:
+        normalized = self._task_status_for_gui(status)
+        if normalized == "running":
+            return "run"
+        if normalized == "done":
+            return "pass"
+        if normalized == "failed":
+            return "fail"
+        if normalized == "await_approval":
+            return "gated"
+        return "queued"
+
+    def _event_level(self, event_type: str) -> str:
+        lowered = event_type.lower()
+        if any(token in lowered for token in ("failed", "error", "denied")):
+            return "err"
+        if any(token in lowered for token in ("approval", "waiting", "stale")):
+            return "warn"
+        if any(token in lowered for token in ("completed", "success", "bootstrap", "scope")):
+            return "ok"
+        return "info"
+
+    def _time_label(self, value: Any) -> str:
+        if not value:
+            return datetime.now(timezone.utc).strftime("%H:%M:%S")
+        try:
+            return datetime.fromisoformat(str(value)).strftime("%H:%M:%S")
+        except ValueError:
+            return str(value)

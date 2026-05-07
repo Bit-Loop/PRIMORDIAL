@@ -36,6 +36,10 @@ share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+
+# Frontend dependencies and generated build input
+node_modules/
+primordial/core/web/frontend/src/generated-new-gui.jsx
 MANIFEST
 
 # Virtual environments

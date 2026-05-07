@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -22,7 +23,7 @@ from primordial.core.domain.enums import (
 )
 from primordial.core.domain.models import EvidenceRecord, Interest, Target, Task, utc_now
 from primordial.core.domain.models import OrchestrationReport
-from primordial.gui.launcher import launcher_target_state
+from primordial.core.web.app import PrimordialWebApp
 from tests.support import build_probe_fixture, write_scope_file
 
 
@@ -73,16 +74,19 @@ class WorkflowTests(unittest.TestCase):
             self.runtime.store.list_tasks(limit=10) or self.runtime.store.list_evidence(limit=10)
         )
 
-    def test_empty_target_handles_are_not_planned_or_selected_by_launcher(self) -> None:
+    def test_empty_target_handles_are_not_planned_or_shown_in_control_plane_scope(self) -> None:
         blank = Target(handle="", display_name="", profile=ScopeProfile.HACK_THE_BOX)
         self.runtime.store.insert_target(blank)
 
         report = self.runtime.run_tick(max_executions=0)
-        launcher_state = launcher_target_state(self.runtime)
+        response = PrimordialWebApp(self.runtime).dispatch("GET", "/api/control-plane")
+        control_plane = json.loads(response.body)
 
         self.assertFalse(any(task.target_id == blank.id for task in report.created_tasks))
         self.assertTrue(any(event.metadata.get("invalid_target") for event in report.events))
-        self.assertEqual(launcher_state["handle"], "pirate.htb")
+        self.assertEqual(response.status, 200)
+        self.assertIn("pirate.htb", {item["handle"] for item in control_plane["scope"]})
+        self.assertNotIn("", {item["handle"] for item in control_plane["scope"]})
 
     def test_existing_pending_task_for_empty_target_is_blocked_before_execution(self) -> None:
         blank = Target(handle="", display_name="", profile=ScopeProfile.HACK_THE_BOX)

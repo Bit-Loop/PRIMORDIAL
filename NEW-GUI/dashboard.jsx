@@ -29,16 +29,28 @@ function Sparkline({ data, color = 'var(--cyan)', height = 28 }) {
 
 function DashboardMode({ tweaks, onApprove, onReject }) {
   const D = window.PD_DATA;
+  const API = window.PD_API || {};
   const [tab, setTab] = useStateD('controls');
   const [autonomy, setAutonomy] = useStateD(D.runtime.autonomy);
   const [intent, setIntent] = useStateD(D.runtime.intent);
-  const [contMode, setContMode] = useStateD(false);
+  const [contMode, setContMode] = useStateD(D.runtime.executionMode?.mode === 'continuous');
   const [maxExec, setMaxExec] = useStateD(3);
-  const [interval, setInterval] = useStateD(30);
+  const [interval, setInterval] = useStateD(D.runtime.executionMode?.interval_seconds || 30);
+  const [tuning, setTuning] = useStateD(D.runtime.runtimeTuning || {});
+  const [credentialDraft, setCredentialDraft] = useStateD({});
+
+  useEffectD(() => {
+    setAutonomy(D.runtime.autonomy);
+    setIntent(D.runtime.intent);
+    setContMode(D.runtime.executionMode?.mode === 'continuous');
+    setInterval(D.runtime.executionMode?.interval_seconds || 30);
+    setTuning(D.runtime.runtimeTuning || {});
+  }, [D.runtime.autonomy, D.runtime.intent, D.runtime.executionMode?.mode, D.runtime.executionMode?.interval_seconds, D.runtime.runtimeTuning]);
 
   const cpu = D.runtime.cpu;
   const gpu = D.runtime.gpu;
   const mem = D.runtime.mem;
+  const countsPayload = D.runtime.counts || {};
 
   // fake live sparklines
   const [tickT, setTickT] = useStateD(0);
@@ -54,14 +66,75 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
   }, [tickT, cpu, gpu, mem]);
 
   const counts = [
-    { k: 'targets',   v: 3,   d: '2 active',     tone: 'ok' },
-    { k: 'evidence',  v: 101, d: '+22 today',    tone: '' },
-    { k: 'findings',  v: 4,   d: '1 verified',   tone: 'warn' },
-    { k: 'tasks',     v: 8,   d: '4 running',    tone: '' },
-    { k: 'memory',    v: 318, d: 'episodic',     tone: '' },
-    { k: 'approvals', v: 2,   d: 'queued',       tone: 'crit' },
-    { k: 'artifacts', v: 47,  d: '1.2 GB',       tone: '' },
-    { k: 'traces',    v: 612, d: 'audit',        tone: '' },
+    { k: 'targets',   v: D.scope.length,                  d: `${D.scope.filter(s => s.status === 'active').length} active`, tone: 'ok' },
+    { k: 'evidence',  v: countsPayload.evidence || 0,     d: 'runtime', tone: '' },
+    { k: 'findings',  v: countsPayload.findings || 0,     d: 'verified + candidates', tone: (countsPayload.findings || 0) ? 'warn' : '' },
+    { k: 'tasks',     v: D.tasks.length,                  d: `${D.runtime.activeTasks || 0} running`, tone: '' },
+    { k: 'memory',    v: countsPayload.memory_entries || 0, d: 'entries', tone: '' },
+    { k: 'approvals', v: D.approvals.length,              d: 'pending', tone: D.approvals.length ? 'crit' : '' },
+    { k: 'artifacts', v: countsPayload.artifacts || 0,    d: 'stored', tone: '' },
+    { k: 'traces',    v: D.traces[0]?.children?.length || 0, d: 'audit', tone: '' },
+  ];
+
+  const intentOptions = D.runtime.operatorIntent?.intents || [];
+  const updateTuning = (key, value) => setTuning(t => ({ ...t, [key]: Number(value) || 0 }));
+  const setCredentialValue = (service, key, value) => {
+    setCredentialDraft(d => ({ ...d, [service]: { ...(d[service] || {}), [key]: value } }));
+  };
+  const credentialStatus = (service, key) => D.credentials?.services?.[service]?.[key] || {};
+  const saveCredentials = (service) => API.post?.(`/api/credentials/${service}`, credentialDraft[service] || {});
+  const clearCredentials = (service) => API.delete?.(`/api/credentials/${service}`);
+  const applyControlSettings = async () => {
+    await API.post?.('/api/execution-mode', { mode: contMode ? 'continuous' : 'tick', interval_seconds: interval });
+    await API.post?.('/api/operator-intent', { intent_id: intent });
+    await API.post?.('/api/runtime-settings', tuning);
+  };
+  const resolveApproval = (approval, verdict) => {
+    if (verdict === 'approve') {
+      onApprove?.(approval);
+      return API.post?.('/api/actions/approve', { task_id: approval.task || approval.id });
+    }
+    onReject?.(approval);
+    return API.post?.('/api/actions/deny', { task_id: approval.task || approval.id });
+  };
+  const integrationRows = [
+    {
+      n: 'Notion',
+      d: D.notes?.syncStatus?.configured ? 'credentials configured' : 'local findings export only',
+      s: D.notes?.syncStatus?.configured ? 'configured' : 'missing',
+      tone: D.notes?.syncStatus?.configured ? 'green' : 'gray',
+    },
+    {
+      n: 'Discord',
+      d: credentialStatus('discord', 'webhook_url').hint || 'webhook not configured',
+      s: credentialStatus('discord', 'webhook_url').configured ? 'configured' : 'missing',
+      tone: credentialStatus('discord', 'webhook_url').configured ? 'green' : 'gray',
+    },
+    {
+      n: 'Caido',
+      d: D.caido?.connection?.graphql_url || 'GraphQL credentials missing',
+      s: D.caido?.connection?.ok ? 'live' : D.caido?.connection?.configured ? 'configured' : 'missing',
+      tone: D.caido?.connection?.ok ? 'green' : D.caido?.connection?.configured ? 'cyan' : 'gray',
+    },
+    {
+      n: 'Lab',
+      d: credentialStatus('lab', 'username').hint || 'lab credentials not configured',
+      s: credentialStatus('lab', 'username').configured ? 'set' : 'missing',
+      tone: credentialStatus('lab', 'username').configured ? 'cyan' : 'gray',
+    },
+    {
+      n: 'Ollama',
+      d: D.modelPayload?.ollama?.base_url || 'localhost',
+      s: D.modelPayload?.ollama?.ok ? 'live' : 'offline',
+      tone: D.modelPayload?.ollama?.ok ? 'cyan' : 'gray',
+    },
+    { n: 'Premium', d: 'remote_premium', s: 'disabled', tone: 'gray' },
+  ];
+  const credentialGroups = [
+    { service: 'notion', n: 'Notion', fields: [['api_key', 'API Key'], ['parent_page_id', 'Parent Page ID'], ['version', 'API Version']] },
+    { service: 'discord', n: 'Discord', fields: [['webhook_url', 'Webhook URL']] },
+    { service: 'caido', n: 'Caido', fields: [['graphql_url', 'GraphQL URL'], ['api_token', 'API Token']] },
+    { service: 'lab', n: 'Lab', fields: [['username', 'Username'], ['password', 'Password'], ['domain', 'Domain']] },
   ];
 
   return (
@@ -95,9 +168,9 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
             title="Runtime"
             actions={
               <>
-                <button className="btn ghost sm">REFRESH</button>
-                <button className="btn primary sm">RUN TICK</button>
-                <button className="btn danger sm">STOP WORK</button>
+                <button className="btn ghost sm" onClick={() => API.refresh?.()}>REFRESH</button>
+                <button className="btn primary sm" onClick={() => API.action?.('tick', { max_executions: maxExec })}>RUN TICK</button>
+                <button className="btn danger sm" onClick={() => API.action?.('stop-work')}>STOP WORK</button>
               </>
             }
             className="fill"
@@ -119,11 +192,9 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
                 </Field>
                 <Field label="operator intent">
                   <select className="input" value={intent} onChange={e => setIntent(e.target.value)}>
-                    <option>recon-and-enum</option>
-                    <option>verify-findings</option>
-                    <option>poc-research</option>
-                    <option>credentialed-pivot</option>
-                    <option>compact-and-rest</option>
+                    {intentOptions.length ? intentOptions.map(item => (
+                      <option key={item.id} value={item.id}>{item.label || item.id}</option>
+                    )) : <option value={intent}>{intent}</option>}
                   </select>
                 </Field>
                 <Field label="execution mode">
@@ -139,20 +210,20 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
                   <input className="input" type="number" value={interval} onChange={e => setInterval(+e.target.value)} />
                 </Field>
                 <Field label="GPU AI timeout (s)">
-                  <input className="input" type="number" defaultValue={120} />
+                  <input className="input" type="number" value={tuning.gpu_ai_timeout_seconds || 120} onChange={e => updateTuning('gpu_ai_timeout_seconds', e.target.value)} />
                 </Field>
                 <Field label="CPU AI timeout (s)">
-                  <input className="input" type="number" defaultValue={300} />
+                  <input className="input" type="number" value={tuning.cpu_ai_timeout_seconds || 300} onChange={e => updateTuning('cpu_ai_timeout_seconds', e.target.value)} />
                 </Field>
                 <Field label="stale run timeout (s)">
-                  <input className="input" type="number" defaultValue={3600} />
+                  <input className="input" type="number" value={tuning.stale_run_timeout_seconds || 3600} onChange={e => updateTuning('stale_run_timeout_seconds', e.target.value)} />
                 </Field>
                 <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                  <button className="btn">COMPACT MEMORY</button>
-                  <button className="btn">PROCESS QUEUES</button>
-                  <button className="btn ghost">WARM MODELS</button>
-                  <button className="btn ghost">CLEAR MODELS</button>
-                  <button className="btn ghost">APPLY TUNING</button>
+                  <button className="btn" onClick={() => API.action?.('compact')}>COMPACT MEMORY</button>
+                  <button className="btn" onClick={() => API.action?.('process-queues')}>PROCESS QUEUES</button>
+                  <button className="btn ghost" onClick={() => API.action?.('warm-models', { keep_alive: '8h' })}>WARM MODELS</button>
+                  <button className="btn ghost" onClick={() => API.action?.('clear-models')}>CLEAR MODELS</button>
+                  <button className="btn ghost" onClick={applyControlSettings}>APPLY TUNING</button>
                   <span style={{ flex: 1 }}></span>
                   <span className="banner green" style={{ alignSelf: 'center' }}>
                     <Dot tone="green" /> POLICY: PoC EXEC GATED · DDOS FORBIDDEN
@@ -171,7 +242,7 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
                       <td>{m.loaded ? <Pill tone="green">LOADED</Pill> : <Pill tone="gray">COLD</Pill>}</td>
                       <td>{m.hot ? <Dot tone="cyan" /> : <Dot tone="gray" />}</td>
                       <td className="dim">{m.ctx ? m.ctx.toLocaleString() : '—'}</td>
-                      <td><button className="btn ghost sm">SWAP</button> <button className="btn ghost sm">{m.loaded ? 'UNLOAD' : 'WARM'}</button></td>
+                      <td><button className="btn ghost sm" onClick={() => API.action?.('warm-models', { keep_alive: '8h' })}>WARM</button></td>
                     </tr>
                   ))}
                 </tbody>
@@ -179,14 +250,7 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
             )}
             {tab === 'integrations' && (
               <div className="grid" style={{ gridTemplateColumns: 'repeat(2, 1fr)', gap: 10 }}>
-                {[
-                  { n: 'Notion',  d: 'parent: HTB Lab Notes',         s: 'connected', tone: 'green' },
-                  { n: 'Discord', d: 'webhook · #primordial-alerts',  s: 'connected', tone: 'green' },
-                  { n: 'Caido',   d: '127.0.0.1:8080/graphql',        s: 'connected', tone: 'green' },
-                  { n: 'Lab/HTB', d: 'pirate.htb · j.doe',            s: 'set',       tone: 'cyan' },
-                  { n: 'Ollama',  d: 'localhost:11434 · 4 models',    s: 'live',      tone: 'cyan' },
-                  { n: 'Premium', d: 'remote_premium',                 s: 'disabled',  tone: 'gray' },
-                ].map(i => (
+                {integrationRows.map(i => (
                   <div key={i.n} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', border: '1px solid var(--line)', borderRadius: 4, background: 'var(--bg-deep)' }}>
                     <div>
                       <div className="strong" style={{ fontWeight: 600 }}>{i.n}</div>
@@ -199,23 +263,30 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
             )}
             {tab === 'credentials' && (
               <div className="grid" style={{ gridTemplateColumns: 'repeat(2, 1fr)', gap: 10 }}>
-                {[
-                  { n: 'Notion',  fields: ['API Key', 'Parent Page ID', 'API Version'] },
-                  { n: 'Discord', fields: ['Webhook URL'] },
-                  { n: 'Caido',   fields: ['GraphQL URL', 'API Token'] },
-                  { n: 'Lab/HTB', fields: ['Username', 'Password', 'Domain'] },
-                ].map(g => (
+                {credentialGroups.map(g => (
                   <div key={g.n} style={{ padding: 10, border: '1px solid var(--line)', borderRadius: 4, background: 'var(--bg-deep)' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, alignItems: 'center' }}>
                       <span className="strong" style={{ fontWeight: 600 }}>{g.n}</span>
-                      <Pill tone="green">SAVED</Pill>
+                      <Pill tone={g.fields.some(([key]) => credentialStatus(g.service, key).configured) ? 'green' : 'gray'}>
+                        {g.fields.some(([key]) => credentialStatus(g.service, key).configured) ? 'SAVED' : 'MISSING'}
+                      </Pill>
                     </div>
                     <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                      {g.fields.map(f => (
-                        <Field key={f} label={f}>
-                          <input className="input" type={f.toLowerCase().includes('password') || f.toLowerCase().includes('token') || f.toLowerCase().includes('key') ? 'password' : 'text'} placeholder="•••••••••••" />
+                      {g.fields.map(([key, label]) => (
+                        <Field key={key} label={label}>
+                          <input
+                            className="input"
+                            type={key.includes('password') || key.includes('token') || key.includes('key') ? 'password' : 'text'}
+                            placeholder={credentialStatus(g.service, key).hint || 'missing'}
+                            value={credentialDraft[g.service]?.[key] || ''}
+                            onChange={e => setCredentialValue(g.service, key, e.target.value)}
+                          />
                         </Field>
                       ))}
+                    </div>
+                    <div className="row gap-4" style={{ marginTop: 8 }}>
+                      <button className="btn primary sm" onClick={() => saveCredentials(g.service)}>SAVE</button>
+                      <button className="btn ghost sm" onClick={() => clearCredentials(g.service)}>CLEAR</button>
                     </div>
                   </div>
                 ))}
@@ -292,8 +363,8 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
                   <div style={{ color: 'var(--txt)', fontSize: 11.5 }}>{a.detail}</div>
                   <div className="dim" style={{ fontSize: 11, fontStyle: 'italic' }}>{a.reason}</div>
                   <div className="approval-actions">
-                    <button className="btn primary sm" onClick={() => onApprove?.(a)}>APPROVE</button>
-                    <button className="btn danger sm" onClick={() => onReject?.(a)}>REJECT</button>
+                    <button className="btn primary sm" onClick={() => resolveApproval(a, 'approve')}>APPROVE</button>
+                    <button className="btn danger sm" onClick={() => resolveApproval(a, 'reject')}>REJECT</button>
                     <button className="btn ghost sm">DEFER</button>
                     <button className="btn ghost sm" style={{ marginLeft: 'auto' }}>OPEN IN CHAT →</button>
                   </div>

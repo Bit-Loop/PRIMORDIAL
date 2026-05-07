@@ -28,4 +28,4 @@ where = ["."]
 include = ["primordial*"]
 
 [tool.setuptools.package-data]
-primordial = ["core/web/static/*"]
+primordial = ["core/web/static/*", "core/web/static/assets/*"]

@@ -100,6 +100,7 @@ function FlagToggle({ k, v }) {
 }
 
 function PairChat() {
+  const API = window.PD_API || {};
   const [msgs, setMsgs] = useStateP([
     { who: 'system', t: '14:02:11', text: 'Pair session active · pirate.htb · recon phase' },
     { who: 'agent', t: '14:02:12', text: '**Current state:** Recon is 60% complete. Two major attack surfaces active: AD/LDAP (6 naming contexts) and Tomcat :8443.\n\n**Recommended next step:** Validate Tomcat manager credentials before advancing to exploitation phase. Evidence is sufficient for a scoped single-request check.' },
@@ -115,9 +116,18 @@ function PairChat() {
     setInput('');
     const t = new Date().toTimeString().slice(0, 8);
     setMsgs(m => [...m, { who: 'me', t, text: v }]);
-    window.setTimeout(() => {
-      setMsgs(m => [...m, { who: 'agent', t: new Date().toTimeString().slice(0, 8), text: `Working with current evidence and methodology state...\n\n→ Pulling relevant evidence from DB\n→ Cross-referencing against current phase exit conditions\n→ Draft recommendation queued` }]);
-    }, 600);
+    if (API.post) {
+      API.post('/api/chat', { message: v })
+        .then(payload => {
+          const reply = payload?.result?.chat?.answer?.body || 'Runtime chat updated.';
+          setMsgs(m => [...m, { who: 'agent', t: new Date().toTimeString().slice(0, 8), text: reply }]);
+        })
+        .catch(err => setMsgs(m => [...m, { who: 'system', t: new Date().toTimeString().slice(0, 8), text: err.message || String(err) }]));
+    } else {
+      window.setTimeout(() => {
+        setMsgs(m => [...m, { who: 'agent', t: new Date().toTimeString().slice(0, 8), text: `Working with current evidence and methodology state...\n\n→ Pulling relevant evidence from DB\n→ Cross-referencing against current phase exit conditions\n→ Draft recommendation queued` }]);
+      }, 600);
+    }
   };
 
   const suggestions = [

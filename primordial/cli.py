@@ -32,7 +32,9 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("compact", help="Run one memory compaction cycle.")
     subparsers.add_parser("process-queues", help="Process Notion and Discord queues.")
     subparsers.add_parser("tui", help="Launch the Textual UI or terminal fallback.")
-    subparsers.add_parser("gui", help="Launch the local desktop launcher.")
+    gui = subparsers.add_parser("gui", help="Launch the web control console.")
+    gui.add_argument("--host", default="127.0.0.1")
+    gui.add_argument("--port", type=int, default=1337)
     web = subparsers.add_parser("web", help="Launch the HTML5 web control console.")
     web.add_argument("--host", default="127.0.0.1")
     web.add_argument("--port", type=int, default=1337)
@@ -365,11 +367,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if command == "tui":
             return launch_tui(runtime)
-        if command == "gui":
-            from primordial.gui.launcher import launch_local_gui
-
-            return launch_local_gui(runtime)
-        if command == "web":
+        if command in {"gui", "web"}:
             serve_web_console(runtime, host=args.host, port=args.port)
             return 0
 

@@ -45,7 +45,7 @@ function ApprovalPaneInChat({ approval, onResolve }) {
   );
 }
 
-function ChatPane({ title, kind, messages, setMessages, approval, model, onResolve }) {
+function ChatPane({ title, kind, messages, setMessages, approval, model, onResolve, onSend }) {
   const [input, setInput] = useStateC('');
   const scrollRef = useRefC(null);
 
@@ -60,7 +60,17 @@ function ChatPane({ title, kind, messages, setMessages, approval, model, onResol
     const next = [...messages, { who: 'me', t, text: v }];
     setMessages(next);
     setInput('');
-    // simulate agent reply
+    if (onSend) {
+      onSend(v)
+        .then(reply => {
+          if (!reply) return;
+          setMessages(m => [...m, { who: 'agent', t: new Date().toTimeString().slice(0, 8), text: reply }]);
+        })
+        .catch(err => {
+          setMessages(m => [...m, { who: 'system', t: new Date().toTimeString().slice(0, 8), text: err.message || String(err) }]);
+        });
+      return;
+    }
     window.setTimeout(() => {
       const reply = kind === 'approval'
         ? `Acknowledged. Will scope the action to: ${v}. Holding for explicit APPROVE/REJECT.`
@@ -137,11 +147,19 @@ function ChatPane({ title, kind, messages, setMessages, approval, model, onResol
 
 function ChatMode() {
   const D = window.PD_DATA;
+  const API = window.PD_API || {};
   const [approvalChat, setApprovalChat] = useStateC(D.approvalChat);
   const [inquiryChat, setInquiryChat] = useStateC(D.inquiryChat);
   const [activeAp, setActiveAp] = useStateC(D.approvals[0]);
   const [resolved, setResolved] = useStateC({});
   const [layout, setLayout] = useStateC('split'); // split | approval-focus | inquiry-focus
+
+  useEffectC(() => {
+    setApprovalChat(D.approvalChat);
+    setInquiryChat(D.inquiryChat);
+    setActiveAp(current => current && D.approvals.find(a => a.id === current.id) ? current : D.approvals[0]);
+    setResolved({});
+  }, [D.approvalChat, D.inquiryChat, D.approvals]);
 
   const resolveApproval = (verdict) => {
     if (!activeAp) return;
@@ -153,9 +171,19 @@ function ChatMode() {
         ? `✓ APPROVED · ${activeAp.id} released to runtime. Task ${activeAp.task} resumed under bounded limits.`
         : `✗ REJECTED · ${activeAp.id} blocked. Verifier will record reason and avoid the same path.`
     }]);
+    const endpoint = verdict === 'approve' ? '/api/actions/approve' : '/api/actions/deny';
+    API.post?.(endpoint, { task_id: activeAp.task || activeAp.id }).catch(err => {
+      setApprovalChat(m => [...m, { who: 'system', t: new Date().toTimeString().slice(0, 8), text: err.message || String(err) }]);
+    });
     // advance to next pending approval
     const remaining = D.approvals.filter(a => !resolved[a.id] && a.id !== activeAp.id);
     if (remaining.length) setActiveAp(remaining[0]); else setActiveAp(null);
+  };
+
+  const askRuntime = async (message) => {
+    const payload = await API.post?.('/api/chat', { message });
+    const answer = payload?.result?.chat?.answer?.body || payload?.result?.chat?.error;
+    return answer || 'Runtime chat updated.';
   };
 
   const queue = D.approvals.filter(a => !resolved[a.id]);
@@ -235,6 +263,7 @@ function ChatMode() {
                 approval={activeAp}
                 model="local-deep · deepseek-r1:8b"
                 onResolve={resolveApproval}
+                onSend={async (message) => `Approval note recorded locally: ${message}`}
               />
             </div>
           )}
@@ -254,6 +283,7 @@ function ChatMode() {
                 setMessages={setInquiryChat}
                 approval={null}
                 model="local-deep · deepseek-r1:8b"
+                onSend={askRuntime}
               />
             </div>
           )}

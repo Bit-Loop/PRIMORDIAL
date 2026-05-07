@@ -850,10 +850,78 @@ function Globe3D({ pins = [], traces = [], onClickPin, selectedId, framework = '
       ctx.shadowBlur=0;
 
       // Crosshair reference lines
-      ctx.strokeStyle='rgba(42,161,152,0.1)'; ctx.lineWidth=0.5; ctx.setLineDash([3,8]);
+      ctx.strokeStyle='rgba(42,161,152,0.08)'; ctx.lineWidth=0.5; ctx.setLineDash([3,8]);
       ctx.beginPath(); ctx.moveTo(cx,cy-R*1.15); ctx.lineTo(cx,cy+R*1.15); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(cx-R*1.15,cy); ctx.lineTo(cx+R*1.15,cy); ctx.stroke();
       ctx.setLineDash([]);
+
+      // ── CLUSTER FAN-OUT OVERLAY ──
+      const cl = clusterRef.current;
+      if (cl && cl.pins.length > 0) {
+        const rowH = 22, padX = 10, padY = 8;
+        const panW = 200, panH = cl.pins.length * rowH + padY * 2;
+        // keep panel on screen
+        const panX = Math.min(cl.px + 18, W - panW - 8);
+        const panY = Math.max(8, Math.min(cl.py - panH/2, H - panH - 8));
+
+        // draw connecting lines first (behind panel)
+        cl.pins.forEach(({pin, sx: psx, psy: ppsy}, i) => {
+          const ey = panY + padY + i * rowH + rowH * 0.5;
+          const entryX = panX;
+          const pc = PIN_COL[pin.kind] || '#2aa198';
+          ctx.beginPath();
+          ctx.moveTo(psx, ppsy);
+          ctx.bezierCurveTo(psx + (entryX - psx) * 0.45, ppsy, psx + (entryX - psx) * 0.55, ey, entryX, ey);
+          ctx.strokeStyle = pc + '70';
+          ctx.lineWidth = 1;
+          ctx.setLineDash([3, 4]);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          // dot at globe origin
+          ctx.beginPath(); ctx.arc(psx, ppsy, 3, 0, Math.PI*2);
+          ctx.fillStyle = pc; ctx.shadowColor = pc; ctx.shadowBlur = 6; ctx.fill(); ctx.shadowBlur = 0;
+        });
+
+        // panel background + border
+        ctx.fillStyle = 'rgba(0,6,14,0.94)';
+        ctx.fillRect(panX, panY, panW, panH);
+        ctx.strokeStyle = 'rgba(42,161,152,0.55)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(panX, panY, panW, panH);
+        // CP2077 corner ticks
+        const tk = 8;
+        [
+          [panX, panY, 1, 1], [panX+panW, panY, -1, 1],
+          [panX, panY+panH, 1, -1], [panX+panW, panY+panH, -1, -1],
+        ].forEach(([bx,by,dx,dy]) => {
+          ctx.beginPath(); ctx.moveTo(bx+dx*tk,by); ctx.lineTo(bx,by); ctx.lineTo(bx,by+dy*tk); ctx.stroke();
+        });
+
+        // rows
+        cl.pins.forEach(({pin}, i) => {
+          const ry = panY + padY + i * rowH;
+          const pc = PIN_COL[pin.kind] || '#2aa198';
+          // row separator
+          if (i > 0) { ctx.strokeStyle='rgba(42,161,152,0.15)'; ctx.lineWidth=0.5; ctx.beginPath(); ctx.moveTo(panX+4,ry); ctx.lineTo(panX+panW-4,ry); ctx.stroke(); }
+          // kind dot
+          ctx.beginPath(); ctx.arc(panX+padX+4, ry+rowH*0.5, 4, 0, Math.PI*2);
+          ctx.fillStyle = pc; ctx.shadowColor = pc; ctx.shadowBlur = 5; ctx.fill(); ctx.shadowBlur = 0;
+          // label
+          ctx.font = 'bold 10px JetBrains Mono,monospace';
+          ctx.fillStyle = '#c8d8d6';
+          ctx.fillText(pin.label, panX+padX+14, ry+rowH*0.5+4);
+          // kind badge
+          ctx.font = '8px JetBrains Mono,monospace';
+          ctx.fillStyle = pc + 'aa';
+          const kw = ctx.measureText(pin.kind).width;
+          ctx.fillText(pin.kind, panX+panW-padX-kw, ry+rowH*0.5+3);
+        });
+
+        // close button hint
+        ctx.font = '8px JetBrains Mono,monospace';
+        ctx.fillStyle = 'rgba(42,161,152,0.45)';
+        ctx.fillText('[ESC]', panX + panW - 32, panY + 9);
+      }
 
       raf = requestAnimationFrame(draw);
     }
@@ -861,6 +929,12 @@ function Globe3D({ pins = [], traces = [], onClickPin, selectedId, framework = '
     draw();
     return () => cancelAnimationFrame(raf);
   }, [pins, traces]);
+
+  useEffectM(() => {
+    const onKey = (e) => { if(e.key==='Escape') clusterRef.current=null; };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   const onDown = (e) => { const s=S.current; s.dragging=true; s.lastX=e.clientX; s.lastY=e.clientY; };
   const onMove = (e) => {
@@ -870,25 +944,44 @@ function Globe3D({ pins = [], traces = [], onClickPin, selectedId, framework = '
     s.lastX=e.clientX; s.lastY=e.clientY;
   };
   const onUp = () => { S.current.dragging=false; };
-  const onWheel = (e) => { e.preventDefault(); S.current.zoom=Math.max(0.5,Math.min(2.8,S.current.zoom-e.deltaY*0.001)); };
+  const onWheel = (e) => { e.preventDefault(); S.current.zoom=Math.max(0.3,Math.min(6.0,S.current.zoom-e.deltaY*0.001)); };
   const onClick = (e) => {
-    if(!onClickPin)return;
     const canvas=canvasRef.current, rect=canvas.getBoundingClientRect();
     const mx=e.clientX-rect.left, my=e.clientY-rect.top;
     const cx=canvas.width/2, cy=canvas.height/2, R=Math.min(canvas.width,canvas.height)*0.37*S.current.zoom;
     const {rotX,rotY}=S.current;
-    let best=null, bestD=16;
+    const fov=R*3.2;
+
+    // dismiss cluster if clicking outside it
+    const cl=clusterRef.current;
+    if(cl){
+      const panW=200, panH=cl.pins.length*22+16;
+      const panX=Math.min(cl.px+18,canvas.width-panW-8);
+      const panY=Math.max(8,Math.min(cl.py-panH/2,canvas.height-panH-8));
+      if(mx>=panX&&mx<=panX+panW&&my>=panY&&my<=panY+panH)return; // click inside panel
+      clusterRef.current=null; return;
+    }
+
+    // project all visible pins to screen coords
+    const projected=[];
     pins.forEach(pin=>{
       const phi=(90-pin.lat)*Math.PI/180, th=(pin.lon+180)*Math.PI/180;
       let x=R*Math.sin(phi)*Math.cos(th), y=R*Math.cos(phi), z=R*Math.sin(phi)*Math.sin(th);
       const cY=Math.cos(rotY),sY=Math.sin(rotY); [x,z]=[x*cY+z*sY,-x*sY+z*cY];
       const cX=Math.cos(rotX),sX=Math.sin(rotX); [y,z]=[y*cX-z*sX,y*sX+z*cX];
       if(z<=-R*0.92)return;
-      const sc=700/(700+z+R*0.05);
-      const d=Math.hypot(mx-(cx+x*sc), my-(cy-y*sc));
-      if(d<bestD){bestD=d;best=pin;}
+      const sc=fov/(fov+z);
+      const sx=cx+x*sc, sy=cy-y*sc;
+      const d=Math.hypot(mx-sx, my-sy);
+      projected.push({pin, sx, psy:sy, d});
     });
-    if(best)onClickPin(best);
+
+    const THRESHOLD=20;
+    const nearby=projected.filter(p=>p.d<THRESHOLD);
+    if(nearby.length===0)return;
+    if(nearby.length===1){ onClickPin&&onClickPin(nearby[0].pin); return; }
+    // cluster — fan out
+    clusterRef.current={ pins:nearby, px:mx, py:my };
   };
 
   return (

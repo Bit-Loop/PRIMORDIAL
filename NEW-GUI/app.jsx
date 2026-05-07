@@ -1,5 +1,5 @@
 /* global React, ReactDOM, DashboardMode, TraceMode, ChatMode, PlanMode, NotesMode, InterestsMode, CaidoMode, Rail */
-const { useState: useStateApp } = React;
+const { useState: useStateApp, useEffect: useEffectApp, useMemo: useMemoApp, useCallback: useCallbackApp } = React;
 
 const TWEAKS = /*EDITMODE-BEGIN*/{
   "accent": "cyan",
@@ -10,9 +10,161 @@ const TWEAKS = /*EDITMODE-BEGIN*/{
   "cyberpunk": true
 }/*EDITMODE-END*/;
 
+const EMPTY_PD_DATA = {
+  mode: 'real',
+  runtime: {
+    autonomy: 'assisted', intent: 'recon_only', health: 'LOADING', uptime: 'live',
+    cpu: 0, gpu: 0, mem: 0, diskWrites: 0, netIn: '0 B/s', netOut: '0 B/s',
+    activeTasks: 0, queued: 0, approvals: 0,
+    executionMode: { mode: 'tick', interval_seconds: 30, available_modes: ['tick', 'continuous'] },
+    runtimeTuning: {
+      gpu_ai_timeout_seconds: 120, cpu_ai_timeout_seconds: 300, stale_run_timeout_seconds: 3600,
+      min_free_cpu_ram_mb: 2048, min_free_gpu_ram_mb: 368,
+    },
+    operatorIntent: { active: { id: 'recon_only', label: 'Recon Only', policy: {} }, intents: [] },
+    workStatus: { counts: { active: 0, queued: 0, waiting: 0 }, summary: 'Loading runtime state.' },
+  },
+  models: [],
+  modelPayload: { available_models: [], roles: [], ollama: {} },
+  tasks: [],
+  approvals: [],
+  events: [],
+  scope: [],
+  scopePayload: { targets: [], totals: {} },
+  graph: { nodes: [], edges: [] },
+  traces: [{ id: 'tr_root', kind: 'workflow.runtime', status: 'queued', time: 'live', summary: 'No trace data yet.', children: [] }],
+  geo: { pins: [], traces: [], asns: [] },
+  plan: {
+    methodology: { id: 'runtime', label: 'Runtime', description: '', phases: [] },
+    intent: { id: 'recon_only', label: 'Recon Only', flags: {} },
+    autonomy: 'assisted',
+    autonomyModes: ['assisted', 'supervised', 'supervised_auto', 'high_autonomy'],
+    pinnedAssets: [],
+    playbooks: [],
+    skills: [],
+    criticalThinking: [],
+  },
+  notes: { targets: [], syncStatus: { ok: false, lastSync: 'never', pendingJobs: 0, failedJobs: 0 }, folders: [], pages: {} },
+  interests: { surfaces: [], findings: [], pocs: [], artifacts: [] },
+  caido: { connection: { configured: false, ok: false }, requests: [], replays: [], savedFilters: [] },
+  approvalChat: [],
+  inquiryChat: [],
+  signals: [],
+  credentials: { services: {} },
+};
+
+function mergePDData(payload) {
+  const next = { ...EMPTY_PD_DATA, ...(payload || {}) };
+  next.runtime = { ...EMPTY_PD_DATA.runtime, ...(payload?.runtime || {}) };
+  next.runtime.executionMode = { ...EMPTY_PD_DATA.runtime.executionMode, ...(payload?.runtime?.executionMode || {}) };
+  next.runtime.runtimeTuning = { ...EMPTY_PD_DATA.runtime.runtimeTuning, ...(payload?.runtime?.runtimeTuning || {}) };
+  next.runtime.operatorIntent = { ...EMPTY_PD_DATA.runtime.operatorIntent, ...(payload?.runtime?.operatorIntent || {}) };
+  next.runtime.workStatus = { ...EMPTY_PD_DATA.runtime.workStatus, ...(payload?.runtime?.workStatus || {}) };
+  next.graph = { ...EMPTY_PD_DATA.graph, ...(payload?.graph || {}) };
+  next.geo = { ...EMPTY_PD_DATA.geo, ...(payload?.geo || {}) };
+  next.plan = { ...EMPTY_PD_DATA.plan, ...(payload?.plan || {}) };
+  next.plan.methodology = { ...EMPTY_PD_DATA.plan.methodology, ...(payload?.plan?.methodology || {}) };
+  next.plan.intent = { ...EMPTY_PD_DATA.plan.intent, ...(payload?.plan?.intent || {}) };
+  next.notes = { ...EMPTY_PD_DATA.notes, ...(payload?.notes || {}) };
+  next.notes.syncStatus = { ...EMPTY_PD_DATA.notes.syncStatus, ...(payload?.notes?.syncStatus || {}) };
+  next.interests = { ...EMPTY_PD_DATA.interests, ...(payload?.interests || {}) };
+  next.caido = { ...EMPTY_PD_DATA.caido, ...(payload?.caido || {}) };
+  return next;
+}
+
+async function apiRequest(path, options = {}) {
+  const init = {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(options.headers || {}),
+    },
+  };
+  if (init.body && typeof init.body !== 'string') init.body = JSON.stringify(init.body);
+  const response = await fetch(path, init);
+  const text = await response.text();
+  const payload = text ? JSON.parse(text) : {};
+  if (!response.ok) throw new Error(payload.error || `${response.status} ${response.statusText}`);
+  return payload;
+}
+
 function App() {
   const [mode, setMode] = useStateApp('trace');
   const [tweaks, setTweak] = window.useTweaks ? window.useTweaks(TWEAKS) : [TWEAKS, () => {}];
+  const [demo, setDemo] = useStateApp(() => new URLSearchParams(window.location.search).get('demo') === '1');
+  const [data, setData] = useStateApp(() => mergePDData(demo ? window.PD_DEMO_DATA : window.__PD_BOOTSTRAP));
+  const [error, setError] = useStateApp('');
+  const [busy, setBusy] = useStateApp('');
+
+  const loadReal = useCallbackApp(async () => {
+    setBusy('refresh');
+    try {
+      const payload = await apiRequest('/api/control-plane');
+      const merged = mergePDData(payload);
+      window.PD_DATA = merged;
+      setData(merged);
+      setError('');
+    } catch (err) {
+      setError(err.message || String(err));
+    } finally {
+      setBusy('');
+    }
+  }, []);
+
+  const applyDemo = useCallbackApp(() => {
+    const merged = mergePDData(window.PD_DEMO_DATA);
+    window.PD_DATA = merged;
+    setData(merged);
+    setError('');
+  }, []);
+
+  useEffectApp(() => {
+    if (demo) applyDemo();
+    else loadReal();
+  }, [demo, applyDemo, loadReal]);
+
+  const api = useMemoApp(() => ({
+    demo,
+    busy,
+    refresh: () => demo ? applyDemo() : loadReal(),
+    request: apiRequest,
+    action: async (name, body = {}) => {
+      if (demo) return { ok: true, demo: true };
+      setBusy(name);
+      try {
+        const payload = await apiRequest(`/api/actions/${name}`, { method: 'POST', body });
+        await loadReal();
+        return payload;
+      } finally {
+        setBusy('');
+      }
+    },
+    post: async (path, body = {}) => {
+      if (demo) return { ok: true, demo: true };
+      setBusy(path);
+      try {
+        const payload = await apiRequest(path, { method: 'POST', body });
+        await loadReal();
+        return payload;
+      } finally {
+        setBusy('');
+      }
+    },
+    delete: async (path) => {
+      if (demo) return { ok: true, demo: true };
+      setBusy(path);
+      try {
+        const payload = await apiRequest(path, { method: 'DELETE' });
+        await loadReal();
+        return payload;
+      } finally {
+        setBusy('');
+      }
+    },
+  }), [demo, busy, applyDemo, loadReal]);
+
+  window.PD_DATA = data;
+  window.PD_API = api;
 
   // apply accent live
   React.useEffect(() => {
@@ -56,6 +208,12 @@ function App() {
     <>
       <Rail mode={mode} setMode={setMode} />
       <div className="mode" data-screen-label={mode}>
+        <div className="pd-live-switch">
+          <button className={`btn sm ${!demo ? 'primary' : 'ghost'}`} onClick={() => setDemo(false)}>REAL</button>
+          <button className={`btn sm ${demo ? 'primary' : 'ghost'}`} onClick={() => setDemo(true)}>DEMO</button>
+          <button className="btn ghost sm" onClick={() => api.refresh()} disabled={!!busy}>{busy ? 'WORKING' : 'REFRESH'}</button>
+          {error && <span className="pd-error mono">{error}</span>}
+        </div>
         {mode === 'dashboard' && <DashboardMode tweaks={tweaks} />}
         {mode === 'trace'     && <TraceMode     tweaks={tweaks} />}
         {mode === 'chat'      && <ChatMode      tweaks={tweaks} />}
