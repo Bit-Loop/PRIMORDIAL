@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Callable, Protocol
 
 from primordial.core.config import AutonomySettings
+from primordial.core.domain.constants import AD_INDICATOR_PORTS, DNS_PORTS, REMOTE_ADMIN_PORTS
 from primordial.core.domain.enums import (
     AgentRole,
     CheckpointKind,
@@ -738,11 +739,14 @@ class WorkflowOrchestrator:
             and bool(password.get("configured"))
         )
 
+    def _profile_allows_task(self, target: Target, task_kind_value: str) -> bool:
+        allowed = self.autonomy.profile_task_allowlist.get(target.profile.value, frozenset())
+        return task_kind_value in allowed
+
     def _target_has_remote_admin_surface(self, evidence) -> bool:
-        remote_ports = {445, 5985, 5986, 3389}
         for item in evidence:
             for service in item.metadata.get("open_services", []):
-                if isinstance(service, dict) and int(service.get("port", 0) or 0) in remote_ports:
+                if isinstance(service, dict) and int(service.get("port", 0) or 0) in REMOTE_ADMIN_PORTS:
                     return True
         return False
 
@@ -803,7 +807,7 @@ class WorkflowOrchestrator:
         return {"accepted": accepted[:8], "rejected": rejected[:8]}
 
     def _should_plan_service_discovery(self, target: Target) -> bool:
-        if target.profile.value != "hack_the_box" and not target.metadata.get("allow_service_discovery"):
+        if not self._profile_allows_task(target, "service_discovery") and not target.metadata.get("allow_service_discovery"):
             return False
         for evidence in self.store.list_evidence(target_id=target.id, limit=200):
             if evidence.metadata.get("kind") == "tcp_service_discovery" and self._evidence_matches_active_generation(target, evidence):
@@ -811,7 +815,7 @@ class WorkflowOrchestrator:
         return True
 
     def _should_plan_ad_enumeration(self, target: Target) -> bool:
-        if target.profile.value != "hack_the_box" and not target.metadata.get("allow_ad_enumeration"):
+        if not self._profile_allows_task(target, "ad_enumeration") and not target.metadata.get("allow_ad_enumeration"):
             return False
         service_evidence = [
             evidence
@@ -830,10 +834,10 @@ class WorkflowOrchestrator:
             for service in evidence.metadata.get("open_services", [])
             if isinstance(service, dict)
         }
-        return bool(open_ports.intersection({88, 135, 139, 389, 445, 464, 593, 636, 3268, 3269}))
+        return bool(open_ports.intersection(AD_INDICATOR_PORTS))
 
     def _should_plan_dns_enumeration(self, target: Target) -> bool:
-        if target.profile.value != "hack_the_box" and not target.metadata.get("allow_dns_enumeration"):
+        if not self._profile_allows_task(target, "dns_enumeration") and not target.metadata.get("allow_dns_enumeration"):
             return False
         service_evidence = [
             evidence
@@ -848,12 +852,12 @@ class WorkflowOrchestrator:
                 return False
         for evidence in service_evidence:
             for service in evidence.metadata.get("open_services", []):
-                if isinstance(service, dict) and int(service.get("port", 0)) == 53:
+                if isinstance(service, dict) and int(service.get("port", 0)) in DNS_PORTS:
                     return True
         return False
 
     def _should_plan_web_content_discovery(self, target: Target) -> bool:
-        if target.profile.value != "hack_the_box" and not target.metadata.get("allow_content_discovery"):
+        if not self._profile_allows_task(target, "web_content_discovery") and not target.metadata.get("allow_content_discovery"):
             return False
         evidence = self.store.list_evidence(target_id=target.id, limit=200)
         if any(
@@ -873,7 +877,7 @@ class WorkflowOrchestrator:
         return False
 
     def _should_plan_exploit_research(self, target: Target) -> bool:
-        if target.profile.value != "hack_the_box" and not target.metadata.get("allow_exploit_research"):
+        if not self._profile_allows_task(target, "exploit_research") and not target.metadata.get("allow_exploit_research"):
             return False
         evidence = self.store.list_evidence(target_id=target.id, limit=200)
         if any(
@@ -894,7 +898,7 @@ class WorkflowOrchestrator:
         )
 
     def _should_plan_poc_applicability_validation(self, target: Target) -> bool:
-        if target.profile.value != "hack_the_box" and not target.metadata.get("allow_poc_applicability_validation"):
+        if not self._profile_allows_task(target, "poc_applicability_validation") and not target.metadata.get("allow_poc_applicability_validation"):
             return False
         evidence = self.store.list_evidence(target_id=target.id, limit=200)
         has_research = any(
@@ -912,7 +916,7 @@ class WorkflowOrchestrator:
         )
 
     def _should_plan_kerberos_user_discovery(self, target: Target) -> bool:
-        if target.profile.value != "hack_the_box" and not target.metadata.get("allow_kerberos_user_discovery"):
+        if not self._profile_allows_task(target, "kerberos_user_discovery") and not target.metadata.get("allow_kerberos_user_discovery"):
             return False
         evidence = self.store.list_evidence(target_id=target.id, limit=200)
         if any(
@@ -927,7 +931,7 @@ class WorkflowOrchestrator:
         )
 
     def _should_plan_kerberos_attack_check(self, target: Target) -> bool:
-        if target.profile.value != "hack_the_box" and not target.metadata.get("allow_kerberos_attack_check"):
+        if not self._profile_allows_task(target, "kerberos_attack_check") and not target.metadata.get("allow_kerberos_attack_check"):
             return False
         evidence = self.store.list_evidence(target_id=target.id, limit=200)
         if any(
@@ -950,7 +954,7 @@ class WorkflowOrchestrator:
         return False
 
     def _should_plan_credentialed_access_check(self, target: Target) -> bool:
-        if target.profile.value != "hack_the_box" and not target.metadata.get("allow_credentialed_access_check"):
+        if not self._profile_allows_task(target, "credentialed_access_check") and not target.metadata.get("allow_credentialed_access_check"):
             return False
         evidence = self.store.list_evidence(target_id=target.id, limit=200)
         if any(

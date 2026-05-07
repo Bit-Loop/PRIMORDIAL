@@ -17,6 +17,11 @@ import xml.etree.ElementTree as ET
 
 from primordial.core.config import AppConfig
 from primordial.core.credentials import CredentialStore
+from primordial.core.domain.constants import (
+    REMOTE_ADMIN_PORTS,
+    SERVICE_DISCOVERY_PORTS,
+    SERVICE_NAME_BY_PORT,
+)
 from primordial.core.domain.enums import (
     AgentRole,
     ArtifactKind,
@@ -61,82 +66,8 @@ DISCOVERY_PATHS = (
     "/admin",
     "/api/",
 )
-SERVICE_DISCOVERY_PORTS = (
-    21,
-    22,
-    25,
-    53,
-    80,
-    88,
-    110,
-    111,
-    135,
-    139,
-    143,
-    389,
-    443,
-    445,
-    464,
-    593,
-    636,
-    1433,
-    2049,
-    3268,
-    3269,
-    3306,
-    3389,
-    5000,
-    5985,
-    5986,
-    8000,
-    8080,
-    8443,
-    8888,
-    10000,
-    47001,
-    49152,
-    49153,
-    49154,
-    49155,
-    49156,
-    49157,
-)
-SERVICE_NAME_BY_PORT = {
-    21: "ftp",
-    22: "ssh",
-    25: "smtp",
-    53: "dns",
-    80: "http",
-    88: "kerberos",
-    110: "pop3",
-    111: "rpcbind",
-    135: "msrpc",
-    139: "netbios-ssn",
-    143: "imap",
-    389: "ldap",
-    443: "https",
-    445: "smb",
-    464: "kpasswd",
-    593: "http-rpc-epmap",
-    636: "ldaps",
-    1433: "mssql",
-    2049: "nfs",
-    3268: "global-catalog",
-    3269: "global-catalog-ssl",
-    3306: "mysql",
-    3389: "rdp",
-    5000: "http-alt",
-    5985: "winrm-http",
-    5986: "winrm-https",
-    8000: "http-alt",
-    8080: "http-alt",
-    8443: "https-alt",
-    8888: "http-alt",
-    10000: "webmin",
-    47001: "winrm",
-}
-REMOTE_ADMIN_PORTS = {21, 22, 445, 1433, 2049, 3306, 3389, 5985, 5986}
-CONTENT_DISCOVERY_WORDLIST = "/usr/share/wfuzz/wordlists/general/common.txt"
+# SERVICE_DISCOVERY_PORTS, SERVICE_NAME_BY_PORT, REMOTE_ADMIN_PORTS are
+# imported from primordial.core.domain.constants — edit them there, not here.
 CONTENT_DISCOVERY_EXTENSIONS = ("", ".aspx", ".asp", ".txt", ".config", ".html")
 CONTENT_DISCOVERY_INTERESTING_STATUS = {200, 204, 301, 302, 307, 308, 401, 403}
 EXPLOIT_RESEARCH_SUPPRESSED_TERMS = (
@@ -227,6 +158,12 @@ class PrimitiveExecutor:
                 selected.setdefault(manifest.name, manifest)
         return list(selected.values())
 
+    def _manifest_timeout(self, task: Task, fallback: int) -> int:
+        primitives = self.resolve_primitives(task)
+        if primitives:
+            return primitives[0].timeout_seconds
+        return fallback
+
     def _handle_recon_scan(self, task: Task, context: ContextSlice) -> TaskExecutionResult:
         result = TaskExecutionResult(summary="recon scan completed")
         target = self.store.get_target(task.target_id)
@@ -311,8 +248,8 @@ class PrimitiveExecutor:
                         "paths": content_paths,
                         "parameters": self._extract_query_parameter_names(probe["page_links"]),
                         "auth_surfaces": sorted(auth_candidates),
-                        "scripts": probe["scripts"][:20],
-                        "forms": probe["forms"][:20],
+                        "scripts": probe["scripts"][:self.config.max_evidence_items],
+                        "forms": probe["forms"][:self.config.max_evidence_items],
                         "resolved_ips": probe["resolved_ips"],
                         "headers": probe["headers"],
                     },
@@ -402,7 +339,7 @@ class PrimitiveExecutor:
             return result
 
         ports = self._service_discovery_ports(target.metadata)
-        scan = self._scan_tcp_services(hosts, ports)
+        scan = self._scan_tcp_services(hosts, ports, timeout_seconds=self._manifest_timeout(task, 90))
         open_services = scan["open_services"]
         artifact = self._write_artifact(
             task,
@@ -1372,8 +1309,8 @@ class PrimitiveExecutor:
                 freshness=0.9,
                 metadata={
                     "evidence_count": len(evidence),
-                    "observed_paths": observed_paths[:25],
-                    "observed_parameters": observed_parameters[:25],
+                    "observed_paths": observed_paths[:self.config.max_evidence_items],
+                    "observed_parameters": observed_parameters[:self.config.max_evidence_items],
                 },
             )
         )
@@ -1978,8 +1915,13 @@ class PrimitiveExecutor:
                 return parsed[:128]
         return list(SERVICE_DISCOVERY_PORTS)
 
-    def _scan_tcp_services(self, hosts: list[dict[str, str]], ports: list[int]) -> dict[str, object]:
-        host_tool_scan = self._scan_tcp_services_with_host_tools(hosts, ports)
+    def _scan_tcp_services(
+        self,
+        hosts: list[dict[str, str]],
+        ports: list[int],
+        timeout_seconds: int = 90,
+    ) -> dict[str, object]:
+        host_tool_scan = self._scan_tcp_services_with_host_tools(hosts, ports, timeout_seconds=timeout_seconds)
         if host_tool_scan is not None:
             return host_tool_scan
         return self._scan_tcp_services_with_sockets(hosts, ports)
@@ -2022,6 +1964,7 @@ class PrimitiveExecutor:
         self,
         hosts: list[dict[str, str]],
         ports: list[int],
+        timeout_seconds: int = 90,
     ) -> dict[str, object] | None:
         if shutil.which("rustscan") is None and shutil.which("nmap") is None:
             return None
@@ -2033,13 +1976,13 @@ class PrimitiveExecutor:
             host = host_entry["host"]
             host_ports = ports
             if shutil.which("rustscan") is not None:
-                rustscan_result = self._run_rustscan_ports(host, ports)
+                rustscan_result = self._run_rustscan_ports(host, ports, timeout_seconds=min(45, timeout_seconds))
                 command_results.append(rustscan_result)
                 discovered_ports = self._parse_rustscan_ports(str(rustscan_result.get("stdout", "")))
                 if discovered_ports:
                     host_ports = discovered_ports
             if shutil.which("nmap") is not None:
-                nmap_result = self._run_nmap_service_scan(host, host_ports)
+                nmap_result = self._run_nmap_service_scan(host, host_ports, timeout_seconds=timeout_seconds)
                 command_results.append(nmap_result)
                 parsed = self._parse_nmap_xml_services(str(nmap_result.get("stdout", "")), host_entry)
                 if parsed:
@@ -2069,7 +2012,7 @@ class PrimitiveExecutor:
             "command_results": command_results,
         }
 
-    def _run_rustscan_ports(self, host: str, ports: list[int]) -> dict[str, object]:
+    def _run_rustscan_ports(self, host: str, ports: list[int], timeout_seconds: int = 45) -> dict[str, object]:
         return self._run_host_command(
             tool="rustscan",
             argv=[
@@ -2085,10 +2028,10 @@ class PrimitiveExecutor:
                 "--batch-size",
                 "256",
             ],
-            timeout_seconds=45,
+            timeout_seconds=timeout_seconds,
         )
 
-    def _run_nmap_service_scan(self, host: str, ports: list[int]) -> dict[str, object]:
+    def _run_nmap_service_scan(self, host: str, ports: list[int], timeout_seconds: int = 90) -> dict[str, object]:
         return self._run_host_command(
             tool="nmap",
             argv=[
@@ -2105,7 +2048,7 @@ class PrimitiveExecutor:
                 "-",
                 host,
             ],
-            timeout_seconds=90,
+            timeout_seconds=timeout_seconds,
         )
 
     def _parse_rustscan_ports(self, stdout: str) -> list[int]:
@@ -2224,7 +2167,7 @@ class PrimitiveExecutor:
             f"Closed or filtered checks: {closed_count}",
             f"Scan errors retained: {len(errors)}",
         ]
-        for service in open_services[:20]:
+        for service in open_services[:self.config.max_evidence_items]:
             banner = f" banner={service['banner']!r}" if service.get("banner") else ""
             lines.append(f"- {service['host']}:{service['port']} -> {service['service']}{banner}")
         if not open_services:
@@ -2258,7 +2201,7 @@ class PrimitiveExecutor:
     def _content_discovery_words(self, metadata: dict[str, object]) -> list[str]:
         limit = int(metadata.get("content_word_limit", 420) or 420)
         limit = max(50, min(limit, 2000))
-        wordlist_path = str(metadata.get("content_wordlist", CONTENT_DISCOVERY_WORDLIST))
+        wordlist_path = str(metadata.get("content_wordlist", self.config.content_discovery_wordlist))
         words: list[str] = []
         try:
             with open(wordlist_path, encoding="utf-8", errors="ignore") as wordlist:
@@ -2365,8 +2308,9 @@ class PrimitiveExecutor:
     ) -> str:
         if not discovered:
             return f"Bounded web content discovery checked {len(bases)} base URL(s) with {word_count} words and found no interesting paths."
-        sample = ", ".join(f"{item['path']}({item['status_code']})" for item in discovered[:12])
-        suffix = "" if len(discovered) <= 12 else f" and {len(discovered) - 12} more"
+        n = self.config.max_evidence_items
+        sample = ", ".join(f"{item['path']}({item['status_code']})" for item in discovered[:n])
+        suffix = "" if len(discovered) <= n else f" and {len(discovered) - n} more"
         return f"Bounded web content discovery found {len(discovered)} interesting path(s): {sample}{suffix}."
 
     def _build_content_discovery_note(
@@ -2380,7 +2324,7 @@ class PrimitiveExecutor:
             f"Words checked: {word_count}",
             f"Interesting paths: {len(discovered)}",
         ]
-        for item in discovered[:30]:
+        for item in discovered[:self.config.max_evidence_items]:
             title = f" title={item['title']!r}" if item.get("title") else ""
             lines.append(f"- {item['status_code']} {item['url']} {item.get('content_type', '')}{title}")
         if not discovered:
@@ -2482,7 +2426,7 @@ class PrimitiveExecutor:
             f"AXFR success: {parsed['zone_transfer_success']}",
             f"Records parsed: {len(records)}",
         ]
-        for record in records[:24]:
+        for record in records[:self.config.max_evidence_items]:
             lines.append(f"- {record['name']} {record['type']} {record['value']}")
         lines.append("This is DNS inventory only; no exploit or credentialed action was performed.")
         return "\n".join(lines)
@@ -2791,8 +2735,8 @@ class PrimitiveExecutor:
         matches = sorted(
             matches_by_id.values(),
             key=lambda item: (-int(item.get("score", 0)), str(item.get("title", ""))),
-        )[:20]
-        suppressed = sorted(suppressed_by_id.values(), key=lambda item: str(item.get("title", "")))[:20]
+        )[:self.config.max_evidence_items]
+        suppressed = sorted(suppressed_by_id.values(), key=lambda item: str(item.get("title", "")))[:self.config.max_evidence_items]
         examples = self._examine_searchsploit_examples(matches[:4], command_results)
         return {
             "matches": matches,
@@ -3015,7 +2959,7 @@ class PrimitiveExecutor:
             f"Suppressed DoS/crash candidates: {len(suppressed)}",
             f"Example excerpts retained: {len(examples)}",
         ]
-        for match in matches[:12]:
+        for match in matches[:self.config.max_evidence_items]:
             lines.append(
                 f"- EDB {match.get('edb_id') or 'unknown'} score={match.get('score')}: {match.get('title')} [{match.get('platform')}]"
             )
@@ -3055,7 +2999,7 @@ class PrimitiveExecutor:
                     continue
                 seen.add(key)
                 candidates.append({"title": title, "source_evidence_id": item.id})
-        return candidates[:12]
+        return candidates[:self.config.max_evidence_items]
 
     def _poc_service_facts(self, service_items: list[EvidenceRecord]) -> dict[str, object]:
         services = []
@@ -3147,7 +3091,7 @@ class PrimitiveExecutor:
             f"Blocked/research-only: {sum(1 for item in classified if item['status'] != 'ready_for_review')}",
             f"Observed services considered: {len(service_facts.get('services', []))}",
         ]
-        for item in classified[:12]:
+        for item in classified[:self.config.max_evidence_items]:
             reasons = "; ".join(str(reason) for reason in item.get("reasons", []))
             lines.append(f"- {item['status']}: {item['title']} :: {reasons}")
         lines.append("No PoC was executed, no exploit code was generated, and no vulnerability was marked verified.")
@@ -3275,9 +3219,9 @@ class PrimitiveExecutor:
             f"RPC users parsed: {len(users)}",
             f"RPC groups parsed: {len(groups)}",
         ]
-        for share in shares[:12]:
+        for share in shares[:self.config.max_evidence_items]:
             lines.append(f"- share {share['name']} ({share.get('type', 'unknown')}): {share.get('comment', '')}")
-        for user in users[:12]:
+        for user in users[:self.config.max_evidence_items]:
             lines.append(f"- user {user['name']} rid={user['rid']}")
         lines.append("This is anonymous inventory only; no credential use or exploit step was performed.")
         return "\n".join(lines)
@@ -3453,9 +3397,9 @@ class PrimitiveExecutor:
             f"Users discovered: {len(users)}",
             f"SPN candidates: {len(spns)}",
         ]
-        for user in users[:20]:
+        for user in users[:self.config.max_evidence_items]:
             lines.append(f"- user {user.get('username')} source={user.get('source')}")
-        for spn in spns[:12]:
+        for spn in spns[:self.config.max_evidence_items]:
             lines.append(f"- spn {spn['username']}: {spn['spn']}")
         lines.append("No password spraying, cracking, or exploit execution was performed.")
         return "\n".join(lines)
@@ -3577,9 +3521,9 @@ class PrimitiveExecutor:
         ]
         for result in command_results:
             lines.append(f"- {result['tool']} executed={result['executed']} rc={result['returncode']} timeout={result['timeout']}")
-        for item in asrep_hashes[:8]:
+        for item in asrep_hashes[:self.config.max_evidence_items]:
             lines.append(f"- AS-REP candidate {item.get('username') or 'unknown'}")
-        for item in spn_candidates[:8]:
+        for item in spn_candidates[:self.config.max_evidence_items]:
             lines.append(f"- SPN candidate {item['username']}: {item['spn']}")
         return "\n".join(lines)
 
@@ -3838,9 +3782,9 @@ class PrimitiveExecutor:
             "content_type": content_type,
             "headers": headers,
             "title": parser.title,
-            "page_links": parser.links[:50],
-            "scripts": parser.scripts[:50],
-            "forms": parser.forms[:25],
+            "page_links": parser.links[:self.config.max_evidence_items],
+            "scripts": parser.scripts[:self.config.max_evidence_items],
+            "forms": parser.forms[:self.config.max_evidence_items],
             "resolved_ips": resolved_ips,
             "discovery_results": discovery_results,
             "ssl_verification_disabled": ssl_verification_disabled,

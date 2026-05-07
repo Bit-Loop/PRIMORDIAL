@@ -108,7 +108,7 @@ class PolicyEngine:
         if not isinstance(approval, dict):
             return None
         reviewer = str(approval.get("reviewer_agent", ""))
-        if reviewer not in {"behavior_verifier", "policy_verifier", "exploit_safety_reviewer"}:
+        if reviewer not in self.settings.approved_reviewer_agents:
             return None
         checks = {
             "approved": approval.get("approved") is True,

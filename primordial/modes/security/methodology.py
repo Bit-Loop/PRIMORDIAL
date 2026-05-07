@@ -27,14 +27,6 @@ DEFAULT_PHASE_ORDER = (
 
 
 DEFAULT_BLUEPRINTS: dict[TaskKind, TaskBlueprint] = {
-    TaskKind.IMPORT_SCOPE: TaskBlueprint(
-        phase=MethodologyPhase.RECON,
-        role=AgentRole.ORCHESTRATOR,
-        capabilities=("scope-import",),
-        risk_tier=RiskTier.LOW,
-        default_priority=100,
-        max_attempts=1,
-    ),
     TaskKind.RECON_SCAN: TaskBlueprint(
         phase=MethodologyPhase.RECON,
         role=AgentRole.RECON_WORKER,

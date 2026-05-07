@@ -5,6 +5,7 @@ from pathlib import Path
 import os
 
 from primordial.core.domain.enums import AutonomyMode
+from primordial.core.domain.constants import PROFILE_DEFAULT_TASK_ALLOWLIST
 
 
 @dataclass(slots=True)
@@ -41,6 +42,14 @@ class AutonomySettings:
     remote_premium_concurrency: int = 1
     high_risk_concurrency: int = 1
     defer_retry_seconds: int = 20
+    # Agents whose agent_safety_approval is accepted by the policy engine.
+    approved_reviewer_agents: frozenset[str] = field(
+        default_factory=lambda: frozenset({"behavior_verifier", "policy_verifier", "exploit_safety_reviewer"})
+    )
+    # Profile → task kinds that may be planned without explicit allow_* metadata.
+    profile_task_allowlist: dict[str, frozenset[str]] = field(
+        default_factory=lambda: dict(PROFILE_DEFAULT_TASK_ALLOWLIST)
+    )
 
 
 @dataclass(slots=True)
@@ -61,6 +70,12 @@ class AppConfig:
     credentials_path: Path
     topology: ModelTopology = field(default_factory=ModelTopology)
     autonomy: AutonomySettings = field(default_factory=AutonomySettings)
+    # Maximum items written into any single evidence metadata list or note body
+    # list. Increase if large targets are silently dropping evidence.
+    max_evidence_items: int = 50
+    # Wordlist used by web content discovery. Configurable so operators can
+    # substitute a custom list without code changes.
+    content_discovery_wordlist: str = "/usr/share/wfuzz/wordlists/general/common.txt"
 
     @classmethod
     def from_env(cls, project_root: Path | None = None) -> "AppConfig":
@@ -111,6 +126,11 @@ class AppConfig:
             allow_exploitative_actions=_env_bool("PRIMORDIAL_ALLOW_EXPLOITATIVE_ACTIONS", False),
             allow_agent_safety_approval=_env_bool("PRIMORDIAL_ALLOW_AGENT_SAFETY_APPROVAL", True),
         )
+        content_discovery_wordlist = os.getenv(
+            "PRIMORDIAL_CONTENT_DISCOVERY_WORDLIST",
+            "/usr/share/wfuzz/wordlists/general/common.txt",
+        )
+        max_evidence_items = int(os.getenv("PRIMORDIAL_MAX_EVIDENCE_ITEMS", "50"))
         return cls(
             project_root=root,
             runtime_dir=runtime_dir,
@@ -127,6 +147,8 @@ class AppConfig:
             secrets_dir=secrets_dir,
             credentials_path=credentials_path,
             autonomy=autonomy,
+            content_discovery_wordlist=content_discovery_wordlist,
+            max_evidence_items=max_evidence_items,
         )
 
     def ensure_directories(self) -> None:

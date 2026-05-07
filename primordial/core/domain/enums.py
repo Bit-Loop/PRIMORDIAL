@@ -52,7 +52,6 @@ class TaskRunStatus(StrEnum):
 
 
 class TaskKind(StrEnum):
-    IMPORT_SCOPE = "import_scope"
     RECON_SCAN = "recon_scan"
     SERVICE_DISCOVERY = "service_discovery"
     DNS_ENUMERATION = "dns_enumeration"
