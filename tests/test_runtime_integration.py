@@ -69,15 +69,27 @@ class RuntimeIntegrationTests(unittest.TestCase):
                 defaults["stale_run_timeout_seconds"],
                 PrimordialRuntime.DEFAULT_STALE_RUN_TIMEOUT_SECONDS,
             )
+            self.assertEqual(
+                defaults["min_free_cpu_ram_mb"],
+                PrimordialRuntime.DEFAULT_MIN_FREE_CPU_RAM_MB,
+            )
+            self.assertEqual(
+                defaults["min_free_gpu_ram_mb"],
+                PrimordialRuntime.DEFAULT_MIN_FREE_GPU_RAM_MB,
+            )
 
             updated = runtime.update_runtime_tuning(
                 cpu_ai_timeout_seconds=420,
                 gpu_ai_timeout_seconds=150,
                 stale_run_timeout_seconds=5400,
+                min_free_cpu_ram_mb=3072,
+                min_free_gpu_ram_mb=512,
             )
             self.assertEqual(updated["cpu_ai_timeout_seconds"], 420)
             self.assertEqual(updated["gpu_ai_timeout_seconds"], 150)
             self.assertEqual(updated["stale_run_timeout_seconds"], 5400)
+            self.assertEqual(updated["min_free_cpu_ram_mb"], 3072)
+            self.assertEqual(updated["min_free_gpu_ram_mb"], 512)
             self.assertEqual(runtime.workflow.stale_run_max_age_seconds, 5400)
             runtime.shutdown()
 
@@ -87,6 +99,8 @@ class RuntimeIntegrationTests(unittest.TestCase):
             self.assertEqual(persisted["cpu_ai_timeout_seconds"], 420)
             self.assertEqual(persisted["gpu_ai_timeout_seconds"], 150)
             self.assertEqual(persisted["stale_run_timeout_seconds"], 5400)
+            self.assertEqual(persisted["min_free_cpu_ram_mb"], 3072)
+            self.assertEqual(persisted["min_free_gpu_ram_mb"], 512)
             self.assertEqual(runtime_reloaded.workflow.stale_run_max_age_seconds, 5400)
             runtime_reloaded.shutdown()
 
@@ -102,11 +116,24 @@ class RuntimeIntegrationTests(unittest.TestCase):
             with patch.object(
                 runtime,
                 "_read_cpu_metrics",
-                return_value={"available": True, "percent": 12.5, "load_1": 1.23, "cpu_count": 8},
+                return_value={
+                    "available": True,
+                    "percent": 12.5,
+                    "load_1": 1.23,
+                    "cpu_count": 8,
+                    "memory_available_mb": 12345.0,
+                    "memory_total_mb": 32768.0,
+                },
             ), patch.object(
                 runtime,
                 "_read_gpu_metrics",
-                return_value={"available": True, "percent": 34.0, "memory_used_mb": 2048.0, "memory_total_mb": 8192.0},
+                return_value={
+                    "available": True,
+                    "percent": 34.0,
+                    "memory_used_mb": 2048.0,
+                    "memory_free_mb": 6144.0,
+                    "memory_total_mb": 8192.0,
+                },
             ):
                 payload = runtime.dashboard_payload()
 
@@ -114,6 +141,8 @@ class RuntimeIntegrationTests(unittest.TestCase):
             self.assertIn("system_metrics", payload)
             self.assertEqual(payload["system_metrics"]["cpu"]["percent"], 12.5)
             self.assertEqual(payload["system_metrics"]["gpu"]["percent"], 34.0)
+            self.assertEqual(payload["system_metrics"]["cpu"]["memory_available_mb"], 12345.0)
+            self.assertEqual(payload["system_metrics"]["gpu"]["memory_free_mb"], 6144.0)
             runtime.shutdown()
 
     def test_work_status_repairs_stale_active_run_state(self) -> None:
@@ -136,6 +165,7 @@ class RuntimeIntegrationTests(unittest.TestCase):
             runtime = PrimordialRuntime(config)
             runtime.initialize()
             runtime.import_scope(scope_path, ScopeProfile.HACK_THE_BOX)
+            runtime.set_operator_intent("htb_lab")
             target = runtime.store.list_targets()[0]
             task = Task(
                 target_id=target.id,
@@ -448,6 +478,7 @@ class RuntimeIntegrationTests(unittest.TestCase):
             runtime = PrimordialRuntime(config)
             runtime.initialize()
             runtime.import_scope(scope_path, ScopeProfile.HACK_THE_BOX)
+            runtime.set_operator_intent("htb_lab")
             target = runtime.store.list_targets()[0]
             runtime.store.insert_evidence(
                 EvidenceRecord(
@@ -539,6 +570,7 @@ class RuntimeIntegrationTests(unittest.TestCase):
             runtime = PrimordialRuntime(config)
             runtime.initialize()
             runtime.import_scope(scope_path, ScopeProfile.HACK_THE_BOX)
+            runtime.set_operator_intent("htb_lab")
             target = runtime.store.list_targets()[0]
             runtime.store.insert_evidence(
                 EvidenceRecord(
@@ -614,6 +646,7 @@ class RuntimeIntegrationTests(unittest.TestCase):
             )
             runtime = PrimordialRuntime(config)
             runtime.initialize()
+            runtime.set_operator_intent("htb_lab")
             runtime.import_scope(scope_path, ScopeProfile.HACK_THE_BOX)
             target = runtime.store.list_targets()[0]
             runtime.store.insert_evidence(
@@ -674,6 +707,7 @@ class RuntimeIntegrationTests(unittest.TestCase):
             config.ensure_directories()
             runtime = PrimordialRuntime(config)
             runtime.initialize()
+            runtime.set_operator_intent("exploit_research_allowed")
 
             def fake_command(_executor, *, tool: str, argv: list[str], timeout_seconds: int) -> dict[str, object]:
                 query = argv[-1]
@@ -810,6 +844,7 @@ class RuntimeIntegrationTests(unittest.TestCase):
             runtime = PrimordialRuntime(config)
             runtime.initialize()
             runtime.import_scope(scope_path, ScopeProfile.HACK_THE_BOX)
+            runtime.set_operator_intent("htb_lab")
             runtime.set_lab_credentials(username="anne", password="super-secret", domain="PIRATE")
             target = runtime.store.list_targets()[0]
             task = Task(

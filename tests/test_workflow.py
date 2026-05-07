@@ -10,6 +10,7 @@ from primordial.runtime import PrimordialRuntime
 from primordial.core.domain.enums import (
     AgentRole,
     EvidenceType,
+    EventType,
     InterestStatus,
     MethodologyPhase,
     RiskTier,
@@ -19,8 +20,9 @@ from primordial.core.domain.enums import (
     TaskStatus,
     VerificationStatus,
 )
-from primordial.core.domain.models import EvidenceRecord, Interest, Task, utc_now
+from primordial.core.domain.models import EvidenceRecord, Interest, Target, Task, utc_now
 from primordial.core.domain.models import OrchestrationReport
+from primordial.gui.launcher import launcher_target_state
 from tests.support import build_probe_fixture, write_scope_file
 
 
@@ -70,6 +72,46 @@ class WorkflowTests(unittest.TestCase):
         self.assertTrue(
             self.runtime.store.list_tasks(limit=10) or self.runtime.store.list_evidence(limit=10)
         )
+
+    def test_empty_target_handles_are_not_planned_or_selected_by_launcher(self) -> None:
+        blank = Target(handle="", display_name="", profile=ScopeProfile.HACK_THE_BOX)
+        self.runtime.store.insert_target(blank)
+
+        report = self.runtime.run_tick(max_executions=0)
+        launcher_state = launcher_target_state(self.runtime)
+
+        self.assertFalse(any(task.target_id == blank.id for task in report.created_tasks))
+        self.assertTrue(any(event.metadata.get("invalid_target") for event in report.events))
+        self.assertEqual(launcher_state["handle"], "pirate.htb")
+
+    def test_existing_pending_task_for_empty_target_is_blocked_before_execution(self) -> None:
+        blank = Target(handle="", display_name="", profile=ScopeProfile.HACK_THE_BOX)
+        self.runtime.store.insert_target(blank)
+        task = Task(
+            target_id=blank.id,
+            phase=MethodologyPhase.RECON,
+            kind=TaskKind.RECON_SCAN,
+            title="Run recon sweep",
+            summary="Invalid target fixture",
+            role=AgentRole.RECON_WORKER,
+            priority=999,
+        )
+        self.runtime.store.insert_task(task)
+
+        report = self.runtime.run_tick(max_executions=1)
+        refreshed = self.runtime.store.get_task(task.id)
+
+        self.assertEqual(refreshed.status, TaskStatus.BLOCKED)
+        self.assertTrue(refreshed.metadata["invalid_target"])
+        self.assertTrue(any(event.task_id == task.id and event.metadata.get("invalid_target") for event in report.events))
+
+    def test_runtime_rejects_empty_target_handle(self) -> None:
+        with self.assertRaises(ValueError):
+            self.runtime.update_target_fields(
+                handle="",
+                profile=ScopeProfile.HACK_THE_BOX,
+                assets=["10.129.244.220"],
+            )
 
     def test_evidence_drives_analysis_and_exploitation_planning(self) -> None:
         self.runtime.store.insert_evidence(
@@ -261,6 +303,43 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(latest_run.status, TaskRunStatus.FAILED)
         self.assertIsNotNone(latest_run.finished_at)
         self.assertIn("boom", latest_run.error or "")
+
+    def test_resource_reserve_guard_defers_task_before_dispatch(self) -> None:
+        task = Task(
+            target_id=self.target.id,
+            phase=MethodologyPhase.RECON,
+            kind=TaskKind.RECON_SCAN,
+            title="Memory guarded recon",
+            summary="Should wait until RAM and VRAM reserves are available",
+            role=AgentRole.RECON_WORKER,
+            risk_tier=RiskTier.LOW,
+            status=TaskStatus.PENDING,
+        )
+        self.runtime.store.insert_task(task)
+        self.runtime.workflow.resource_status_loader = lambda: {
+            "cpu": {"available": True, "memory_available_mb": 1024.0},
+            "gpu": {"available": True, "memory_free_mb": 128.0},
+        }
+        self.runtime.workflow.resource_reserve_loader = lambda: {
+            "min_free_cpu_ram_mb": 2048,
+            "min_free_gpu_ram_mb": 368,
+        }
+        report = OrchestrationReport()
+
+        self.runtime.workflow._execute_ready_tasks(report, max_executions=1)
+
+        refreshed_task = self.runtime.store.get_task(task.id)
+        self.assertEqual(refreshed_task.status, TaskStatus.WAITING)
+        self.assertEqual(refreshed_task.metadata["wait_metadata"]["resource_reserve_guard"], True)
+        self.assertFalse([run for run in self.runtime.store.list_task_runs(limit=20) if run.task_id == task.id])
+        event = next(
+            item
+            for item in self.runtime.store.list_events(limit=20)
+            if item.task_id == task.id and item.type == EventType.TASK_DEFERRED
+        )
+        self.assertEqual(event.metadata["resource_reserve_guard"], True)
+        self.assertIn("CPU RAM available", event.summary)
+        self.assertIn("GPU VRAM free", event.summary)
 
 
 if __name__ == "__main__":

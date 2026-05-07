@@ -8,6 +8,7 @@ const state = {
   skills: null,
   models: null,
   executionMode: null,
+  operatorIntent: null,
   workStatus: null,
   runtimeTuning: null,
   chat: null,
@@ -88,6 +89,8 @@ const elements = {
   actionLog: document.getElementById("action-log"),
   maxExecutions: document.getElementById("max-executions"),
   executionMode: document.getElementById("execution-mode"),
+  operatorIntent: document.getElementById("operator-intent"),
+  operatorIntentApply: document.getElementById("operator-intent-apply"),
   continuousInterval: document.getElementById("continuous-interval"),
   modeToggleButton: document.getElementById("mode-toggle-button"),
   refreshButton: document.getElementById("refresh-button"),
@@ -101,6 +104,8 @@ const elements = {
   gpuAiTimeout: document.getElementById("gpu-ai-timeout"),
   cpuAiTimeout: document.getElementById("cpu-ai-timeout"),
   staleRunTimeout: document.getElementById("stale-run-timeout"),
+  minFreeCpuRam: document.getElementById("min-free-cpu-ram"),
+  minFreeGpuRam: document.getElementById("min-free-gpu-ram"),
 };
 
 function setText(element, value) {
@@ -164,7 +169,7 @@ async function loadHealth() {
 }
 
 async function loadRuntimeState() {
-  const [dashboard, scope, audit, records, credentials, chat, caido, skills, models, executionMode, workStatus] = await Promise.all([
+  const [dashboard, scope, audit, records, credentials, chat, caido, skills, models, executionMode, operatorIntent, workStatus] = await Promise.all([
     fetchJson("/api/dashboard"),
     fetchJson("/api/scope"),
     fetchJson("/api/audit?limit=24"),
@@ -175,6 +180,7 @@ async function loadRuntimeState() {
     fetchJson("/api/skills"),
     fetchJson("/api/models"),
     fetchJson("/api/execution-mode"),
+    fetchJson("/api/operator-intent"),
     fetchJson("/api/work-status"),
   ]);
 
@@ -188,6 +194,7 @@ async function loadRuntimeState() {
   state.skills = skills;
   state.models = models;
   state.executionMode = executionMode;
+  state.operatorIntent = operatorIntent;
   state.workStatus = workStatus;
   state.runtimeTuning = dashboard.runtime_tuning || state.runtimeTuning;
 
@@ -195,6 +202,7 @@ async function loadRuntimeState() {
   renderSystemMetrics();
   renderRuntimeTuning();
   renderExecutionMode();
+  renderOperatorIntent();
   renderWorkStatus();
   renderScope();
   renderAudit();
@@ -214,6 +222,10 @@ function renderDashboard() {
   if (dashboard.execution_mode) {
     state.executionMode = dashboard.execution_mode;
     renderExecutionMode();
+  }
+  if (dashboard.operator_intent) {
+    state.operatorIntent = dashboard.operator_intent;
+    renderOperatorIntent();
   }
   if (dashboard.runtime_tuning) {
     state.runtimeTuning = dashboard.runtime_tuning;
@@ -293,11 +305,11 @@ function renderSystemMetrics() {
   }
   const cpuText = cpu.available === false
     ? "CPU unavailable"
-    : `util ${cpuPercent.toFixed(1)}% | load1 ${Number(cpu.load_1 || 0).toFixed(2)} / ${cpu.cpu_count || "?"} cores`;
+    : `util ${cpuPercent.toFixed(1)}% | RAM avail ${Number(cpu.memory_available_mb || 0).toFixed(0)}/${Number(cpu.memory_total_mb || 0).toFixed(0)} MB | load1 ${Number(cpu.load_1 || 0).toFixed(2)} / ${cpu.cpu_count || "?"} cores`;
   setText(elements.cpuLoadText, cpuText);
   const gpuText = gpu.available === false
     ? (gpu.error || "GPU unavailable")
-    : `util ${gpuPercent.toFixed(1)}% | VRAM ${Number(gpu.memory_used_mb || 0).toFixed(0)}/${Number(gpu.memory_total_mb || 0).toFixed(0)} MB`;
+    : `util ${gpuPercent.toFixed(1)}% | VRAM free ${Number(gpu.memory_free_mb || 0).toFixed(0)} MB (${Number(gpu.memory_used_mb || 0).toFixed(0)}/${Number(gpu.memory_total_mb || 0).toFixed(0)} MB used)`;
   setText(elements.gpuLoadText, gpuText);
 }
 
@@ -307,6 +319,8 @@ function renderRuntimeTuning() {
   syncInputIfIdle(elements.gpuAiTimeout, tuning.gpu_ai_timeout_seconds ?? 120);
   syncInputIfIdle(elements.cpuAiTimeout, tuning.cpu_ai_timeout_seconds ?? 300);
   syncInputIfIdle(elements.staleRunTimeout, tuning.stale_run_timeout_seconds ?? 3600);
+  syncInputIfIdle(elements.minFreeCpuRam, tuning.min_free_cpu_ram_mb ?? 2048);
+  syncInputIfIdle(elements.minFreeGpuRam, tuning.min_free_gpu_ram_mb ?? 368);
 }
 
 function workSection(titleText, items, formatter) {
@@ -364,6 +378,23 @@ function renderExecutionMode() {
     state.continuousScheduleKey = scheduleKey;
     scheduleContinuousLoop();
   }
+}
+
+function renderOperatorIntent() {
+  if (!elements.operatorIntent) return;
+  const payload = state.operatorIntent || state.dashboard?.operator_intent;
+  if (!payload) return;
+  const active = payload.active?.id || payload.default || "recon_only";
+  const options = (payload.intents || []).map((intent) => {
+    const option = document.createElement("option");
+    option.value = intent.id;
+    option.textContent = intent.label || intent.id;
+    return option;
+  });
+  if (options.length) {
+    elements.operatorIntent.replaceChildren(...options);
+  }
+  elements.operatorIntent.value = active;
 }
 
 function tableCell(content) {
@@ -467,19 +498,19 @@ function renderScope() {
 function loadTargetIntoForm(entry) {
   elements.targetHandle.value = entry.target.handle || "";
   elements.targetDisplayName.value = entry.target.display_name || "";
-  elements.targetProfile.value = entry.target.profile || "hack_the_box";
+  elements.targetProfile.value = entry.target.profile || "hackerone";
   elements.targetAssets.value = (entry.assets || []).map((asset) => asset.asset).join(", ");
   elements.targetActiveIp.value = entry.target.metadata?.active_ip || "";
 }
 
-function collectTargetPayload({ htbDefaults = false } = {}) {
-  const handle = elements.targetHandle.value.trim() || (htbDefaults ? "pirate.htb" : "");
+function collectTargetPayload() {
+  const handle = elements.targetHandle.value.trim();
   const activeIp = elements.targetActiveIp.value.trim();
   const assets = elements.targetAssets.value
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
-  if (htbDefaults && handle && !assets.includes(handle)) {
+  if (handle && !assets.includes(handle)) {
     assets.unshift(handle);
   }
   if (activeIp && !assets.includes(activeIp)) {
@@ -487,25 +518,23 @@ function collectTargetPayload({ htbDefaults = false } = {}) {
   }
   return {
     handle,
-    display_name: elements.targetDisplayName.value.trim() || (htbDefaults ? "HTB Pirate" : undefined),
-    profile: htbDefaults ? "hack_the_box" : elements.targetProfile.value,
+    display_name: elements.targetDisplayName.value.trim() || undefined,
+    profile: elements.targetProfile.value,
     assets,
     active_ip: activeIp || undefined,
     in_scope: true,
-    metadata: htbDefaults ? { target_kind: "htb_lab", source: "web_htb_update" } : { source: "web_target_form" },
+    metadata: { source: "web_target_form" },
   };
 }
 
-async function submitTargetUpdate({ htbDefaults = false } = {}) {
+async function submitTargetUpdate() {
   try {
     const payload = await fetchJson("/api/targets", {
       method: "POST",
-      body: JSON.stringify(collectTargetPayload({ htbDefaults })),
+      body: JSON.stringify(collectTargetPayload()),
     });
-    if (!htbDefaults) {
-      elements.targetForm.reset();
-      elements.targetProfile.value = "hack_the_box";
-    }
+    elements.targetForm.reset();
+    elements.targetProfile.value = "hackerone";
     applyActionPayload(payload);
   } catch (error) {
     setActionLog(`Target update failed: ${error.message}`);
@@ -895,6 +924,9 @@ function applyActionState(payload, options = { log: true }) {
   if (payload.execution_mode) {
     state.executionMode = payload.execution_mode;
   }
+  if (payload.operator_intent) {
+    state.operatorIntent = payload.operator_intent;
+  }
   if (payload.work_status) {
     state.workStatus = payload.work_status;
   }
@@ -906,6 +938,9 @@ function applyActionState(payload, options = { log: true }) {
   }
   if (payload.result?.execution_mode) {
     state.executionMode = payload.result.execution_mode;
+  }
+  if (payload.result?.operator_intent) {
+    state.operatorIntent = payload.result.operator_intent;
   }
   if (payload.result?.chat) {
     state.chat = payload.result.chat.chat || payload.result.chat;
@@ -923,6 +958,7 @@ function applyActionState(payload, options = { log: true }) {
   renderIntegrations();
   renderModels();
   renderExecutionMode();
+  renderOperatorIntent();
   renderChat();
   loadRuntimeState().catch((error) => setActionLog(`Refresh failed: ${error.message}`));
 }
@@ -1121,6 +1157,8 @@ async function initialize() {
       gpu_ai_timeout_seconds: Number(elements.gpuAiTimeout.value || 120),
       cpu_ai_timeout_seconds: Number(elements.cpuAiTimeout.value || 300),
       stale_run_timeout_seconds: Number(elements.staleRunTimeout.value || 3600),
+      min_free_cpu_ram_mb: Number(elements.minFreeCpuRam.value || 2048),
+      min_free_gpu_ram_mb: Number(elements.minFreeGpuRam.value || 368),
     });
   });
   elements.modelsForm.addEventListener("submit", async (event) => {
@@ -1141,14 +1179,11 @@ async function initialize() {
     await submitTargetUpdate();
   });
   elements.htbTargetUpdate.addEventListener("click", async () => {
-    if (!elements.targetHandle.value.trim()) {
-      elements.targetHandle.value = "pirate.htb";
-    }
-    if (!elements.targetDisplayName.value.trim()) {
-      elements.targetDisplayName.value = "HTB Pirate";
-    }
     elements.targetProfile.value = "hack_the_box";
-    await submitTargetUpdate({ htbDefaults: true });
+    await submitTargetUpdate();
+  });
+  elements.operatorIntentApply.addEventListener("click", async () => {
+    await runAction("/api/operator-intent", { intent_id: elements.operatorIntent.value });
   });
   elements.scopeImportForm.addEventListener("submit", async (event) => {
     event.preventDefault();

@@ -1,0 +1,56 @@
+id: recon.ad_enumeration
+description: Bounded AD-facing anonymous inventory commands.
+commands:
+  - id: ldap_rootdse
+    capability: ldap_base_discovery
+    tool: ldapsearch
+    argv:
+      - -x
+      - -H
+      - ldap://{{ target.host }}
+      - -s
+      - base
+      - namingContexts
+      - defaultNamingContext
+    timeout_seconds: 25
+    parser: ldap_rootdse
+  - id: smb_share_list
+    capability: smb_share_enumeration
+    tool: smbclient
+    argv:
+      - -L
+      - //{{ target.host }}/
+      - -N
+      - -g
+      - -m
+      - SMB3
+    timeout_seconds: 25
+    parser: smbclient_shares
+  - id: rpc_users
+    capability: rpc_user_enumeration
+    tool: rpcclient
+    argv:
+      - -U
+      - ""
+      - -N
+      - "{{ target.host }}"
+      - -c
+      - enumdomusers; enumdomgroups
+    timeout_seconds: 30
+    parser: rpcclient_users
+  - id: netexec_smb_null
+    capability: smb_share_enumeration
+    tool: netexec
+    argv:
+      - smb
+      - "{{ target.host }}"
+      - -u
+      - ""
+      - -p
+      - ""
+      - --shares
+    timeout_seconds: 30
+    parser: netexec_shares
+    required_intents:
+      - ad_lab
+      - htb_lab

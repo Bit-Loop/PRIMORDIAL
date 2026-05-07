@@ -36,10 +36,13 @@ SOLARIZED = {
 
 def launcher_target_state(runtime: PrimordialRuntime, preferred_handle: str = "") -> dict[str, object]:
     """Return persisted target state the launcher should display on startup."""
-    targets = runtime.store.list_targets()
+    targets = [target for target in runtime.store.list_targets() if target.handle.strip()]
     if not targets:
         return {}
-    target = runtime.store.get_target_by_handle(preferred_handle) or next(
+    preferred = runtime.store.get_target_by_handle(preferred_handle) if preferred_handle.strip() else None
+    if preferred is not None and not preferred.handle.strip():
+        preferred = None
+    target = preferred or next(
         (item for item in sorted(targets, key=lambda value: value.updated_at, reverse=True) if item.profile == ScopeProfile.HACK_THE_BOX),
         sorted(targets, key=lambda value: value.updated_at, reverse=True)[0],
     )
@@ -96,6 +99,7 @@ class PrimordialLauncher:
         self.scope_profile_label_var = tk.StringVar()
         self.scope_profile_base_var = tk.StringVar(value=ScopeProfile.HACK_THE_BOX.value)
         self.scope_profile_description_var = tk.StringVar()
+        self.operator_intent_var = tk.StringVar(value="recon_only")
         self.guidance_target_var = tk.StringVar(value="")
         self.cycles_var = tk.IntVar(value=10)
         self.max_executions_var = tk.IntVar(value=3)
@@ -118,6 +122,8 @@ class PrimordialLauncher:
         self.gpu_ai_timeout_var = tk.IntVar(value=PrimordialRuntime.DEFAULT_WORKER_AI_TIMEOUT_SECONDS_GPU)
         self.cpu_ai_timeout_var = tk.IntVar(value=PrimordialRuntime.DEFAULT_WORKER_AI_TIMEOUT_SECONDS_CPU)
         self.stale_run_timeout_var = tk.IntVar(value=PrimordialRuntime.DEFAULT_STALE_RUN_TIMEOUT_SECONDS)
+        self.min_free_cpu_ram_var = tk.IntVar(value=PrimordialRuntime.DEFAULT_MIN_FREE_CPU_RAM_MB)
+        self.min_free_gpu_ram_var = tk.IntVar(value=PrimordialRuntime.DEFAULT_MIN_FREE_GPU_RAM_MB)
         self.model_vars: dict[str, tk.StringVar] = {}
         self.model_processor_vars: dict[str, tk.StringVar] = {}
         self.model_combos: dict[str, ttk.Combobox] = {}
@@ -379,7 +385,7 @@ class PrimordialLauncher:
         self._build_chat_tab(chat_tab)
         self._build_counts_tab(counts_tab)
         self._build_config_tab(config_tab)
-        self._write_output("Launcher ready. Start the web server, then press Start Pirate Work.\n")
+        self._write_output("Launcher ready. Start the web server, then press Start Target Work.\n")
         self._refresh_all_tabs()
         self._refresh_target_ip_warnings()
 
@@ -419,7 +425,7 @@ class PrimordialLauncher:
         ttk.Label(action_frame, text="Max executions/tick").grid(row=0, column=2, sticky=tk.W)
         ttk.Entry(action_frame, textvariable=self.max_executions_var, width=8).grid(row=0, column=3, sticky=tk.W, padx=6)
         ttk.Button(action_frame, text="Warm Models", command=lambda: self._run_background("Warming models", self._warm_models)).grid(row=0, column=4, padx=6)
-        ttk.Button(action_frame, text="Start Pirate Work", command=self._start_pirate_work).grid(row=0, column=5, padx=6)
+        ttk.Button(action_frame, text="Start Target Work", command=self._start_target_work).grid(row=0, column=5, padx=6)
         self.run_more_ticks_button = ttk.Button(action_frame, text="Run More Ticks", command=self._run_more_ticks)
         self.run_more_ticks_button.grid(row=0, column=6, padx=6)
         self.stop_work_button = ttk.Button(action_frame, text="Stop Work", command=self._stop_work)
@@ -437,6 +443,17 @@ class PrimordialLauncher:
         )
         ttk.Button(action_frame, textvariable=self.execution_toggle_text_var, command=self._toggle_execution_mode).grid(
             row=2, column=6, columnspan=2, sticky=tk.W, padx=6, pady=(8, 0)
+        )
+        ttk.Label(action_frame, text="Operator intent").grid(row=3, column=0, sticky=tk.W, pady=(8, 0))
+        ttk.Combobox(
+            action_frame,
+            textvariable=self.operator_intent_var,
+            values=[item["id"] for item in self.runtime.operator_intent_payload()["intents"]],
+            width=24,
+            state="readonly",
+        ).grid(row=3, column=1, columnspan=2, sticky=tk.W, padx=6, pady=(8, 0))
+        ttk.Button(action_frame, text="Set Intent", command=self._set_operator_intent).grid(
+            row=3, column=3, sticky=tk.W, padx=6, pady=(8, 0)
         )
 
         current_frame = ttk.LabelFrame(root, text="Current Work", padding=10)
@@ -754,11 +771,17 @@ class PrimordialLauncher:
         ttk.Label(tuning, text="Stale run timeout (seconds)").grid(row=1, column=0, sticky=tk.W, pady=(8, 0))
         self.stale_run_timeout_entry = ttk.Entry(tuning, textvariable=self.stale_run_timeout_var, width=10)
         self.stale_run_timeout_entry.grid(row=1, column=1, sticky=tk.W, padx=6, pady=(8, 0))
+        ttk.Label(tuning, text="CPU RAM reserve (MB)").grid(row=1, column=2, sticky=tk.W, pady=(8, 0))
+        self.min_free_cpu_ram_entry = ttk.Entry(tuning, textvariable=self.min_free_cpu_ram_var, width=10)
+        self.min_free_cpu_ram_entry.grid(row=1, column=3, sticky=tk.W, padx=6, pady=(8, 0))
+        ttk.Label(tuning, text="GPU VRAM reserve (MB)").grid(row=2, column=0, sticky=tk.W, pady=(8, 0))
+        self.min_free_gpu_ram_entry = ttk.Entry(tuning, textvariable=self.min_free_gpu_ram_var, width=10)
+        self.min_free_gpu_ram_entry.grid(row=2, column=1, sticky=tk.W, padx=6, pady=(8, 0))
         ttk.Button(tuning, text="Apply Runtime Tuning", command=self._apply_runtime_tuning).grid(
-            row=1, column=2, sticky=tk.W, padx=6, pady=(8, 0)
+            row=2, column=2, sticky=tk.W, padx=6, pady=(8, 0)
         )
         ttk.Label(tuning, textvariable=self.runtime_tuning_status_var, foreground=SOLARIZED["cyan"]).grid(
-            row=2, column=0, columnspan=4, sticky=tk.W, pady=(8, 0)
+            row=3, column=0, columnspan=4, sticky=tk.W, pady=(8, 0)
         )
 
     def _build_credentials_controls(self, root: ttk.Frame) -> None:
@@ -1183,47 +1206,52 @@ class PrimordialLauncher:
         if self._web_server:
             webbrowser.open(self._web_server.url)
 
-    def _start_pirate_work(self) -> None:
+    def _set_operator_intent(self) -> None:
+        intent_id = self.operator_intent_var.get().strip()
+        self._run_background("Setting operator intent", lambda: self.runtime.set_operator_intent(intent_id)["active"]["id"])
+
+    def _start_target_work(self) -> None:
+        if not self.target_var.get().strip():
+            messagebox.showinfo("Target required", "Set a target handle before starting target work.")
+            return
         self._stop_requested.clear()
         self._start_web_server()
         config = self._workflow_config()
-        self._run_background("Starting Pirate workflow", lambda: self._start_pirate_work_sync(config))
+        self._run_background("Starting target workflow", lambda: self._start_target_work_sync(config))
 
     def _workflow_config(self) -> dict[str, object]:
         return {
             "handle": self.target_var.get().strip(),
             "ip": self.ip_var.get().strip(),
-            "title": self.title_var.get().strip() or "HTB Pirate Session",
+            "title": self.title_var.get().strip() or "Primordial Target Session",
+            "profile": self.scope_profile_var.get().strip(),
             "cycles": max(1, int(self.cycles_var.get())),
             "max_executions": max(1, int(self.max_executions_var.get())),
         }
 
-    def _start_pirate_work_sync(self, config: dict[str, object]) -> str:
+    def _start_target_work_sync(self, config: dict[str, object]) -> str:
         handle = str(config["handle"])
+        if not handle:
+            raise ValueError("target handle is required before starting target work")
         ip = str(config["ip"])
+        profile = self.runtime.resolve_scope_profile(str(config.get("profile") or ScopeProfile.HACKERONE.value))
         assets = [handle]
         if ip:
             assets.append(ip)
         with self._runtime_lock:
             active_session = self.runtime.store.get_active_session()
-            if (
-                active_session is None
-                or active_session.methodology != MethodologyName.HTB_LAB
-                or active_session.profile != ScopeProfile.HACK_THE_BOX
-            ):
-                self.runtime.start_session(
-                    methodology=MethodologyName.HTB_LAB,
-                    profile=ScopeProfile.HACK_THE_BOX,
-                    title=str(config["title"]),
-                )
+            active_intent = self.runtime.active_operator_intent().id
+            methodology = MethodologyName.HTB_LAB if active_intent == "htb_lab" else MethodologyName.WEB_APP_CORE
+            if active_session is None or active_session.methodology != methodology or active_session.profile != profile:
+                self.runtime.start_session(methodology=methodology, profile=profile, title=str(config["title"]))
             self.runtime.update_target_fields(
                 handle=handle,
-                display_name=handle,
-                profile=ScopeProfile.HACK_THE_BOX,
+                display_name=self.scope_display_name_var.get().strip() or handle,
+                profile=profile,
                 assets=assets,
                 active_ip=ip or None,
                 in_scope=True,
-                metadata={"target_kind": "htb_lab", "source": "gui_start_work"},
+                metadata={"source": "gui_start_target_work", "operator_intent_id": active_intent},
             )
             mode = self.runtime.execution_mode_payload()
             if str(mode["mode"]) == "continuous":
@@ -1442,13 +1470,17 @@ class PrimordialLauncher:
                 gpu_ai_timeout_seconds=int(self.gpu_ai_timeout_var.get()),
                 cpu_ai_timeout_seconds=int(self.cpu_ai_timeout_var.get()),
                 stale_run_timeout_seconds=int(self.stale_run_timeout_var.get()),
+                min_free_cpu_ram_mb=int(self.min_free_cpu_ram_var.get()),
+                min_free_gpu_ram_mb=int(self.min_free_gpu_ram_var.get()),
             )
         self._queue.put(("refresh_tabs", ""))
         return (
             "Runtime tuning updated: "
             f"GPU AI timeout={payload['gpu_ai_timeout_seconds']}s, "
             f"CPU AI timeout={payload['cpu_ai_timeout_seconds']}s, "
-            f"stale run timeout={payload['stale_run_timeout_seconds']}s."
+            f"stale run timeout={payload['stale_run_timeout_seconds']}s, "
+            f"CPU reserve={payload['min_free_cpu_ram_mb']} MB, "
+            f"GPU reserve={payload['min_free_gpu_ram_mb']} MB."
         )
 
     def _set_execution_mode_sync(self, mode: str) -> str:
@@ -1503,6 +1535,12 @@ class PrimordialLauncher:
             "CPU: "
             + (
                 f"{cpu_percent:.1f}% | load1 {float(cpu.get('load_1', 0.0) or 0.0):.2f} / {cpu.get('cpu_count', '?')} cores"
+                + (
+                    f" | RAM avail {float(cpu.get('memory_available_mb', 0.0) or 0.0):.0f}/"
+                    f"{float(cpu.get('memory_total_mb', 0.0) or 0.0):.0f} MB"
+                    if cpu.get("memory_available_mb") is not None
+                    else ""
+                )
                 if cpu.get("available", True)
                 else "unavailable"
             )
@@ -1511,9 +1549,10 @@ class PrimordialLauncher:
             self.cpu_progress.configure(value=max(0.0, min(100.0, cpu_percent)))
         if gpu.get("available"):
             memory_used = float(gpu.get("memory_used_mb", 0.0) or 0.0)
+            memory_free = float(gpu.get("memory_free_mb", 0.0) or 0.0)
             memory_total = float(gpu.get("memory_total_mb", 0.0) or 0.0)
             self.gpu_load_var.set(
-                f"GPU: {gpu_percent:.1f}% | VRAM {memory_used:.0f}/{memory_total:.0f} MB"
+                f"GPU: {gpu_percent:.1f}% | VRAM free {memory_free:.0f} MB ({memory_used:.0f}/{memory_total:.0f} MB used)"
             )
         else:
             self.gpu_load_var.set(f"GPU: {gpu.get('error') or 'unavailable'}")
@@ -1536,11 +1575,23 @@ class PrimordialLauncher:
             int(payload.get("stale_run_timeout_seconds", PrimordialRuntime.DEFAULT_STALE_RUN_TIMEOUT_SECONDS)),
             self.stale_run_timeout_entry,
         )
+        self._sync_intvar_if_idle(
+            self.min_free_cpu_ram_var,
+            int(payload.get("min_free_cpu_ram_mb", PrimordialRuntime.DEFAULT_MIN_FREE_CPU_RAM_MB)),
+            self.min_free_cpu_ram_entry,
+        )
+        self._sync_intvar_if_idle(
+            self.min_free_gpu_ram_var,
+            int(payload.get("min_free_gpu_ram_mb", PrimordialRuntime.DEFAULT_MIN_FREE_GPU_RAM_MB)),
+            self.min_free_gpu_ram_entry,
+        )
         self.runtime_tuning_status_var.set(
             "Runtime tuning: "
             f"GPU AI timeout {payload.get('gpu_ai_timeout_seconds')}s | "
             f"CPU AI timeout {payload.get('cpu_ai_timeout_seconds')}s | "
-            f"stale run timeout {payload.get('stale_run_timeout_seconds')}s"
+            f"stale run timeout {payload.get('stale_run_timeout_seconds')}s | "
+            f"CPU reserve {payload.get('min_free_cpu_ram_mb')} MB | "
+            f"GPU reserve {payload.get('min_free_gpu_ram_mb')} MB"
         )
 
     def _format_execution_mode(self, payload: dict[str, object]) -> str:
@@ -1635,24 +1686,24 @@ class PrimordialLauncher:
         return "\n".join(lines)
 
     def _refresh_models(self) -> None:
-        try:
-            payload = self.runtime.models_payload()
-            available = list(payload.get("available_models", []))
-            role_payloads = {
-                str(role["role"]): role
-                for role in payload.get("roles", [])
-                if isinstance(role, dict)
-            }
-            for role_id, combo in self.model_combos.items():
-                combo["values"] = available
-                role = role_payloads.get(role_id, {})
-                if role.get("selected_model"):
-                    self.model_vars[role_id].set(str(role["selected_model"]))
-                if role.get("processor"):
-                    self.model_processor_vars[role_id].set(str(role["processor"]))
-            self._write_output("Ollama model list refreshed.\n")
-        except Exception as exc:  # noqa: BLE001 - surface GUI operational errors
-            messagebox.showerror("Model refresh failed", str(exc))
+        self._run_background("Refreshing models", self._refresh_models_sync)
+
+    def _refresh_models_sync(self) -> str:
+        payload = self.runtime.models_payload()
+        available = list(payload.get("available_models", []))
+        role_payloads = {
+            str(role["role"]): role
+            for role in payload.get("roles", [])
+            if isinstance(role, dict)
+        }
+        for role_id, combo in self.model_combos.items():
+            combo["values"] = available
+            role = role_payloads.get(role_id, {})
+            if role.get("selected_model"):
+                self.model_vars[role_id].set(str(role["selected_model"]))
+            if role.get("processor"):
+                self.model_processor_vars[role_id].set(str(role["processor"]))
+        return "Ollama model list refreshed."
 
     def _save_models(self) -> None:
         selections = {role: var.get().strip() for role, var in self.model_vars.items() if var.get().strip()}
@@ -2545,10 +2596,10 @@ class PrimordialLauncher:
             self._hydrate_target_fields_from_store()
         elif status == "operation_done":
             self._active_operations.pop(message, None)
-            self._refresh_current_work()
+            self._refresh_current_work(nonblocking=True)
         else:
             self._write_output(str(message) + "\n")
-            self._refresh_current_work()
+            self._refresh_current_work(nonblocking=True)
 
     def _poll_current_work(self) -> None:
         try:

@@ -1,0 +1,31 @@
+id: lab.htb_windows_flag_collection
+description: Explicit HTB lab flag collection over already validated SMB access.
+commands:
+  - id: htb_user_flag_smb
+    capability: lab_flag_collection
+    tool: smbclient
+    argv:
+      - -A
+      - "{{ credentials.smb_auth_file }}"
+      - //{{ target.host }}/C$
+      - -m
+      - SMB3
+      - -c
+      - get "Users\{{ credentials.username }}\Desktop\user.txt" "{{ output.user_flag_path }}"
+    timeout_seconds: 25
+    required_intents:
+      - htb_lab
+  - id: htb_root_flag_smb
+    capability: lab_flag_collection
+    tool: smbclient
+    argv:
+      - -A
+      - "{{ credentials.smb_auth_file }}"
+      - //{{ target.host }}/C$
+      - -m
+      - SMB3
+      - -c
+      - get "Users\Administrator\Desktop\root.txt" "{{ output.root_flag_path }}"
+    timeout_seconds: 25
+    required_intents:
+      - htb_lab

@@ -1,0 +1,21 @@
+id: ad_lab
+label: AD Lab
+description: AD discovery with selected Kerberos checks under policy.
+policy:
+  public_poc_research: false
+  searchsploit_allowed: false
+  read_poc_examples: false
+  poc_applicability_validation: false
+  exploit_code_generation: false
+  poc_execution: false
+  kerberos_policy:
+    asrep_roast_check_allowed: true
+    kerberoast_check_allowed: true
+  credential_policy:
+    credential_validation_allowed: false
+    credential_guessing_allowed: false
+    credential_spraying_allowed: false
+    hash_cracking_allowed: false
+  lab_policy:
+    lab_flag_collection_allowed: false
+    htb_lab_behavior_allowed: false

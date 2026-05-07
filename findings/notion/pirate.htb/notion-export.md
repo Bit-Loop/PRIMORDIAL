@@ -2,7 +2,7 @@
 
 Target: `pirate.htb`
 Profile: `hack_the_box`
-Generated: 2026-05-07T15:54:29.015773+00:00
+Generated: 2026-05-07T19:44:39.510784+00:00
 
 ## AI Agent Guidance
 

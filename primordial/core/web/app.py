@@ -47,6 +47,9 @@ class PrimordialWebApp:
             return self._static_response("styles.css", "text/css; charset=utf-8")
         if method == "GET" and path == "/api/health":
             return self._json_response(self.runtime.health_payload())
+        if method == "GET" and path == "/api/operator-intent":
+            with self._lock:
+                return self._json_response(self.runtime.operator_intent_payload())
         if method == "GET" and path == "/api/credentials":
             with self._lock:
                 return self._json_response(self.runtime.credentials_payload())
@@ -183,10 +186,23 @@ class PrimordialWebApp:
                         gpu_ai_timeout_seconds=self._optional_int(payload, "gpu_ai_timeout_seconds"),
                         cpu_ai_timeout_seconds=self._optional_int(payload, "cpu_ai_timeout_seconds"),
                         stale_run_timeout_seconds=self._optional_int(payload, "stale_run_timeout_seconds"),
+                        min_free_cpu_ram_mb=self._optional_int(payload, "min_free_cpu_ram_mb"),
+                        min_free_gpu_ram_mb=self._optional_int(payload, "min_free_gpu_ram_mb"),
                     )
                     return self._action_response("runtime-settings", {"runtime_tuning": outcome})
             except (TypeError, ValueError) as exc:
                 return self._json_response({"error": str(exc)}, status=400)
+        if method == "POST" and path == "/api/operator-intent":
+            payload = self._parse_json_body(body)
+            intent_id = str(payload.get("intent_id", "")).strip()
+            if not intent_id:
+                return self._json_response({"error": "intent_id is required"}, status=400)
+            with self._lock:
+                try:
+                    outcome = self.runtime.set_operator_intent(intent_id)
+                except KeyError as exc:
+                    return self._json_response({"error": str(exc)}, status=400)
+                return self._action_response("operator-intent", {"operator_intent": outcome})
         if method == "POST" and path == "/api/models":
             payload = self._parse_json_body(body)
             selections = payload.get("roles", {})
@@ -407,6 +423,7 @@ class PrimordialWebApp:
                 "findings_context": self.runtime.findings_context_payload(include_guidance=False),
                 "models": self.runtime.models_payload(),
                 "execution_mode": self.runtime.execution_mode_payload(),
+                "operator_intent": self.runtime.operator_intent_payload(),
                 "work_status": self.work_status_payload(),
             }
         )

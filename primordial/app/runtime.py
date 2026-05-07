@@ -44,6 +44,8 @@ from primordial.core.domain.models import (
 )
 from primordial.core.events.bus import EventBus, RuntimeSignal
 from primordial.core.findings_context import FindingsContextService
+from primordial.core.intent import OperatorIntentRegistry
+from primordial.core.intent.models import OperatorIntentPolicy
 from primordial.core.modules.registry import ModuleRegistry
 from primordial.core.orchestration.policy import PolicyEngine
 from primordial.core.orchestration.verifier import BehaviorVerifier
@@ -71,9 +73,13 @@ class PrimordialRuntime:
     DEFAULT_WORKER_AI_TIMEOUT_SECONDS_GPU = 120
     DEFAULT_WORKER_AI_TIMEOUT_SECONDS_CPU = 300
     DEFAULT_STALE_RUN_TIMEOUT_SECONDS = 3600
+    DEFAULT_MIN_FREE_CPU_RAM_MB = 2048
+    DEFAULT_MIN_FREE_GPU_RAM_MB = 368
     MIN_GPU_AI_TIMEOUT_SECONDS = 15
     MIN_CPU_AI_TIMEOUT_SECONDS = 30
     MIN_STALE_RUN_TIMEOUT_SECONDS = 60
+    MIN_FREE_CPU_RAM_MB = 0
+    MIN_FREE_GPU_RAM_MB = 0
     METRICS_CACHE_TTL_SECONDS = 2.0
     WORKER_AI_TIMEOUT_SECONDS_GPU = 120
     WORKER_AI_TIMEOUT_SECONDS_CPU = 300
@@ -115,6 +121,7 @@ class PrimordialRuntime:
         self.store = RuntimeStore(config.database_path)
         self.credentials = CredentialStore(config.credentials_path)
         self.catalog = PrimitiveCatalog()
+        self.operator_intents = OperatorIntentRegistry(config.catalog_dir / "intents")
         self.event_bus = EventBus()
         self.modules = ModuleRegistry(self.event_bus)
         self.crash_journal = CrashJournal(config.crash_journal_path)
@@ -152,6 +159,10 @@ class PrimordialRuntime:
             autonomy=config.autonomy,
             checkpoints_dir=config.checkpoints_dir,
             credentials_status_loader=self.credentials_payload,
+            active_intent_policy_loader=self.intent_policy,
+            active_intent_id_loader=lambda: self.active_operator_intent().id,
+            resource_status_loader=lambda: self.system_metrics_payload(force_refresh=True),
+            resource_reserve_loader=self.resource_reserve_payload,
             event_bus=self.event_bus,
         )
 
@@ -164,6 +175,7 @@ class PrimordialRuntime:
         self.credentials.initialize()
         self.skills.initialize()
         self.findings_context.initialize()
+        self._load_operator_intents()
         recovery = self.crash_journal.startup()
         self.store.initialize()
         self._apply_persisted_model_roles()
@@ -200,6 +212,7 @@ class PrimordialRuntime:
                 summary="Primordial runtime initialized",
                 metadata={
                     "autonomy_mode": self.config.autonomy.mode.value,
+                    "operator_intent": self.active_operator_intent().id,
                     "previous_unclean_shutdown": recovery.previous_unclean_shutdown,
                     "active_modules": self.modules.active_modules(),
                 },
@@ -236,22 +249,78 @@ class PrimordialRuntime:
         profile: ScopeProfile = ScopeProfile.HACKERONE,
         title: str = "Default Primordial Session",
     ) -> Session:
+        previous_session = self.store.get_active_session()
+        previous_intent = None
+        if previous_session is not None:
+            previous_intent = previous_session.metadata.get("operator_intent_id")
         self.store.pause_active_sessions()
         session = Session(
             methodology=methodology,
             profile=profile,
             autonomy_mode=self.config.autonomy.mode.value,
             title=title,
+            metadata={"operator_intent_id": str(previous_intent or OperatorIntentRegistry.DEFAULT_INTENT_ID)},
         )
         self.store.insert_session(session)
         self.store.insert_event(
             EventRecord(
                 type=EventType.SESSION_STARTED,
                 summary=f"Session started: {title}",
-                metadata={"methodology": methodology.value, "profile": profile.value},
+                metadata={
+                    "methodology": methodology.value,
+                    "profile": profile.value,
+                    "operator_intent": self.active_operator_intent().id,
+                },
             )
         )
         return session
+
+    def operator_intent_payload(self) -> dict[str, object]:
+        self._load_operator_intents()
+        active = self.active_operator_intent()
+        return {
+            "active": active.as_payload(),
+            "intents": [intent.as_payload() for intent in self.operator_intents.all()],
+            "default": OperatorIntentRegistry.DEFAULT_INTENT_ID,
+        }
+
+    def active_operator_intent(self):
+        self._load_operator_intents()
+        session = self.store.get_active_session()
+        intent_id = None
+        if session is not None:
+            intent_id = session.metadata.get("operator_intent_id")
+        try:
+            return self.operator_intents.get(str(intent_id) if intent_id else None)
+        except KeyError:
+            return self.operator_intents.get(OperatorIntentRegistry.DEFAULT_INTENT_ID)
+
+    def intent_policy(self) -> OperatorIntentPolicy:
+        return self.active_operator_intent().policy
+
+    def set_operator_intent(self, intent_id: str) -> dict[str, object]:
+        self._load_operator_intents()
+        intent = self.operator_intents.get(intent_id)
+        session = self.store.get_active_session() or self.start_session()
+        session.metadata["operator_intent_id"] = intent.id
+        session.updated_at = utc_now()
+        self.store.insert_session(session)
+        self.store.insert_event(
+            EventRecord(
+                type=EventType.BOOTSTRAP,
+                summary=f"Operator intent set: {intent.id}",
+                metadata={"operator_intent": intent.as_payload(), "session_id": session.id},
+            )
+        )
+        return self.operator_intent_payload()
+
+    def _load_operator_intents(self) -> None:
+        if self.operator_intents.all():
+            return
+        configured_dir = self.config.catalog_dir / "intents"
+        if not any(configured_dir.glob("*.yaml")):
+            self.operator_intents = OperatorIntentRegistry(Path(__file__).resolve().parents[2] / "catalog" / "intents")
+        self.operator_intents.load()
 
     def import_scope(self, path: Path, profile: ScopeProfile | str | None = None) -> dict[str, object]:
         payload = self._load_scope_payload(path)
@@ -380,20 +449,43 @@ class PrimordialRuntime:
             default=self.DEFAULT_STALE_RUN_TIMEOUT_SECONDS,
             minimum=self.MIN_STALE_RUN_TIMEOUT_SECONDS,
         )
+        min_free_cpu_ram = self._bounded_int(
+            raw.get("min_free_cpu_ram_mb"),
+            default=self.DEFAULT_MIN_FREE_CPU_RAM_MB,
+            minimum=self.MIN_FREE_CPU_RAM_MB,
+        )
+        min_free_gpu_ram = self._bounded_int(
+            raw.get("min_free_gpu_ram_mb"),
+            default=self.DEFAULT_MIN_FREE_GPU_RAM_MB,
+            minimum=self.MIN_FREE_GPU_RAM_MB,
+        )
         return {
             "gpu_ai_timeout_seconds": gpu_timeout,
             "cpu_ai_timeout_seconds": cpu_timeout,
             "stale_run_timeout_seconds": stale_timeout,
+            "min_free_cpu_ram_mb": min_free_cpu_ram,
+            "min_free_gpu_ram_mb": min_free_gpu_ram,
             "defaults": {
                 "gpu_ai_timeout_seconds": self.DEFAULT_WORKER_AI_TIMEOUT_SECONDS_GPU,
                 "cpu_ai_timeout_seconds": self.DEFAULT_WORKER_AI_TIMEOUT_SECONDS_CPU,
                 "stale_run_timeout_seconds": self.DEFAULT_STALE_RUN_TIMEOUT_SECONDS,
+                "min_free_cpu_ram_mb": self.DEFAULT_MIN_FREE_CPU_RAM_MB,
+                "min_free_gpu_ram_mb": self.DEFAULT_MIN_FREE_GPU_RAM_MB,
             },
             "minimums": {
                 "gpu_ai_timeout_seconds": self.MIN_GPU_AI_TIMEOUT_SECONDS,
                 "cpu_ai_timeout_seconds": self.MIN_CPU_AI_TIMEOUT_SECONDS,
                 "stale_run_timeout_seconds": self.MIN_STALE_RUN_TIMEOUT_SECONDS,
+                "min_free_cpu_ram_mb": self.MIN_FREE_CPU_RAM_MB,
+                "min_free_gpu_ram_mb": self.MIN_FREE_GPU_RAM_MB,
             },
+        }
+
+    def resource_reserve_payload(self) -> dict[str, object]:
+        tuning = self.runtime_tuning_payload()
+        return {
+            "min_free_cpu_ram_mb": int(tuning["min_free_cpu_ram_mb"]),
+            "min_free_gpu_ram_mb": int(tuning["min_free_gpu_ram_mb"]),
         }
 
     def update_runtime_tuning(
@@ -402,6 +494,8 @@ class PrimordialRuntime:
         gpu_ai_timeout_seconds: int | None = None,
         cpu_ai_timeout_seconds: int | None = None,
         stale_run_timeout_seconds: int | None = None,
+        min_free_cpu_ram_mb: int | None = None,
+        min_free_gpu_ram_mb: int | None = None,
     ) -> dict[str, object]:
         current = self.runtime_tuning_payload()
         updated = {
@@ -419,6 +513,16 @@ class PrimordialRuntime:
                 stale_run_timeout_seconds,
                 default=int(current["stale_run_timeout_seconds"]),
                 minimum=self.MIN_STALE_RUN_TIMEOUT_SECONDS,
+            ),
+            "min_free_cpu_ram_mb": self._bounded_int(
+                min_free_cpu_ram_mb,
+                default=int(current["min_free_cpu_ram_mb"]),
+                minimum=self.MIN_FREE_CPU_RAM_MB,
+            ),
+            "min_free_gpu_ram_mb": self._bounded_int(
+                min_free_gpu_ram_mb,
+                default=int(current["min_free_gpu_ram_mb"]),
+                minimum=self.MIN_FREE_GPU_RAM_MB,
             ),
         }
         self.store.set_setting(self.RUNTIME_TUNING_SETTING, updated)
@@ -510,6 +614,10 @@ class PrimordialRuntime:
         metadata: dict[str, object] | None = None,
         emit_event: bool = True,
     ) -> Target:
+        handle = str(handle).strip()
+        if not handle:
+            raise ValueError("target handle is required")
+        display_name = str(display_name or handle).strip() or handle
         existing = self.store.get_target_by_handle(handle, profile)
         if existing is not None:
             target = existing
@@ -523,7 +631,7 @@ class PrimordialRuntime:
         else:
             target = Target(
                 handle=handle,
-                display_name=display_name or handle,
+                display_name=display_name,
                 profile=profile,
                 in_scope=in_scope,
                 metadata=dict(metadata or {}),
@@ -534,11 +642,15 @@ class PrimordialRuntime:
         normalized_assets = assets or [handle]
         for asset_entry in normalized_assets:
             if isinstance(asset_entry, dict):
-                raw_asset = str(asset_entry["asset"])
+                raw_asset = str(asset_entry["asset"]).strip()
+                if not raw_asset:
+                    continue
                 asset_type = str(asset_entry.get("asset_type", self._infer_asset_type(raw_asset)))
                 asset_metadata = dict(asset_entry.get("metadata", {}))
             else:
-                raw_asset = str(asset_entry)
+                raw_asset = str(asset_entry).strip()
+                if not raw_asset:
+                    continue
                 asset_type = self._infer_asset_type(raw_asset)
                 asset_metadata = {}
             if self.store.get_scope_asset(target.id, raw_asset) is not None:
@@ -574,6 +686,9 @@ class PrimordialRuntime:
         in_scope: bool = True,
         metadata: dict[str, object] | None = None,
     ) -> Target:
+        handle = str(handle).strip()
+        if not handle:
+            raise ValueError("target handle is required")
         normalized_assets = list(assets or [handle])
         parsed_active_ip = self._validated_optional_ip(active_ip)
         if parsed_active_ip and not any(
@@ -702,6 +817,10 @@ class PrimordialRuntime:
         Updating the active IP may create a new generation if the IP changes.
         No ticks are triggered — caller is responsible for orchestration.
         """
+        handle = str(handle).strip()
+        if not handle:
+            raise ValueError("target handle is required")
+        display_name = str(display_name or handle).strip() or handle
         existing = self.store.get_target_by_handle(handle, profile)
         if existing is None:
             target = self.register_target(
@@ -863,6 +982,7 @@ class PrimordialRuntime:
         payload["runtime_tuning"] = self.runtime_tuning_payload()
         payload["system_metrics"] = self.system_metrics_payload()
         payload["work_status"] = self.work_status_payload()
+        payload["operator_intent"] = self.operator_intent_payload()
         return payload
 
     def work_status_payload(self, *, limit: int = 8) -> dict[str, object]:
@@ -1380,6 +1500,7 @@ class PrimordialRuntime:
             "runtime_dir": str(self.config.runtime_dir),
             "database_path": str(self.config.database_path),
             "autonomy_mode": self.config.autonomy.mode.value,
+            "operator_intent": self.active_operator_intent().id,
             "active_modules": self.modules.active_modules(),
             "targets": len(self.store.list_targets()),
             "skills": len(self.skills.list()),
@@ -2819,6 +2940,31 @@ class PrimordialRuntime:
             percent = None
         if percent is None:
             percent = max(0.0, min(100.0, (load_1 / cpu_count) * 100.0))
+        memory_total_mb = None
+        memory_available_mb = None
+        memory_free_mb = None
+        try:
+            meminfo: dict[str, float] = {}
+            with Path("/proc/meminfo").open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    key, _, remainder = line.partition(":")
+                    parts = remainder.strip().split()
+                    if not parts:
+                        continue
+                    try:
+                        meminfo[key] = float(parts[0]) / 1024.0
+                    except ValueError:
+                        continue
+            memory_total_mb = meminfo.get("MemTotal")
+            memory_available_mb = meminfo.get("MemAvailable")
+            memory_free_mb = meminfo.get("MemFree")
+        except OSError:
+            pass
+        if memory_available_mb is None:
+            memory_available_mb = memory_free_mb
+        memory_percent = None
+        if memory_total_mb and memory_available_mb is not None:
+            memory_percent = max(0.0, min(100.0, 100.0 * (1.0 - (memory_available_mb / memory_total_mb))))
         return {
             "available": True,
             "percent": round(percent, 1),
@@ -2826,6 +2972,10 @@ class PrimordialRuntime:
             "load_5": round(load_5, 2),
             "load_15": round(load_15, 2),
             "cpu_count": cpu_count,
+            "memory_available_mb": round(memory_available_mb, 1) if memory_available_mb is not None else None,
+            "memory_free_mb": round(memory_free_mb, 1) if memory_free_mb is not None else None,
+            "memory_total_mb": round(memory_total_mb, 1) if memory_total_mb is not None else None,
+            "memory_percent": round(memory_percent, 1) if memory_percent is not None else None,
         }
 
     def _read_gpu_metrics(self) -> dict[str, object]:
@@ -2836,6 +2986,7 @@ class PrimordialRuntime:
                 "percent": 0.0,
                 "memory_percent": 0.0,
                 "memory_used_mb": None,
+                "memory_free_mb": None,
                 "memory_total_mb": None,
                 "temperature_c": None,
                 "error": "nvidia-smi not found",
@@ -2858,6 +3009,7 @@ class PrimordialRuntime:
                 "percent": 0.0,
                 "memory_percent": 0.0,
                 "memory_used_mb": None,
+                "memory_free_mb": None,
                 "memory_total_mb": None,
                 "temperature_c": None,
                 "error": str(exc),
@@ -2868,6 +3020,7 @@ class PrimordialRuntime:
                 "percent": 0.0,
                 "memory_percent": 0.0,
                 "memory_used_mb": None,
+                "memory_free_mb": None,
                 "memory_total_mb": None,
                 "temperature_c": None,
                 "error": result.stderr.strip() or result.stdout.strip() or "nvidia-smi failed",
@@ -2879,6 +3032,7 @@ class PrimordialRuntime:
                 "percent": 0.0,
                 "memory_percent": 0.0,
                 "memory_used_mb": None,
+                "memory_free_mb": None,
                 "memory_total_mb": None,
                 "temperature_c": None,
                 "error": "nvidia-smi returned no GPU data",
@@ -2896,6 +3050,7 @@ class PrimordialRuntime:
                 "percent": 0.0,
                 "memory_percent": 0.0,
                 "memory_used_mb": None,
+                "memory_free_mb": None,
                 "memory_total_mb": None,
                 "temperature_c": None,
                 "error": f"unexpected nvidia-smi output: {line}",
@@ -2908,6 +3063,7 @@ class PrimordialRuntime:
             "percent": round(max(0.0, min(100.0, utilization)), 1),
             "memory_percent": round(memory_percent, 1),
             "memory_used_mb": round(memory_used, 1),
+            "memory_free_mb": round(max(0.0, memory_total - memory_used), 1),
             "memory_total_mb": round(memory_total, 1),
             "temperature_c": round(temperature, 1),
             "error": None,
@@ -2974,6 +3130,8 @@ class PrimordialRuntime:
                 self.config,
                 self.credentials,
                 ai_generate=self._worker_ai_generate,
+                active_intent_policy_loader=self.intent_policy,
+                active_intent_id_loader=lambda: self.active_operator_intent().id,
             ),
             metadata={"kind": "mode", "default": True},
         )

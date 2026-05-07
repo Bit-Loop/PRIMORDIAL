@@ -72,6 +72,7 @@ class AppConfig:
     notion_exports_dir: Path
     exports_dir: Path
     manifests_dir: Path
+    catalog_dir: Path
     skills_dir: Path
     secrets_dir: Path
     credentials_path: Path
@@ -115,6 +116,9 @@ class AppConfig:
         manifests_dir = Path(
             os.getenv("PRIMORDIAL_MANIFESTS_DIR", root / "manifests")
         ).resolve()
+        catalog_dir = Path(
+            os.getenv("PRIMORDIAL_CATALOG_DIR", root / "catalog")
+        ).resolve()
         skills_dir = Path(
             os.getenv("PRIMORDIAL_SKILLS_DIR", root / "skills")
         ).resolve()
@@ -150,6 +154,7 @@ class AppConfig:
             notion_exports_dir=notion_exports_dir,
             exports_dir=exports_dir,
             manifests_dir=manifests_dir,
+            catalog_dir=catalog_dir,
             skills_dir=skills_dir,
             secrets_dir=secrets_dir,
             credentials_path=credentials_path,
@@ -167,6 +172,7 @@ class AppConfig:
         self.notion_exports_dir.mkdir(parents=True, exist_ok=True)
         self.exports_dir.mkdir(parents=True, exist_ok=True)
         self.manifests_dir.mkdir(parents=True, exist_ok=True)
+        self.catalog_dir.mkdir(parents=True, exist_ok=True)
         self.skills_dir.mkdir(parents=True, exist_ok=True)
         self.secrets_dir.mkdir(parents=True, exist_ok=True)
         self.secrets_dir.chmod(0o700)

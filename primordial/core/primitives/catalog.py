@@ -10,9 +10,30 @@ from primordial.core.domain.enums import (
     SideEffectLevel,
 )
 from primordial.core.domain.models import PrimitiveManifest
+from primordial.core.catalog.loader import CatalogValidationError, validate_allowed_fields
 
 
 class PrimitiveCatalog:
+    MANIFEST_FIELDS = {
+        "name",
+        "version",
+        "description",
+        "capability_tags",
+        "allowed_phases",
+        "runtime",
+        "risk_tier",
+        "side_effect_level",
+        "required_secrets",
+        "input_schema",
+        "output_schema",
+        "timeout_seconds",
+        "retry_policy",
+        "evidence_adapter",
+        "sandbox_profile",
+        "healthcheck",
+        "metadata",
+    }
+
     def __init__(self) -> None:
         self._manifests: dict[str, PrimitiveManifest] = {}
 
@@ -41,6 +62,7 @@ class PrimitiveCatalog:
         ]
 
     def _manifest_from_payload(self, payload: dict[str, object]) -> PrimitiveManifest:
+        validate_allowed_fields(payload, self.MANIFEST_FIELDS, source=str(payload.get("name", "primitive manifest")))
         return PrimitiveManifest(
             name=str(payload["name"]),
             version=str(payload.get("version", "0.1.0")),

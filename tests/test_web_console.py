@@ -647,6 +647,8 @@ class WebConsoleTests(unittest.TestCase):
                     "gpu_ai_timeout_seconds": 150,
                     "cpu_ai_timeout_seconds": 420,
                     "stale_run_timeout_seconds": 5400,
+                    "min_free_cpu_ram_mb": 3072,
+                    "min_free_gpu_ram_mb": 512,
                 }
             ).encode("utf-8"),
         )
@@ -660,8 +662,10 @@ class WebConsoleTests(unittest.TestCase):
         self.assertEqual(update_response.status, 200)
         self.assertTrue(update["ok"])
         self.assertEqual(update["result"]["runtime_tuning"]["cpu_ai_timeout_seconds"], 420)
+        self.assertEqual(update["result"]["runtime_tuning"]["min_free_cpu_ram_mb"], 3072)
         self.assertEqual(settings["gpu_ai_timeout_seconds"], 150)
         self.assertEqual(settings["stale_run_timeout_seconds"], 5400)
+        self.assertEqual(settings["min_free_gpu_ram_mb"], 512)
         self.assertEqual(dashboard["runtime_tuning"]["cpu_ai_timeout_seconds"], 420)
 
     def test_model_role_endpoint_lists_and_persists_selected_models(self) -> None:

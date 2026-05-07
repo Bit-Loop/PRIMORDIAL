@@ -36,6 +36,7 @@ from primordial.core.domain.models import (
     utc_now,
 )
 from primordial.core.events.bus import EventBus, RuntimeSignal
+from primordial.core.intent.models import OperatorIntentPolicy
 from primordial.core.orchestration.policy import PolicyEngine
 from primordial.core.orchestration.verifier import BehaviorVerifier
 from primordial.core.providers.router import ProviderRouter
@@ -92,6 +93,10 @@ class WorkflowOrchestrator:
         autonomy: AutonomySettings,
         checkpoints_dir: Path,
         credentials_status_loader: Callable[[], dict[str, object]] | None = None,
+        active_intent_policy_loader: Callable[[], OperatorIntentPolicy] | None = None,
+        active_intent_id_loader: Callable[[], str] | None = None,
+        resource_status_loader: Callable[[], dict[str, object]] | None = None,
+        resource_reserve_loader: Callable[[], dict[str, object]] | None = None,
         event_bus: EventBus | None = None,
     ) -> None:
         self.store = store
@@ -107,6 +112,10 @@ class WorkflowOrchestrator:
         self.autonomy = autonomy
         self.checkpoints_dir = checkpoints_dir
         self.credentials_status_loader = credentials_status_loader
+        self.active_intent_policy_loader = active_intent_policy_loader
+        self.active_intent_id_loader = active_intent_id_loader
+        self.resource_status_loader = resource_status_loader
+        self.resource_reserve_loader = resource_reserve_loader
         self.event_bus = event_bus
         self.stale_run_max_age_seconds = self.STALE_RUN_MAX_AGE_SECONDS
 
@@ -222,6 +231,9 @@ class WorkflowOrchestrator:
         return task
 
     def _plan_target(self, target: Target, session_id: str | None, report: OrchestrationReport) -> None:
+        if not target.handle.strip():
+            self._record_invalid_target_block(target, report)
+            return
         methodology_state = self._evaluate_target_methodology_state(target)
         self._persist_target_methodology_state(target, methodology_state, report)
         planned_any = False
@@ -553,6 +565,12 @@ class WorkflowOrchestrator:
             )
         if has_remote_admin_surface and not self._lab_credentials_configured():
             blockers.append("Lab username/password are not configured, so credentialed SMB/WinRM verification cannot run.")
+        policy = self._active_intent_policy()
+        if policy is not None:
+            if has_research_candidates and not policy.poc_applicability_validation:
+                blockers.append("Active operator intent does not allow public PoC applicability validation.")
+            if has_remote_admin_surface and not policy.credential_policy.credential_validation_allowed:
+                blockers.append("Active operator intent does not allow credentialed access checks.")
         if target.metadata.get("active_ip"):
             active_generation = self._target_active_generation(target)
             has_current_recon = any(
@@ -638,6 +656,24 @@ class WorkflowOrchestrator:
                 "subphase": state.subphase,
                 "next_unblock_action": state.next_unblock_action,
                 "blockers": list(state.blockers),
+            },
+        )
+        self.store.insert_event(event)
+        report.events.append(event)
+
+    def _record_invalid_target_block(self, target: Target, report: OrchestrationReport) -> None:
+        if target.metadata.get("planner_invalid_target_blocked"):
+            return
+        target.metadata["planner_invalid_target_blocked"] = True
+        target.updated_at = utc_now()
+        self.store.insert_target(target)
+        event = EventRecord(
+            type=EventType.TASK_BLOCKED,
+            summary="Planner skipped invalid target: target handle is empty",
+            target_id=target.id,
+            metadata={
+                "invalid_target": True,
+                "reason": "target handle is empty",
             },
         )
         self.store.insert_event(event)
@@ -742,6 +778,82 @@ class WorkflowOrchestrator:
     def _profile_allows_task(self, target: Target, task_kind_value: str) -> bool:
         allowed = self.autonomy.profile_task_allowlist.get(target.profile.value, frozenset())
         return task_kind_value in allowed
+
+    def _active_intent_policy(self) -> OperatorIntentPolicy | None:
+        return self.active_intent_policy_loader() if self.active_intent_policy_loader else None
+
+    def _active_intent_id(self) -> str:
+        return self.active_intent_id_loader() if self.active_intent_id_loader else "recon_only"
+
+    def _intent_allows_task(self, target: Target, kind: TaskKind) -> bool:
+        policy = self._active_intent_policy()
+        if policy is None:
+            return True
+        allowed = True
+        required = ""
+        reason = ""
+        category = "unknown"
+        if kind == TaskKind.EXPLOIT_RESEARCH:
+            allowed = policy.public_poc_research and policy.searchsploit_allowed
+            required = "exploit_research_allowed or htb_lab"
+            category = "public_poc_research"
+            reason = "active intent does not allow public PoC research"
+        elif kind == TaskKind.POC_APPLICABILITY_VALIDATION:
+            allowed = policy.poc_applicability_validation
+            required = "exploit_research_allowed or htb_lab"
+            category = "poc_applicability_validation"
+            reason = "active intent does not allow public PoC applicability validation"
+        elif kind == TaskKind.KERBEROS_ATTACK_CHECK:
+            allowed = policy.kerberos_policy.asrep_roast_check_allowed or policy.kerberos_policy.kerberoast_check_allowed
+            required = "ad_lab or htb_lab"
+            category = "kerberos_attack_check"
+            reason = "active intent does not allow Kerberos attack-path checks"
+        elif kind == TaskKind.CREDENTIALED_ACCESS_CHECK:
+            allowed = policy.credential_policy.credential_validation_allowed
+            required = "credential_validation or htb_lab"
+            category = "credentialed_access_check"
+            reason = "active intent does not allow credential validation"
+        if allowed:
+            return True
+        self._record_operator_intent_block(target, kind, category, required, reason)
+        return False
+
+    def _record_operator_intent_block(
+        self,
+        target: Target,
+        kind: TaskKind,
+        category: str,
+        required_intent: str,
+        reason: str,
+    ) -> None:
+        active_generation = self._target_active_generation(target) or "none"
+        active_intent = self._active_intent_id()
+        key = f"{active_generation}:{kind.value}:{active_intent}"
+        blocks = target.metadata.get("operator_intent_blocks", {})
+        if not isinstance(blocks, dict):
+            blocks = {}
+        if blocks.get(key):
+            return
+        blocks[key] = True
+        target.metadata["operator_intent_blocks"] = blocks
+        target.updated_at = utc_now()
+        self.store.insert_target(target)
+        self.store.insert_event(
+            EventRecord(
+                type=EventType.TASK_BLOCKED,
+                summary=f"Operator intent blocked {kind.value}: {reason}",
+                target_id=target.id,
+                metadata={
+                    "blocked_by_operator_intent": True,
+                    "task_kind": kind.value,
+                    "capability_category": category,
+                    "active_intent": active_intent,
+                    "required_intent": required_intent,
+                    "reason": reason,
+                    "active_ip_generation": active_generation,
+                },
+            )
+        )
 
     def _target_has_remote_admin_surface(self, evidence) -> bool:
         for item in evidence:
@@ -877,7 +989,7 @@ class WorkflowOrchestrator:
         return False
 
     def _should_plan_exploit_research(self, target: Target) -> bool:
-        if not self._profile_allows_task(target, "exploit_research") and not target.metadata.get("allow_exploit_research"):
+        if not self._intent_allows_task(target, TaskKind.EXPLOIT_RESEARCH):
             return False
         evidence = self.store.list_evidence(target_id=target.id, limit=200)
         if any(
@@ -898,7 +1010,7 @@ class WorkflowOrchestrator:
         )
 
     def _should_plan_poc_applicability_validation(self, target: Target) -> bool:
-        if not self._profile_allows_task(target, "poc_applicability_validation") and not target.metadata.get("allow_poc_applicability_validation"):
+        if not self._intent_allows_task(target, TaskKind.POC_APPLICABILITY_VALIDATION):
             return False
         evidence = self.store.list_evidence(target_id=target.id, limit=200)
         has_research = any(
@@ -931,7 +1043,7 @@ class WorkflowOrchestrator:
         )
 
     def _should_plan_kerberos_attack_check(self, target: Target) -> bool:
-        if not self._profile_allows_task(target, "kerberos_attack_check") and not target.metadata.get("allow_kerberos_attack_check"):
+        if not self._intent_allows_task(target, TaskKind.KERBEROS_ATTACK_CHECK):
             return False
         evidence = self.store.list_evidence(target_id=target.id, limit=200)
         if any(
@@ -954,7 +1066,7 @@ class WorkflowOrchestrator:
         return False
 
     def _should_plan_credentialed_access_check(self, target: Target) -> bool:
-        if not self._profile_allows_task(target, "credentialed_access_check") and not target.metadata.get("allow_credentialed_access_check"):
+        if not self._intent_allows_task(target, TaskKind.CREDENTIALED_ACCESS_CHECK):
             return False
         evidence = self.store.list_evidence(target_id=target.id, limit=200)
         if any(
@@ -1102,6 +1214,7 @@ class WorkflowOrchestrator:
             max_attempts=min(blueprint.max_attempts, self.autonomy.max_auto_retries),
             metadata={"autonomy_mode": self.autonomy.mode.value},
         )
+        task.metadata["operator_intent_id"] = self._active_intent_id()
         route = self.provider_router.select_route(task)
         task.provider_route = route.route
         task.provider_model = route.model_name
@@ -1174,6 +1287,17 @@ class WorkflowOrchestrator:
             if not task:
                 return
             target = self.store.get_target(task.target_id)
+            if self._execution_target_is_invalid(task, target, report):
+                continue
+            resource_block = self._resource_reserve_block(task)
+            if resource_block is not None:
+                self.resume_tracker.defer_task(
+                    task,
+                    str(resource_block["reason"]),
+                    delay_seconds=self.autonomy.defer_retry_seconds,
+                    metadata=dict(resource_block["metadata"]),
+                )
+                continue
             selection = self.provider_router.select_route(task)
             scheduler_decision = self.model_scheduler.evaluate(
                 task,
@@ -1359,6 +1483,76 @@ class WorkflowOrchestrator:
             except Exception as exc:  # noqa: BLE001 - finalize brokered runs even when execution crashes
                 self._persist_execution_exception(task, run, exc, report)
 
+    def _resource_reserve_block(self, task: Task) -> dict[str, object] | None:
+        if self.resource_status_loader is None or self.resource_reserve_loader is None:
+            return None
+        metrics = self.resource_status_loader()
+        reserves = self.resource_reserve_loader()
+        cpu = metrics.get("cpu", {}) if isinstance(metrics, dict) else {}
+        gpu = metrics.get("gpu", {}) if isinstance(metrics, dict) else {}
+        min_cpu = self._metric_float(reserves.get("min_free_cpu_ram_mb"), 0.0) if isinstance(reserves, dict) else 0.0
+        min_gpu = self._metric_float(reserves.get("min_free_gpu_ram_mb"), 0.0) if isinstance(reserves, dict) else 0.0
+        observed_cpu = self._metric_float(cpu.get("memory_available_mb"), None) if isinstance(cpu, dict) else None
+        observed_gpu = self._metric_float(gpu.get("memory_free_mb"), None) if isinstance(gpu, dict) else None
+        blockers: list[str] = []
+        if min_cpu > 0 and observed_cpu is not None and observed_cpu < min_cpu:
+            blockers.append(f"CPU RAM available {observed_cpu:.0f} MB is below reserve {min_cpu:.0f} MB")
+        if (
+            min_gpu > 0
+            and isinstance(gpu, dict)
+            and bool(gpu.get("available"))
+            and observed_gpu is not None
+            and observed_gpu < min_gpu
+        ):
+            blockers.append(f"GPU VRAM free {observed_gpu:.0f} MB is below reserve {min_gpu:.0f} MB")
+        if not blockers:
+            return None
+        reason = "resource reserve guard: " + "; ".join(blockers)
+        return {
+            "reason": reason,
+            "metadata": {
+                "resource_reserve_guard": True,
+                "task_kind": task.kind.value,
+                "provider_route": task.provider_route.value if task.provider_route else None,
+                "min_free_cpu_ram_mb": min_cpu,
+                "min_free_gpu_ram_mb": min_gpu,
+                "observed_cpu_memory_available_mb": observed_cpu,
+                "observed_gpu_memory_free_mb": observed_gpu,
+            },
+        }
+
+    def _metric_float(self, raw: object, default: float | None) -> float | None:
+        try:
+            return float(raw) if raw is not None else default
+        except (TypeError, ValueError):
+            return default
+
+    def _execution_target_is_invalid(self, task: Task, target: Target | None, report: OrchestrationReport) -> bool:
+        if task.target_id is None:
+            return False
+        reason = ""
+        if target is None:
+            reason = "target record is missing"
+        elif not target.handle.strip():
+            reason = "target handle is empty"
+        if not reason:
+            return False
+        task.status = TaskStatus.BLOCKED
+        task.updated_at = utc_now()
+        task.metadata["invalid_target"] = True
+        task.metadata["invalid_target_reason"] = reason
+        self.store.insert_task(task)
+        event = EventRecord(
+            type=EventType.TASK_BLOCKED,
+            summary=f"Task blocked before execution: {reason}",
+            target_id=task.target_id,
+            task_id=task.id,
+            metadata={"invalid_target": True, "reason": reason},
+        )
+        self.store.insert_event(event)
+        report.events.append(event)
+        return True
+
     def _persist_execution_result(self, task: Task, run: TaskRun, result, report: OrchestrationReport) -> None:
         for trace in result.traces:
             self.store.insert_trace(trace)
@@ -1522,9 +1716,10 @@ class WorkflowOrchestrator:
         self.store.insert_event(
             EventRecord(
                 type=EventType.TASK_SUCCEEDED if result.success else EventType.TASK_FAILED,
-                summary=result.summary or task.title,
+                summary=(result.summary if result.success else result.error or result.summary) or task.title,
                 target_id=task.target_id,
                 task_id=task.id,
+                metadata={"error": result.error} if result.error else {},
             )
         )
         if self.event_bus is not None:

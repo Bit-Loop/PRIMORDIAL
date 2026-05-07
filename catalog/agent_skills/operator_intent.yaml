@@ -1,0 +1,9 @@
+id: operator_intent_control
+description: Keep chat guidance separate from active operator intent and honor intent-gated task policy.
+allowed_intents:
+  - recon_only
+  - web_triage
+  - ad_lab
+  - htb_lab
+  - credential_validation
+  - exploit_research_allowed

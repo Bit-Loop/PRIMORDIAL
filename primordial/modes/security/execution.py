@@ -32,6 +32,7 @@ from primordial.core.domain.enums import (
     InterestStatus,
     NotificationChannel,
     RiskTier,
+    TaskKind,
     VerificationStatus,
 )
 from primordial.core.domain.models import (
@@ -50,6 +51,7 @@ from primordial.core.domain.models import (
     TaskExecutionResult,
     TaskHandoff,
 )
+from primordial.core.intent.models import OperatorIntentPolicy
 from primordial.core.primitives.catalog import PrimitiveCatalog
 from primordial.core.storage.runtime import RuntimeStore
 
@@ -140,16 +142,95 @@ class PrimitiveExecutor:
         config: AppConfig,
         credentials: CredentialStore,
         ai_generate: AiGenerateCallable | None = None,
+        active_intent_policy_loader: Callable[[], OperatorIntentPolicy] | None = None,
+        active_intent_id_loader: Callable[[], str] | None = None,
     ) -> None:
         self.store = store
         self.catalog = catalog
         self.config = config
         self.credentials = credentials
         self.ai_generate = ai_generate
+        self.active_intent_policy_loader = active_intent_policy_loader
+        self.active_intent_id_loader = active_intent_id_loader
 
     def execute(self, task: Task, context: ContextSlice | None) -> TaskExecutionResult:
         handler = getattr(self, f"_handle_{task.kind.value}", self._handle_generic)
         return handler(task, context)
+
+    def _active_intent_policy(self) -> OperatorIntentPolicy | None:
+        return self.active_intent_policy_loader() if self.active_intent_policy_loader else None
+
+    def _active_intent_id(self) -> str:
+        return self.active_intent_id_loader() if self.active_intent_id_loader else "recon_only"
+
+    def _blocked_by_intent_result(
+        self,
+        task: Task,
+        *,
+        capability_category: str,
+        required_intent: str,
+        reason: str,
+    ) -> TaskExecutionResult:
+        active_intent = self._active_intent_id()
+        return TaskExecutionResult(
+            success=False,
+            summary=f"blocked by operator intent: {reason}",
+            error=reason,
+            events=[
+                EventRecord(
+                    type=EventType.TASK_BLOCKED,
+                    summary=f"Operator intent blocked {task.kind.value}: {reason}",
+                    target_id=task.target_id,
+                    task_id=task.id,
+                    metadata={
+                        "blocked_by_operator_intent": True,
+                        "task_kind": task.kind.value,
+                        "capability_category": capability_category,
+                        "active_intent": active_intent,
+                        "required_intent": required_intent,
+                        "reason": reason,
+                    },
+                )
+            ],
+        )
+
+    def _require_intent(self, task: Task) -> TaskExecutionResult | None:
+        policy = self._active_intent_policy()
+        if policy is None:
+            return None
+        if task.kind == TaskKind.EXPLOIT_RESEARCH:
+            if not (policy.public_poc_research and policy.searchsploit_allowed):
+                return self._blocked_by_intent_result(
+                    task,
+                    capability_category="public_poc_research",
+                    required_intent="exploit_research_allowed or htb_lab",
+                    reason="active intent does not allow searchsploit public PoC research",
+                )
+        elif task.kind == TaskKind.POC_APPLICABILITY_VALIDATION:
+            if not policy.poc_applicability_validation:
+                return self._blocked_by_intent_result(
+                    task,
+                    capability_category="poc_applicability_validation",
+                    required_intent="exploit_research_allowed or htb_lab",
+                    reason="active intent does not allow public PoC applicability validation",
+                )
+        elif task.kind == TaskKind.KERBEROS_ATTACK_CHECK:
+            if not policy.kerberos_policy.asrep_roast_check_allowed:
+                return self._blocked_by_intent_result(
+                    task,
+                    capability_category="kerberos_attack_check",
+                    required_intent="ad_lab or htb_lab",
+                    reason="active intent does not allow AS-REP/Kerberos attack-path checks",
+                )
+        elif task.kind == TaskKind.CREDENTIALED_ACCESS_CHECK:
+            if not policy.credential_policy.credential_validation_allowed:
+                return self._blocked_by_intent_result(
+                    task,
+                    capability_category="credentialed_access_check",
+                    required_intent="credential_validation or htb_lab",
+                    reason="active intent does not allow credential validation",
+                )
+        return None
 
     def resolve_primitives(self, task: Task) -> list[PrimitiveManifest]:
         selected: dict[str, PrimitiveManifest] = {}
@@ -804,6 +885,9 @@ class PrimitiveExecutor:
         return result
 
     def _handle_kerberos_attack_check(self, task: Task, context: ContextSlice) -> TaskExecutionResult:
+        blocked = self._require_intent(task)
+        if blocked is not None:
+            return blocked
         result = TaskExecutionResult(summary="Kerberos attack-path checks completed")
         target = self.store.get_target(task.target_id)
         if not target:
@@ -905,6 +989,9 @@ class PrimitiveExecutor:
         return result
 
     def _handle_credentialed_access_check(self, task: Task, context: ContextSlice) -> TaskExecutionResult:
+        blocked = self._require_intent(task)
+        if blocked is not None:
+            return blocked
         result = TaskExecutionResult(summary="credentialed access check completed")
         target = self.store.get_target(task.target_id)
         if not target:
@@ -1012,6 +1099,9 @@ class PrimitiveExecutor:
         return result
 
     def _handle_exploit_research(self, task: Task, context: ContextSlice) -> TaskExecutionResult:
+        blocked = self._require_intent(task)
+        if blocked is not None:
+            return blocked
         result = TaskExecutionResult(summary="exploit research completed")
         target = self.store.get_target(task.target_id)
         if not target:
@@ -1150,6 +1240,9 @@ class PrimitiveExecutor:
         return result
 
     def _handle_poc_applicability_validation(self, task: Task, context: ContextSlice) -> TaskExecutionResult:
+        blocked = self._require_intent(task)
+        if blocked is not None:
+            return blocked
         result = TaskExecutionResult(summary="PoC applicability validation completed")
         target = self.store.get_target(task.target_id)
         if not target:
@@ -2639,7 +2732,8 @@ class PrimitiveExecutor:
             self.store.list_evidence(target_id=target_id, limit=200),
             self._target_active_generation(target),
         )
-        allow_lab_fallbacks = bool(target and target.profile.value == "hack_the_box")
+        policy = self._active_intent_policy()
+        allow_lab_fallbacks = bool(policy and policy.lab_policy.htb_lab_behavior_allowed)
         queries: list[str] = []
         fallbacks: list[str] = []
 
@@ -2753,6 +2847,24 @@ class PrimitiveExecutor:
         return match.group(1).strip()
 
     def _run_searchsploit_research(self, queries: list[str]) -> dict[str, object]:
+        policy = self._active_intent_policy()
+        if policy is not None and not (policy.public_poc_research and policy.searchsploit_allowed):
+            return {
+                "matches": [],
+                "suppressed_matches": [],
+                "examined_examples": [],
+                "command_results": [
+                    {
+                        "tool": "searchsploit",
+                        "argv": ["searchsploit", "-j", "<query>"],
+                        "executed": False,
+                        "returncode": None,
+                        "stdout": "",
+                        "stderr": "disabled: active operator intent does not allow public PoC research",
+                        "timeout": False,
+                    }
+                ],
+            }
         command_results: list[dict[str, object]] = []
         matches_by_id: dict[str, dict[str, object]] = {}
         suppressed_by_id: dict[str, dict[str, object]] = {}
@@ -2777,7 +2889,9 @@ class PrimitiveExecutor:
             key=lambda item: (-int(item.get("score", 0)), str(item.get("title", ""))),
         )[:self.config.max_evidence_items]
         suppressed = sorted(suppressed_by_id.values(), key=lambda item: str(item.get("title", "")))[:self.config.max_evidence_items]
-        examples = self._examine_searchsploit_examples(matches[:4], command_results)
+        examples = []
+        if policy is None or policy.read_poc_examples:
+            examples = self._examine_searchsploit_examples(matches[:4], command_results)
         return {
             "matches": matches,
             "suppressed_matches": suppressed,
@@ -3655,6 +3769,8 @@ class PrimitiveExecutor:
         command_results: list[dict[str, object]] = []
         auth_results: list[dict[str, object]] = []
         flag_hits: list[dict[str, object]] = []
+        policy = self._active_intent_policy()
+        flag_collection_allowed = bool(policy and policy.lab_policy.lab_flag_collection_allowed)
         smb_result = self._run_secret_host_command(
             tool="smbclient",
             argv=["smbclient", "-A", auth_file, "-L", f"//{host}/", "-g", "-m", "SMB3"],
@@ -3665,8 +3781,20 @@ class PrimitiveExecutor:
         smb_returncode = smb_result.get("returncode")
         smb_valid = bool(smb_result.get("executed")) and smb_returncode is not None and int(smb_returncode) == 0
         auth_results.append({"protocol": "smb", "valid": smb_valid, "tool": "smbclient"})
-        if smb_valid:
+        if smb_valid and flag_collection_allowed:
             flag_hits.extend(self._collect_smb_flags(task, target_id, host, auth_file, username))
+        elif smb_valid:
+            command_results.append(
+                {
+                    "tool": "smbclient",
+                    "argv": ["smbclient", "-A", "<credential-file>", f"//{host}/C$", "-c", "<flag-collection>"],
+                    "executed": False,
+                    "returncode": None,
+                    "stdout": "",
+                    "stderr": "disabled: active operator intent does not allow lab flag collection",
+                    "timeout": False,
+                }
+            )
 
         if os.getenv("PRIMORDIAL_ALLOW_PASSWORD_ARG_TOOLS", "").strip() == "1":
             winrm_result = self._run_secret_host_command(

@@ -61,6 +61,11 @@
               </select>
             </label>
             <label class="field">
+              <span>Operator Intent</span>
+              <select id="operator-intent"></select>
+            </label>
+            <button id="operator-intent-apply" class="ghost-button" type="button">Set Intent</button>
+            <label class="field">
               <span>Continuous Interval</span>
               <input id="continuous-interval" type="number" min="2" value="30" />
             </label>
@@ -85,10 +90,18 @@
               <span>Stale Run Timeout</span>
               <input id="stale-run-timeout" type="number" min="60" value="3600" />
             </label>
+            <label class="field">
+              <span>CPU RAM Reserve</span>
+              <input id="min-free-cpu-ram" type="number" min="0" value="2048" />
+            </label>
+            <label class="field">
+              <span>GPU VRAM Reserve</span>
+              <input id="min-free-gpu-ram" type="number" min="0" value="368" />
+            </label>
             <button id="runtime-settings-apply" class="ghost-button" type="submit">Apply Runtime Tuning</button>
           </form>
           <p class="form-note">
-            CPU timeout covers slower local code/reviewer models. Stale run timeout recovers orphaned running tasks when a worker dies or never heartbeats back.
+            CPU timeout covers slower local code/reviewer models. Resource reserves defer task execution before local work can consume the last available RAM or VRAM.
           </p>
           <pre id="action-log" class="action-log">Awaiting operator action.</pre>
         </section>
@@ -220,7 +233,7 @@
             </label>
             <label class="field">
               <span>Target Focus</span>
-              <input id="chat-target" type="text" placeholder="pirate.htb" />
+              <input id="chat-target" type="text" placeholder="target handle" />
             </label>
             <button type="submit">Ask Local AI</button>
           </form>
@@ -239,7 +252,7 @@
           <form id="guidance-form" class="chat-form">
             <label class="field">
               <span>Guidance Target</span>
-              <input id="guidance-target" type="text" placeholder="pirate.htb" />
+              <input id="guidance-target" type="text" placeholder="target handle" />
             </label>
             <label class="field">
               <span>Program Guidance, Feedback, and General Notes</span>
@@ -264,37 +277,37 @@
           <form id="target-form" class="target-form">
             <label class="field">
               <span>Handle</span>
-              <input id="target-handle" type="text" placeholder="pirate.htb" />
+              <input id="target-handle" type="text" placeholder="target.example" />
             </label>
             <label class="field">
               <span>Display Name</span>
-              <input id="target-display-name" type="text" placeholder="Pirate HTB" />
+              <input id="target-display-name" type="text" placeholder="Target Display Name" />
             </label>
             <label class="field">
               <span>Profile</span>
               <select id="target-profile">
-                <option value="hack_the_box">Hack The Box</option>
                 <option value="hackerone">HackerOne</option>
+                <option value="hack_the_box">Hack The Box</option>
               </select>
             </label>
             <label class="field">
               <span>Assets</span>
-              <input id="target-assets" type="text" placeholder="pirate.htb, 10.129.47.117" />
+              <input id="target-assets" type="text" placeholder="target.example, 10.0.0.10" />
             </label>
             <label class="field">
               <span>Active IP</span>
               <input id="target-active-ip" type="text" placeholder="10.129.244.95" />
             </label>
             <button id="target-submit" type="submit">Add Or Update Target</button>
-            <button id="htb-target-update" class="ghost-button" type="button">Update HTB Target</button>
-            <p class="form-note">Update HTB Target stores the active IP, scope assets, and target metadata used by future orchestration ticks.</p>
+            <button id="htb-target-update" class="ghost-button" type="button">Use HTB Profile</button>
+            <p class="form-note">Target updates store the active IP, scope assets, and target metadata used by future orchestration ticks.</p>
           </form>
           <form id="scope-import-form" class="target-form">
             <label class="field">
               <span>Import Profile</span>
               <select id="scope-import-profile">
-                <option value="hack_the_box">Hack The Box</option>
                 <option value="hackerone">HackerOne</option>
+                <option value="hack_the_box">Hack The Box</option>
               </select>
             </label>
             <label class="field">
@@ -303,7 +316,7 @@
             </label>
             <label class="field wide-field">
               <span>Scope JSON or one asset per line</span>
-              <textarea id="scope-import-text" rows="4" placeholder='{"profile":"hack_the_box","targets":[{"handle":"pirate.htb","assets":["pirate.htb","10.129.47.117"]}]}'></textarea>
+              <textarea id="scope-import-text" rows="4" placeholder='{"profile":"hackerone","targets":[{"handle":"target.example","assets":["target.example","10.0.0.10"]}]}'></textarea>
             </label>
             <button id="scope-import-submit" class="ghost-button" type="submit">Import Scope</button>
           </form>

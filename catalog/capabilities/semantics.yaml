@@ -1,0 +1,34 @@
+capabilities:
+  - id: smb_share_enumeration
+    category: recon
+    description: Enumerate SMB shares without credential guessing or file writes.
+    approved_tools:
+      - netexec
+      - smbclient
+    safe_substitutions:
+      - smbclient
+    required_intent_permissions: []
+  - id: ldap_base_discovery
+    category: recon
+    description: Query LDAP RootDSE naming context metadata.
+    approved_tools:
+      - ldapsearch
+    safe_substitutions: []
+    required_intent_permissions: []
+  - id: public_poc_research
+    category: research
+    description: Search public exploit references without execution.
+    approved_tools:
+      - searchsploit
+    safe_substitutions: []
+    required_intent_permissions:
+      - public_poc_research
+      - searchsploit_allowed
+  - id: lab_flag_collection
+    category: lab
+    description: Collect lab challenge flag files after credential validation.
+    approved_tools:
+      - smbclient
+    safe_substitutions: []
+    required_intent_permissions:
+      - lab_policy.lab_flag_collection_allowed

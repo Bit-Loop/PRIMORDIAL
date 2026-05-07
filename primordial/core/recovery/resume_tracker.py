@@ -37,13 +37,16 @@ class ResumeTracker:
         if metadata:
             task.metadata["wait_metadata"] = dict(metadata)
         self.store.insert_task(task)
+        event_metadata = {"resume_after": resume_after.isoformat()}
+        if metadata:
+            event_metadata.update(dict(metadata))
         self.store.insert_event(
             EventRecord(
                 type=EventType.TASK_DEFERRED,
                 summary=reason,
                 target_id=task.target_id,
                 task_id=task.id,
-                metadata={"resume_after": resume_after.isoformat()},
+                metadata=event_metadata,
             )
         )
         if self.event_bus is not None:

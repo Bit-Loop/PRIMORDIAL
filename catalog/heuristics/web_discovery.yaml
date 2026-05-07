@@ -1,0 +1,31 @@
+auth_keywords:
+  - login
+  - signin
+  - sign-in
+  - auth
+  - session
+  - account
+  - admin
+discovery_paths:
+  - /robots.txt
+  - /sitemap.xml
+  - /.well-known/security.txt
+  - /login
+  - /admin
+  - /api/
+content_extensions:
+  - ""
+  - .aspx
+  - .asp
+  - .txt
+  - .config
+  - .html
+interesting_status:
+  - 200
+  - 204
+  - 301
+  - 302
+  - 307
+  - 308
+  - 401
+  - 403

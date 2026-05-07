@@ -1,0 +1,70 @@
+{
+  "body": "whats going on?",
+  "created_at": "2026-05-07T16:04:05.855733+00:00",
+  "id": "opmsg_ce450c6f358c",
+  "metadata": {
+    "target_reference": "principal.htb"
+  },
+  "model": null,
+  "role": "operator",
+  "target": {
+    "created_at": "2026-05-07T15:47:56.071177+00:00",
+    "display_name": "principal.htb",
+    "handle": "principal.htb",
+    "id": "target_9aa2409fa058",
+    "in_scope": true,
+    "metadata": {
+      "active_ip": "10.129.244.220",
+      "active_ip_generation": 1,
+      "active_ip_source": "target_update",
+      "methodology_state": {
+        "blockers": [],
+        "candidate_actions": [
+          {
+            "confidence": 0.81,
+            "kind": "exploit_research",
+            "metadata": {},
+            "phase": "analysis",
+            "prerequisite": "current-generation service or AD evidence",
+            "subphase": "exploit_research",
+            "summary": "Search local exploit references for evidence-backed services on principal.htb.",
+            "title": "Research relevant public PoCs",
+            "transition_reason": "Current-generation recon evidence supports public exploit research triage."
+          }
+        ],
+        "completion": "candidate_actions_ready",
+        "fingerprint": "{\"blockers\": [], \"candidate_actions\": [{\"confidence\": 0.81, \"kind\": \"exploit_research\", \"metadata\": {}, \"phase\": \"analysis\", \"prerequisite\": \"current-generation service or AD evidence\", \"subphase\": \"exploit_research\", \"summary\": \"Search local exploit references for evidence-backed services on principal.htb.\", \"title\": \"Research relevant public PoCs\", \"transition_reason\": \"Current-generation recon evidence supports public exploit research triage.\"}], \"completion\": \"candidate_actions_ready\", \"no_progress_reason\": null, \"phase\": \"analysis\", \"subphase\": \"exploit_research\"}",
+        "metadata": {
+          "active_ip_generation": "1",
+          "ai_proposal_admission": {
+            "accepted": [],
+            "rejected": []
+          },
+          "current_generation_evidence_count": 1,
+          "verified_interest_count": 0,
+          "waiting_task_count": 1
+        },
+        "next_unblock_action": null,
+        "no_progress_reason": null,
+        "phase": "analysis",
+        "planner_version": 2,
+        "retry_budget": {
+          "analyze_evidence": 2,
+          "exploit_research": 0,
+          "recon_scan": 0,
+          "service_discovery": 0
+        },
+        "subphase": "exploit_research",
+        "transition_reason": "Current-generation recon evidence supports public exploit research triage.",
+        "updated_at": "2026-05-07T16:03:40.950944+00:00"
+      },
+      "operator_confirmed_ip": "10.129.244.220",
+      "operator_confirmed_ip_at": "2026-05-07T15:55:14.852100+00:00",
+      "source": "gui_start_work",
+      "stale_evidence_before": "2026-05-07T15:51:57.839268+00:00",
+      "target_kind": "htb_lab"
+    },
+    "profile": "hack_the_box",
+    "updated_at": "2026-05-07T16:03:40.951014+00:00"
+  }
+}

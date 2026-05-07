@@ -1,0 +1,96 @@
+{
+  "body": "status",
+  "created_at": "2026-05-07T18:21:32.703270+00:00",
+  "id": "opmsg_c8d4d6c9fc2d",
+  "metadata": {
+    "target_reference": "pirate.htb"
+  },
+  "model": null,
+  "role": "operator",
+  "target": {
+    "created_at": "2026-05-05T02:04:46.452719+00:00",
+    "display_name": "HTB Pirate",
+    "handle": "pirate.htb",
+    "id": "target_19956ec84d56",
+    "in_scope": true,
+    "metadata": {
+      "active_ip": "10.129.48.145",
+      "active_ip_generation": 6,
+      "active_ip_source": "target_update",
+      "methodology_state": {
+        "blockers": [
+          "Lab username/password are not configured, so credentialed SMB/WinRM verification cannot run.",
+          "AI proposal rejected: Refine LDAP enumeration query to target username enumeration (missing primitive mapping)",
+          "AI proposal rejected: Verify IIS version and modules via HTTP fingerprinting (missing primitive mapping)",
+          "AI proposal rejected: Attempt Kerberos pre-auth enumeration via AS-REQ (if Kerberos port 88 is accessible) (missing primitive mapping)"
+        ],
+        "candidate_actions": [],
+        "completion": "memory_maintenance_due",
+        "fingerprint": "{\"blockers\": [\"Lab username/password are not configured, so credentialed SMB/WinRM verification cannot run.\", \"AI proposal rejected: Refine LDAP enumeration query to target username enumeration (missing primitive mapping)\", \"AI proposal rejected: Verify IIS version and modules via HTTP fingerprinting (missing primitive mapping)\", \"AI proposal rejected: Attempt Kerberos pre-auth enumeration via AS-REQ (if Kerberos port 88 is accessible) (missing primitive mapping)\"], \"candidate_actions\": [], \"completion\": \"memory_maintenance_due\", \"no_progress_reason\": \"Lab username/password are not configured, so credentialed SMB/WinRM verification cannot run.\", \"phase\": \"memory_maintenance\", \"subphase\": \"compact_memory\"}",
+        "last_no_progress_key": "{\"next_unblock_action\": \"Lab username/password are not configured, so credentialed SMB/WinRM verification cannot run.\", \"phase\": \"memory_maintenance\", \"reason\": \"Lab username/password are not configured, so credentialed SMB/WinRM verification cannot run.\", \"subphase\": \"compact_memory\"}",
+        "metadata": {
+          "active_ip_generation": "6",
+          "ai_proposal_admission": {
+            "accepted": [],
+            "rejected": [
+              {
+                "primitive_hint": "ldap_search",
+                "reason": "missing primitive mapping",
+                "task_id": "task_1ee214eeaa03",
+                "title": "Refine LDAP enumeration query to target username enumeration"
+              },
+              {
+                "primitive_hint": "http_fingerprint",
+                "reason": "missing primitive mapping",
+                "task_id": "task_1ee214eeaa03",
+                "title": "Verify IIS version and modules via HTTP fingerprinting"
+              },
+              {
+                "primitive_hint": "kerberos_as_req",
+                "reason": "missing primitive mapping",
+                "task_id": "task_1ee214eeaa03",
+                "title": "Attempt Kerberos pre-auth enumeration via AS-REQ (if Kerberos port 88 is accessible)"
+              },
+              {
+                "primitive_hint": "ldap_bind, ldap_search, ldap_error_interpretation",
+                "reason": "missing primitive mapping",
+                "task_id": "task_6d1f61daf9d7",
+                "title": "Validate LDAP bind policy and error verbosity"
+              },
+              {
+                "primitive_hint": "ldap_bind_with_creds, ldap_search",
+                "reason": "missing primitive mapping",
+                "task_id": "task_6d1f61daf9d7",
+                "title": "Perform bounded LDAP enumeration with authenticated bind (if credentials available)"
+              },
+              {
+                "primitive_hint": "web_crawl, http_get, path_discovery",
+                "reason": "missing primitive mapping",
+                "task_id": "task_6d1f61daf9d7",
+                "title": "Cross-check IIS paths for AD-related endpoints (e.g., /adfs, /owa, /rpc) that may expose enumeration vectors"
+              }
+            ]
+          },
+          "current_generation_evidence_count": 9,
+          "verified_interest_count": 0,
+          "waiting_task_count": 0
+        },
+        "next_unblock_action": "Lab username/password are not configured, so credentialed SMB/WinRM verification cannot run.",
+        "no_progress_reason": "Lab username/password are not configured, so credentialed SMB/WinRM verification cannot run.",
+        "phase": "memory_maintenance",
+        "planner_version": 2,
+        "retry_budget": {},
+        "subphase": "compact_memory",
+        "transition_reason": "Memory maintenance is due, but an equivalent task is already satisfied or waiting.",
+        "updated_at": "2026-05-07T18:21:21.088845+00:00"
+      },
+      "operator_confirmed_ip": "10.129.48.145",
+      "operator_confirmed_ip_at": "2026-05-06T04:51:54.715744+00:00",
+      "source": "gui_start_work",
+      "stale_evidence_before": "2026-05-06T04:51:54.715748+00:00",
+      "target_kind": "htb_lab"
+    },
+    "profile": "hack_the_box",
+    "updated_at": "2026-05-07T18:21:21.095568+00:00"
+  }
+}

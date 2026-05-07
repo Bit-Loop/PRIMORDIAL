@@ -1,0 +1,21 @@
+id: web_triage
+label: Web Triage
+description: Finding import, classification, and low-risk web review.
+policy:
+  public_poc_research: false
+  searchsploit_allowed: false
+  read_poc_examples: false
+  poc_applicability_validation: false
+  exploit_code_generation: false
+  poc_execution: false
+  kerberos_policy:
+    asrep_roast_check_allowed: false
+    kerberoast_check_allowed: false
+  credential_policy:
+    credential_validation_allowed: false
+    credential_guessing_allowed: false
+    credential_spraying_allowed: false
+    hash_cracking_allowed: false
+  lab_policy:
+    lab_flag_collection_allowed: false
+    htb_lab_behavior_allowed: false

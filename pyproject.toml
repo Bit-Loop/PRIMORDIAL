@@ -12,7 +12,7 @@ license = {text = "Proprietary"}
 authors = [
   {name = "Bitloop"}
 ]
-dependencies = []
+dependencies = ["PyYAML>=6.0"]
 
 [project.optional-dependencies]
 tui = ["textual>=0.61.0"]

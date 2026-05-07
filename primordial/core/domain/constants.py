@@ -1,8 +1,26 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+from primordial.core.catalog.heuristics import HeuristicCatalog
+
+
+_CATALOG_ROOT = Path(__file__).resolve().parents[3] / "catalog" / "heuristics"
+_HEURISTICS = HeuristicCatalog(_CATALOG_ROOT)
+
+
+def _load_service_discovery() -> dict[str, object]:
+    try:
+        return _HEURISTICS.load("service_discovery")
+    except Exception:
+        return {}
+
+
+_SERVICE_DISCOVERY = _load_service_discovery()
+
 # Canonical TCP port lists. Import from here; do not redefine in execution or workflow layers.
 
-SERVICE_DISCOVERY_PORTS: tuple[int, ...] = (
+_DEFAULT_SERVICE_DISCOVERY_PORTS: tuple[int, ...] = (
     21,
     22,
     25,
@@ -43,7 +61,7 @@ SERVICE_DISCOVERY_PORTS: tuple[int, ...] = (
     49157,
 )
 
-SERVICE_NAME_BY_PORT: dict[int, str] = {
+_DEFAULT_SERVICE_NAME_BY_PORT: dict[int, str] = {
     21: "ftp",
     22: "ssh",
     25: "smtp",
@@ -78,16 +96,33 @@ SERVICE_NAME_BY_PORT: dict[int, str] = {
     47001: "winrm",
 }
 
+SERVICE_DISCOVERY_PORTS: tuple[int, ...] = tuple(
+    int(item) for item in _SERVICE_DISCOVERY.get("service_ports", _DEFAULT_SERVICE_DISCOVERY_PORTS)
+)
+
+SERVICE_NAME_BY_PORT: dict[int, str] = {
+    int(port): str(name)
+    for port, name in (
+        _SERVICE_DISCOVERY.get("service_names", _DEFAULT_SERVICE_NAME_BY_PORT)
+        if isinstance(_SERVICE_DISCOVERY.get("service_names", _DEFAULT_SERVICE_NAME_BY_PORT), dict)
+        else _DEFAULT_SERVICE_NAME_BY_PORT
+    ).items()
+}
+
 # Ports that indicate an exposed remote-administration or data-access surface.
 # Used by both the execution layer (interest classification) and the workflow
 # orchestrator (credentialed-access task planning). Must stay in sync.
-REMOTE_ADMIN_PORTS: frozenset[int] = frozenset({21, 22, 445, 1433, 2049, 3306, 3389, 5985, 5986})
+REMOTE_ADMIN_PORTS: frozenset[int] = frozenset(
+    int(item) for item in _SERVICE_DISCOVERY.get("remote_admin_ports", {21, 22, 445, 1433, 2049, 3306, 3389, 5985, 5986})
+)
 
 # Ports whose presence implies Active Directory is reachable.
-AD_INDICATOR_PORTS: frozenset[int] = frozenset({88, 135, 139, 389, 445, 464, 593, 636, 3268, 3269})
+AD_INDICATOR_PORTS: frozenset[int] = frozenset(
+    int(item) for item in _SERVICE_DISCOVERY.get("ad_indicator_ports", {88, 135, 139, 389, 445, 464, 593, 636, 3268, 3269})
+)
 
 # Ports that carry DNS traffic (standard + DNS-over-TLS).
-DNS_PORTS: frozenset[int] = frozenset({53, 853})
+DNS_PORTS: frozenset[int] = frozenset(int(item) for item in _SERVICE_DISCOVERY.get("dns_ports", {53, 853}))
 
 # Scope-profile → set of task kind values that are planned without requiring
 # explicit per-target allow_* metadata. Extend here when adding new profiles
@@ -98,11 +133,7 @@ PROFILE_DEFAULT_TASK_ALLOWLIST: dict[str, frozenset[str]] = {
         "ad_enumeration",
         "dns_enumeration",
         "web_content_discovery",
-        "exploit_research",
-        "poc_applicability_validation",
         "kerberos_user_discovery",
-        "kerberos_attack_check",
-        "credentialed_access_check",
     }),
     "hackerone": frozenset(),
 }
