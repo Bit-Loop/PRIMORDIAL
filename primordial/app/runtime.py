@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,7 @@ from threading import RLock
 import shutil
 import subprocess
 import time
+from urllib import parse as urlparse
 
 from primordial.adapters.caido import CaidoIntegrationService
 from primordial.adapters.discord import DiscordNotificationService
@@ -17,6 +19,7 @@ from primordial.core.config import AppConfig
 from primordial.core.credentials import CredentialStore
 from primordial.core.domain.enums import (
     AgentRole,
+    ArtifactKind,
     EvidenceType,
     EventType,
     InterestStatus,
@@ -30,6 +33,7 @@ from primordial.core.domain.enums import (
 )
 from primordial.core.domain.models import (
     DashboardSnapshot,
+    ArtifactRecord,
     EventRecord,
     EvidenceRecord,
     Finding,
@@ -1674,6 +1678,223 @@ class PrimordialRuntime:
             return CaidoIntegrationService(self.credentials, self.event_bus).status(check_health=False)
         return self.caido.status(check_health=check_health)
 
+    def caido_httpql_presets(self, target: str | None = None) -> dict[str, object]:
+        target_record = self._resolve_target_reference(target) if target else None
+        targets = [target_record] if target_record else self.store.list_targets()
+        target_rows = []
+        presets = []
+        for item in targets:
+            if item is None:
+                continue
+            terms = self._caido_scope_terms(item)
+            httpql = self.caido.build_target_httpql(terms)
+            target_rows.append(
+                {
+                    "id": item.id,
+                    "handle": item.handle,
+                    "display_name": item.display_name,
+                    "in_scope": item.in_scope,
+                    "httpql": httpql,
+                    "terms": terms,
+                }
+            )
+            if httpql:
+                presets.append({"id": f"target:{item.id}", "label": f"{item.handle} scope", "httpql": httpql})
+        presets.extend(
+            [
+                {"id": "errors", "label": "Error responses", "httpql": "resp.code.gte:400"},
+                {"id": "auth", "label": "Auth paths", "httpql": 'req.path.cont:"login" OR req.path.cont:"admin"'},
+                {
+                    "id": "tokens",
+                    "label": "Token hints",
+                    "httpql": 'resp.raw.cont:"api_key" OR resp.raw.cont:"secret" OR resp.raw.cont:"token"',
+                },
+            ]
+        )
+        return {"targets": target_rows, "presets": presets}
+
+    def caido_search_requests(
+        self,
+        *,
+        target: str | None = None,
+        httpql: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, object]:
+        target_record = self._resolve_target_reference(target) if target else self._resolve_target_reference(None)
+        if target and target_record is None:
+            raise ValueError("target not found")
+        effective_httpql = (httpql or "").strip()
+        if not effective_httpql:
+            if target_record is not None:
+                effective_httpql = self.caido.build_target_httpql(self._caido_scope_terms(target_record))
+            else:
+                terms: list[str] = []
+                for item in self.store.list_targets():
+                    terms.extend(self._caido_scope_terms(item))
+                effective_httpql = self.caido.build_target_httpql(terms)
+        result = self.caido.search_requests(effective_httpql, limit=limit, offset=offset)
+        result["target"] = target_record.as_payload() if target_record else None
+        result["presets"] = self.caido_httpql_presets(target_record.handle if target_record else None)
+        return result
+
+    def caido_request_detail(self, request_id: str) -> dict[str, object]:
+        return self.caido.request_detail(request_id)
+
+    def caido_import_requests(
+        self,
+        *,
+        target: str,
+        request_ids: list[str],
+        httpql: str = "",
+    ) -> dict[str, object]:
+        target_record = self._resolve_target_reference(target)
+        if target_record is None:
+            raise ValueError("target not found")
+        if not target_record.in_scope:
+            raise ValueError("target is not in scope")
+        selected_ids = [str(item).strip() for item in request_ids if str(item).strip()]
+        if not selected_ids:
+            raise ValueError("request_ids is required")
+        imported = []
+        errors = []
+        for request_id in selected_ids[:50]:
+            detail = self.caido.request_detail(request_id)
+            if not detail.get("ok"):
+                errors.append({"id": request_id, "error": str(detail.get("error") or "detail fetch failed")})
+                continue
+            request_payload = detail.get("request") if isinstance(detail.get("request"), dict) else {}
+            host = str(request_payload.get("host") or "")
+            if not self._caido_host_in_scope(target_record, host):
+                errors.append({"id": request_id, "error": f"host is not in target scope: {host}"})
+                continue
+            artifact = self._write_caido_capture_artifact(target_record, request_payload, httpql=httpql)
+            self.store.insert_artifact(artifact)
+            method = str(request_payload.get("method") or "HTTP").upper()
+            path = str(request_payload.get("path") or "/")
+            status = int(request_payload.get("status") or 0)
+            evidence = EvidenceRecord(
+                target_id=target_record.id,
+                type=EvidenceType.HTTP_REPLAY,
+                title=f"Caido capture: {method} {path}",
+                summary=f"Imported Caido request {request_id}: {method} {host}{path} returned HTTP {status or 'unknown'}.",
+                source_ref=f"caido://request/{request_id}",
+                verification_status=VerificationStatus.PARTIAL,
+                confidence=0.75,
+                freshness=0.85,
+                artifact_path=artifact.path,
+                metadata={
+                    "kind": ArtifactKind.CAIDO_CAPTURE.value,
+                    "caido_request_id": request_id,
+                    "httpql": httpql,
+                    "method": method,
+                    "host": host,
+                    "path": path,
+                    "status_code": status,
+                    "request_sha256": request_payload.get("request_sha256") or "",
+                    "response_sha256": request_payload.get("response_sha256") or "",
+                    "request_snippet": request_payload.get("request_snippet") or "",
+                    "response_snippet": request_payload.get("response_snippet") or "",
+                    "request_truncated": bool(request_payload.get("request_truncated")),
+                    "response_truncated": bool(request_payload.get("response_truncated")),
+                    "raw_bodies_stored": False,
+                    "artifact_id": artifact.id,
+                },
+            )
+            self.store.insert_evidence(evidence)
+            imported.append({"request_id": request_id, "evidence": evidence.as_payload(), "artifact": artifact.as_payload()})
+        if imported:
+            self.store.insert_event(
+                EventRecord(
+                    type=EventType.CAIDO_IMPORT,
+                    summary=f"Imported {len(imported)} Caido capture(s)",
+                    target_id=target_record.id,
+                    metadata={
+                        "request_ids": [item["request_id"] for item in imported],
+                        "httpql": httpql,
+                        "artifact_ids": [item["artifact"]["id"] for item in imported],
+                        "evidence_ids": [item["evidence"]["id"] for item in imported],
+                        "raw_bodies_stored": False,
+                    },
+                )
+            )
+        return {
+            "target": target_record.as_payload(),
+            "imported": imported,
+            "errors": errors,
+            "records": self.records_payload(limit=50, target_id=target_record.id),
+        }
+
+    def caido_replay_draft(self, *, target: str, raw_request: str) -> dict[str, object]:
+        target_record = self._resolve_target_reference(target)
+        if target_record is None:
+            raise ValueError("target not found")
+        if not target_record.in_scope:
+            raise ValueError("target is not in scope")
+        parsed = self.caido.parse_raw_request(raw_request)
+        if not self._caido_host_in_scope(target_record, parsed.host):
+            raise ValueError(f"raw request host is not in target scope: {parsed.host}")
+        draft = self.caido.create_replay_draft(raw_request)
+        draft["target"] = target_record.as_payload()
+        return draft
+
+    def caido_replay_send(
+        self,
+        *,
+        target: str,
+        raw_request: str,
+        confirmation: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, object]:
+        target_record = self._resolve_target_reference(target)
+        if target_record is None:
+            raise ValueError("target not found")
+        if not target_record.in_scope:
+            raise ValueError("target is not in scope")
+        parsed = self.caido.parse_raw_request(raw_request)
+        if not self._caido_host_in_scope(target_record, parsed.host):
+            raise ValueError(f"raw request host is not in target scope: {parsed.host}")
+        if str(confirmation or "").strip() != parsed.raw_sha256:
+            raise ValueError("same-session replay confirmation is required")
+        selected_session_id = str(session_id or "").strip()
+        draft: dict[str, object] | None = None
+        if not selected_session_id:
+            draft = self.caido.create_replay_draft(raw_request)
+            if not draft.get("ok"):
+                return {"ok": False, "target": target_record.as_payload(), "parsed": parsed.as_payload(), "error": draft.get("error")}
+            session = draft.get("session") if isinstance(draft.get("session"), dict) else {}
+            selected_session_id = str(session.get("id") or "")
+        if not selected_session_id:
+            raise ValueError("caido replay session_id is required")
+        result = self.caido.send_replay(raw_request, session_id=selected_session_id)
+        result["target"] = target_record.as_payload()
+        result["session_id"] = selected_session_id
+        if draft is not None:
+            result["draft"] = draft.get("session")
+        if result.get("ok"):
+            task = result.get("task") if isinstance(result.get("task"), dict) else {}
+            self.store.insert_event(
+                EventRecord(
+                    type=EventType.CAIDO_REPLAY_SENT,
+                    summary=f"Caido Replay sent one request to {parsed.host}",
+                    target_id=target_record.id,
+                    metadata={
+                        "raw_sha256": parsed.raw_sha256,
+                        "method": parsed.method,
+                        "host": parsed.host,
+                        "port": parsed.port,
+                        "path": parsed.path,
+                        "is_tls": parsed.is_tls,
+                        "caido_session_id": selected_session_id,
+                        "caido_task_id": task.get("id") or "",
+                        "caido_replay_entry_id": task.get("replay_entry_id") or "",
+                        "raw_persisted": False,
+                        "same_session_confirmation": True,
+                    },
+                )
+            )
+        return result
+
     def models_payload(self) -> dict[str, object]:
         installed = self.ollama.list_models()
         selected = self._current_model_roles()
@@ -2081,8 +2302,11 @@ class PrimordialRuntime:
         graphql_url: str | None = None,
         api_token: str | None = None,
     ) -> dict[str, object]:
+        default_graphql_url = ""
+        if api_token and not graphql_url and not self.credentials.get("caido", "graphql_url"):
+            default_graphql_url = CaidoIntegrationService.DEFAULT_GRAPHQL_URL
         values = {
-            "graphql_url": graphql_url or "",
+            "graphql_url": graphql_url or default_graphql_url,
             "api_token": api_token or "",
         }
         outcome = self.credentials.update_service("caido", values)
@@ -2821,6 +3045,104 @@ class PrimordialRuntime:
                 "capabilities exploit",
                 "cap_setuid",
             )
+        )
+
+    def _caido_scope_terms(self, target: Target) -> list[str]:
+        terms: list[str] = []
+        if target.handle:
+            terms.append(target.handle)
+        active_ip = str(target.metadata.get("active_ip") or "").strip()
+        if active_ip:
+            terms.append(active_ip)
+        for asset in self.store.list_scope_assets(target.id):
+            value = str(asset.asset or "").strip()
+            if value:
+                terms.append(value)
+        seen: set[str] = set()
+        deduped = []
+        for item in terms:
+            normalized = item.lower()
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            deduped.append(item)
+        return deduped
+
+    def _caido_host_in_scope(self, target: Target, host: str) -> bool:
+        if not target.in_scope:
+            return False
+        selected = self._normalize_scope_host(host)
+        if not selected:
+            return False
+        allowed = {self._normalize_scope_host(target.handle)}
+        active_ip = str(target.metadata.get("active_ip") or "").strip()
+        if active_ip:
+            allowed.add(self._normalize_scope_host(active_ip))
+        for asset in self.store.list_scope_assets(target.id):
+            value = str(asset.asset or "").strip()
+            if value:
+                allowed.add(self._normalize_scope_host(value))
+        allowed.discard("")
+        return selected in allowed
+
+    def _normalize_scope_host(self, value: str) -> str:
+        raw = str(value or "").strip()
+        if not raw:
+            return ""
+        parsed = urlparse.urlsplit(raw if "://" in raw else f"//{raw}")
+        if parsed.hostname:
+            return parsed.hostname.strip("[]").rstrip(".").lower()
+        return raw.split("/", 1)[0].split(":", 1)[0].strip("[]").rstrip(".").lower()
+
+    def _write_caido_capture_artifact(
+        self,
+        target: Target,
+        request_payload: dict[str, object],
+        *,
+        httpql: str,
+    ) -> ArtifactRecord:
+        request_id = str(request_payload.get("id") or "unknown")
+        artifact_dir = self.config.artifacts_dir / "caido" / self._safe_log_fragment(target.handle)
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        path = artifact_dir / f"{self._safe_log_fragment(request_id)}.json"
+        payload = {
+            "version": 1,
+            "kind": ArtifactKind.CAIDO_CAPTURE.value,
+            "target": target.as_payload(),
+            "caido_request_id": request_id,
+            "httpql": httpql,
+            "imported_at": utc_now().isoformat(),
+            "raw_bodies_stored": False,
+            "request": {
+                "id": request_id,
+                "method": request_payload.get("method") or "",
+                "host": request_payload.get("host") or "",
+                "port": request_payload.get("port"),
+                "path": request_payload.get("path") or "",
+                "status": request_payload.get("status") or 0,
+                "source": request_payload.get("source") or "",
+                "request_sha256": request_payload.get("request_sha256") or "",
+                "response_sha256": request_payload.get("response_sha256") or "",
+                "request_snippet": request_payload.get("request_snippet") or "",
+                "response_snippet": request_payload.get("response_snippet") or "",
+                "request_truncated": bool(request_payload.get("request_truncated")),
+                "response_truncated": bool(request_payload.get("response_truncated")),
+            },
+        }
+        path.write_text(json.dumps(json_ready(payload), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        content = path.read_bytes()
+        return ArtifactRecord(
+            task_id=None,
+            target_id=target.id,
+            kind=ArtifactKind.CAIDO_CAPTURE,
+            path=str(path),
+            sha256=hashlib.sha256(content).hexdigest(),
+            size_bytes=len(content),
+            metadata={
+                "caido_request_id": request_id,
+                "httpql": httpql,
+                "raw_bodies_stored": False,
+            },
         )
 
     def _resolve_target_reference(self, target: str | None) -> Target | None:

@@ -203,6 +203,8 @@ class EventType(StrEnum):
     SYNC_FAILED = "sync_failed"
     CREDENTIAL_UPDATED = "credential_updated"
     CREDENTIAL_CLEARED = "credential_cleared"
+    CAIDO_IMPORT = "caido_import"
+    CAIDO_REPLAY_SENT = "caido_replay_sent"
     OPERATOR_MESSAGE = "operator_message"
     OPERATOR_AI_RESPONSE = "operator_ai_response"
 

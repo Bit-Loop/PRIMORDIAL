@@ -87,6 +87,75 @@ class PrimordialWebApp:
             check_health = self._bool_param(query, "check_health", False)
             with self._lock:
                 return self._json_response(self.runtime.caido_status_payload(check_health=check_health))
+        if method == "POST" and path == "/api/integrations/caido/search":
+            payload = self._parse_json_body(body)
+            with self._lock:
+                try:
+                    result = self.runtime.caido_search_requests(
+                        target=self._optional_string(payload, "target"),
+                        httpql=self._optional_string(payload, "httpql"),
+                        limit=self._optional_int(payload, "limit") or 50,
+                        offset=self._optional_int(payload, "offset") or 0,
+                    )
+                    return self._json_response(result, status=200 if result.get("ok") else 502)
+                except ValueError as exc:
+                    return self._json_response({"ok": False, "error": str(exc)}, status=400)
+        if method == "GET" and path.startswith("/api/integrations/caido/requests/"):
+            request_id = unquote(path.rsplit("/", 1)[-1])
+            with self._lock:
+                result = self.runtime.caido_request_detail(request_id)
+                return self._json_response(result, status=200 if result.get("ok") else 502)
+        if method == "POST" and path == "/api/integrations/caido/import":
+            payload = self._parse_json_body(body)
+            request_ids = payload.get("request_ids", [])
+            if not isinstance(request_ids, list):
+                return self._json_response({"ok": False, "error": "request_ids must be a list"}, status=400)
+            target = str(payload.get("target", "")).strip()
+            if not target:
+                return self._json_response({"ok": False, "error": "target is required"}, status=400)
+            with self._lock:
+                try:
+                    return self._action_response(
+                        "caido-import",
+                        self.runtime.caido_import_requests(
+                            target=target,
+                            request_ids=[str(item) for item in request_ids],
+                            httpql=str(payload.get("httpql") or ""),
+                        ),
+                    )
+                except ValueError as exc:
+                    return self._json_response({"ok": False, "error": str(exc)}, status=400)
+        if method == "POST" and path == "/api/integrations/caido/replay/draft":
+            payload = self._parse_json_body(body)
+            target = str(payload.get("target", "")).strip()
+            raw_request = str(payload.get("raw_request") or "")
+            if not target:
+                return self._json_response({"ok": False, "error": "target is required"}, status=400)
+            with self._lock:
+                try:
+                    result = self.runtime.caido_replay_draft(target=target, raw_request=raw_request)
+                    return self._json_response(result, status=200 if result.get("ok") else 502)
+                except ValueError as exc:
+                    return self._json_response({"ok": False, "error": str(exc)}, status=400)
+        if method == "POST" and path == "/api/integrations/caido/replay/send":
+            payload = self._parse_json_body(body)
+            target = str(payload.get("target", "")).strip()
+            raw_request = str(payload.get("raw_request") or "")
+            if not target:
+                return self._json_response({"ok": False, "error": "target is required"}, status=400)
+            with self._lock:
+                try:
+                    result = self.runtime.caido_replay_send(
+                        target=target,
+                        raw_request=raw_request,
+                        confirmation=self._optional_string(payload, "confirmation"),
+                        session_id=self._optional_string(payload, "session_id"),
+                    )
+                    if result.get("ok"):
+                        return self._action_response("caido-replay-send", result)
+                    return self._json_response(result, status=502)
+                except ValueError as exc:
+                    return self._json_response({"ok": False, "error": str(exc)}, status=400)
         if method == "GET" and path == "/api/models":
             with self._lock:
                 return self._json_response(self.runtime.models_payload())
@@ -1027,31 +1096,33 @@ class PrimordialWebApp:
         return {"surfaces": surfaces, "findings": findings, "pocs": pocs, "artifacts": artifacts}
 
     def _caido_view(self, status: dict[str, Any], records: dict[str, Any], targets: list[dict[str, Any]]) -> dict[str, Any]:
-        host = self._scope_view(targets)[0]["handle"] if targets else ""
+        scope_rows = self._scope_view(targets)
+        host = scope_rows[0]["handle"] if scope_rows else ""
+        presets_payload = self.runtime.caido_httpql_presets(host if host else None)
         requests = [
             {
                 "id": str(item.get("id") or f"req_{index}"),
+                "caidoRequestId": str(item.get("metadata", {}).get("caido_request_id") or ""),
                 "method": str(item.get("metadata", {}).get("method") or item.get("type") or "GET"),
-                "host": host,
+                "host": str(item.get("metadata", {}).get("host") or host),
                 "path": str(item.get("metadata", {}).get("path") or item.get("title") or "/"),
                 "status": int(item.get("metadata", {}).get("status_code", 0) or 0),
-                "length": 0,
+                "length": len(str(item.get("metadata", {}).get("response_snippet") or "")),
                 "time": self._time_label(item.get("created_at")),
-                "source": "runtime",
+                "source": "imported",
                 "mime": str(item.get("metadata", {}).get("content_type") or ""),
+                "requestSnippet": str(item.get("metadata", {}).get("request_snippet") or ""),
+                "responseSnippet": str(item.get("metadata", {}).get("response_snippet") or ""),
             }
             for index, item in enumerate(records.get("evidence", []) if isinstance(records.get("evidence", []), list) else [])
-            if isinstance(item, dict) and str(item.get("type", "")).lower() in {"http_response", "web_response", "tool_output"}
+            if isinstance(item, dict) and str(item.get("type", "")).lower() == "http_replay"
         ][:50]
         return {
             "connection": status,
             "requests": requests,
             "replays": [],
-            "savedFilters": [
-                {"id": "sf_01", "label": "Target host", "httpql": f'req.host.eq:"{host}"' if host else ""},
-                {"id": "sf_02", "label": "Error responses", "httpql": "resp.code.gte:400"},
-                {"id": "sf_03", "label": "Auth surfaces", "httpql": 'req.path.cont:"login" OR req.path.cont:"admin"'},
-            ],
+            "savedFilters": presets_payload.get("presets", []),
+            "targetOptions": presets_payload.get("targets", []),
         }
 
     def _geo_view(self, targets: list[dict[str, Any]], caido_status: dict[str, Any], models: dict[str, Any]) -> dict[str, Any]:

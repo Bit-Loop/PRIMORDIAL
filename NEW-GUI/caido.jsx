@@ -1,5 +1,5 @@
-/* global React, Panel, Pill, Dot */
-const { useState: useStateCA, useMemo: useMemoCA } = React;
+/* global React, Pill, Dot */
+const { useState: useStateCA, useMemo: useMemoCA, useEffect: useEffectCA } = React;
 
 const METHOD_COLOR = {
   GET: 'var(--green)', POST: 'var(--cyan)', PUT: 'var(--blue)',
@@ -7,239 +7,371 @@ const METHOD_COLOR = {
 };
 const STATUS_TONE = (s) => s >= 500 ? 'red' : s >= 400 ? 'yellow' : s >= 300 ? 'blue' : s >= 200 ? 'green' : 'gray';
 
-function ReqRow({ r, sel, onSel }) {
-  const active = sel === r.id;
+function firstTarget(D) {
+  return (D.targetOptions || [])[0]?.handle || '';
+}
+
+function targetHttpql(D, handle) {
+  const target = (D.targetOptions || []).find(t => t.handle === handle);
+  return target?.httpql || (D.savedFilters || [])[0]?.httpql || '';
+}
+
+function shortHash(value) {
+  if (!value) return '';
+  return `${value.slice(0, 12)}...${value.slice(-8)}`;
+}
+
+function replayTemplate(req) {
+  if (!req) return 'GET / HTTP/1.1\nHost: example.htb\nConnection: close\n\n';
+  const path = req.path || '/';
+  const host = req.host || 'target.local';
+  return `${req.method || 'GET'} ${path} HTTP/1.1\nHost: ${host}\nConnection: close\n\n`;
+}
+
+function ReqRow({ r, selected, checked, onOpen, onToggle }) {
+  const active = selected === r.id;
   return (
-    <tr className={active ? 'sel' : ''} onClick={() => onSel(r.id)} style={{ cursor: 'pointer' }}>
-      <td>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 10.5, fontWeight: 700, color: METHOD_COLOR[r.method] || 'var(--txt-mute)' }}>{r.method}</span>
+    <tr className={active ? 'sel' : ''} onClick={() => onOpen(r.id)} style={{ cursor: 'pointer' }}>
+      <td onClick={e => e.stopPropagation()}>
+        <input type="checkbox" checked={checked} onChange={() => onToggle(r.id)} />
       </td>
-      <td className="dim" style={{ maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.host}</td>
-      <td style={{ maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--mono)', fontSize: 11 }}>{r.path}</td>
       <td>
-        <Pill tone={STATUS_TONE(r.status)}>{r.status}</Pill>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 10.5, fontWeight: 700, color: METHOD_COLOR[r.method] || 'var(--txt-mute)' }}>{r.method || 'HTTP'}</span>
       </td>
-      <td className="dim">{r.length ? `${r.length}B` : '—'}</td>
-      <td className="dim">{r.time}</td>
-      <td>
-        {r.source === 'replay' && <Pill tone="violet">REPLAY</Pill>}
-        {r.source === 'proxy' && <Pill tone="gray">PROXY</Pill>}
-      </td>
+      <td className="dim" style={{ maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.host}</td>
+      <td style={{ maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--mono)', fontSize: 11 }}>{r.path}</td>
+      <td><Pill tone={STATUS_TONE(Number(r.status || 0))}>{r.status || 0}</Pill></td>
+      <td className="dim">{r.response_length || r.length || 0}B</td>
+      <td className="dim">{r.source || 'caido'}</td>
     </tr>
   );
 }
 
-function RequestDetail({ req }) {
+function SnippetBlock({ label, value, truncated }) {
+  return (
+    <div>
+      <div className="upper" style={{ color: 'var(--txt-mute)', marginBottom: 6 }}>{label}{truncated ? ' TRUNCATED' : ''}</div>
+      <pre style={{
+        fontFamily: 'var(--mono)', fontSize: 10.5, background: 'var(--bg-deep)', border: '1px solid var(--line)',
+        borderRadius: 'var(--r-2)', padding: '8px 10px', color: 'var(--txt)', margin: 0, overflow: 'auto', maxHeight: 220,
+        whiteSpace: 'pre-wrap', overflowWrap: 'anywhere',
+      }}>{value || 'No snippet loaded.'}</pre>
+    </div>
+  );
+}
+
+function RequestDetail({ detail, loading, onReplaySeed }) {
+  if (loading) return <div style={{ padding: 14, color: 'var(--txt-mute)', fontFamily: 'var(--mono)', fontSize: 12 }}>LOADING DETAIL</div>;
+  const req = detail?.request;
   if (!req) return (
     <div style={{ flex: 1, display: 'grid', placeItems: 'center', color: 'var(--txt-mute)', fontFamily: 'var(--mono)', fontSize: 12 }}>
       SELECT A REQUEST
     </div>
   );
-  const mockReqHeaders = [
-    ['GET', `${req.path} HTTP/1.1`],
-    ['Host', req.host],
-    ['User-Agent', 'Mozilla/5.0 (X11; Linux x86_64)'],
-    ['Accept', 'text/html,application/xhtml+xml,*/*'],
-    ['Accept-Encoding', 'gzip, deflate'],
-    ['Connection', 'keep-alive'],
-  ];
-  const mockRespHeaders = [
-    ['HTTP/1.1', `${req.status} ${req.status === 200 ? 'OK' : req.status === 302 ? 'Found' : req.status === 401 ? 'Unauthorized' : req.status === 404 ? 'Not Found' : 'Response'}`],
-    ['Content-Type', req.mime || 'text/html'],
-    ['Content-Length', String(req.length)],
-    ['Server', 'Microsoft-IIS/10.0'],
-    ['X-Powered-By', 'ASP.NET'],
-    ['Date', 'Thu, 07 May 2026 14:02:09 GMT'],
-  ];
   return (
     <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <span style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: METHOD_COLOR[req.method] }}>{req.method}</span>
-        <span className="strong mono" style={{ fontSize: 13 }}>{req.path}</span>
-        <Pill tone={STATUS_TONE(req.status)}>{req.status}</Pill>
-        {req.source === 'replay' && <Pill tone="violet">REPLAY</Pill>}
-        <span className="dim mono" style={{ marginLeft: 'auto', fontSize: 10 }}>{req.time} · {req.length}B</span>
+        <span className="strong mono" style={{ fontSize: 13, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{req.path}</span>
+        <Pill tone={STATUS_TONE(Number(req.status || 0))}>{req.status || 0}</Pill>
       </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-        <div>
-          <div className="upper" style={{ color: 'var(--txt-mute)', marginBottom: 6 }}>REQUEST HEADERS</div>
-          <div style={{ fontFamily: 'var(--mono)', fontSize: 10.5, background: 'var(--bg-deep)', border: '1px solid var(--line)', borderRadius: 'var(--r-2)', padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 2 }}>
-            {mockReqHeaders.map(([k, v], i) => (
-              <div key={i} style={{ display: 'flex', gap: 8 }}>
-                <span style={{ color: 'var(--cyan)', width: 100, flex: '0 0 100px' }}>{k}</span>
-                <span style={{ color: 'var(--txt-strong)' }}>{v}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-        <div>
-          <div className="upper" style={{ color: 'var(--txt-mute)', marginBottom: 6 }}>RESPONSE HEADERS</div>
-          <div style={{ fontFamily: 'var(--mono)', fontSize: 10.5, background: 'var(--bg-deep)', border: '1px solid var(--line)', borderRadius: 'var(--r-2)', padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 2 }}>
-            {mockRespHeaders.map(([k, v], i) => (
-              <div key={i} style={{ display: 'flex', gap: 8 }}>
-                <span style={{ color: 'var(--violet)', width: 100, flex: '0 0 100px' }}>{k}</span>
-                <span style={{ color: 'var(--txt-strong)' }}>{v}</span>
-              </div>
-            ))}
-          </div>
-        </div>
+      <div className="dim mono" style={{ fontSize: 10, overflowWrap: 'anywhere' }}>
+        {req.host}:{req.port || ''} | request {shortHash(req.request_sha256)} | response {shortHash(req.response_sha256)}
       </div>
-
-      {req.method === 'POST' && (
-        <div>
-          <div className="upper" style={{ color: 'var(--txt-mute)', marginBottom: 6 }}>REQUEST BODY</div>
-          <pre style={{ fontFamily: 'var(--mono)', fontSize: 11, background: 'var(--bg-deep)', border: '1px solid var(--line)', borderRadius: 'var(--r-2)', padding: '8px 10px', color: 'var(--txt-strong)', margin: 0, overflow: 'auto' }}>
-            {`username=admin&password=tomcat`}
-          </pre>
-        </div>
-      )}
-
-      <div>
-        <div className="upper" style={{ color: 'var(--txt-mute)', marginBottom: 6 }}>RESPONSE BODY</div>
-        <pre style={{ fontFamily: 'var(--mono)', fontSize: 10.5, background: 'var(--bg-deep)', border: '1px solid var(--line)', borderRadius: 'var(--r-2)', padding: '8px 10px', color: 'var(--txt)', margin: 0, overflow: 'auto', maxHeight: 160 }}>
-          {req.status === 200 ? `<!DOCTYPE html>\n<html>\n<head><title>${req.host}</title></head>\n<body>\n  <!-- IIS default page -->\n  <h1>IIS Windows Server</h1>\n</body>\n</html>` :
-           req.status === 302 ? `<html><body><a href="/login">Object moved</a></body></html>` :
-           req.status === 401 ? `HTTP 401 Unauthorized\nWWW-Authenticate: Basic realm="Tomcat Manager Application"` :
-           `(empty body)`}
-        </pre>
-      </div>
-
-      <div style={{ display: 'flex', gap: 6 }}>
-        <button className="btn primary sm">SEND TO REPLAY</button>
-        <button className="btn sm">ATTACH AS EVIDENCE</button>
-        <button className="btn ghost sm">COPY AS CURL</button>
-        <button className="btn ghost sm" style={{ marginLeft: 'auto' }}>OPEN IN CAIDO ↗</button>
-      </div>
+      <SnippetBlock label="REQUEST SNIPPET" value={req.request_snippet} truncated={req.request_truncated} />
+      <SnippetBlock label="RESPONSE SNIPPET" value={req.response_snippet} truncated={req.response_truncated} />
+      <button className="btn sm" onClick={() => onReplaySeed(req)}>LOAD IN REPLAY</button>
     </div>
   );
 }
 
 function CaidoMode() {
   const D = window.PD_DATA.caido;
-  const [sel, setSel] = useStateCA(null);
-  const [httpql, setHttpql] = useStateCA('req.host.eq:"pirate.htb"');
-  const [activeFilt, setActiveFilt] = useStateCA('sf_01');
+  const API = window.PD_API;
+  const [target, setTarget] = useStateCA(() => firstTarget(D));
+  const [httpql, setHttpql] = useStateCA(() => targetHttpql(D, firstTarget(D)));
+  const [results, setResults] = useStateCA(() => D.requests || []);
+  const [selectedId, setSelectedId] = useStateCA(null);
+  const [checkedIds, setCheckedIds] = useStateCA([]);
+  const [detail, setDetail] = useStateCA(null);
+  const [loadingDetail, setLoadingDetail] = useStateCA(false);
+  const [busy, setBusy] = useStateCA('');
+  const [error, setError] = useStateCA('');
+  const [replayRaw, setReplayRaw] = useStateCA('');
+  const [draft, setDraft] = useStateCA(null);
+  const [confirmed, setConfirmed] = useStateCA(false);
+  const [connection, setConnection] = useStateCA(() => D.connection || {});
 
-  const filtered = useMemoCA(() => {
-    if (!httpql.trim()) return D.requests;
-    const hostMatch = httpql.match(/req\.host\.eq:"([^"]+)"/);
-    const pathCont = httpql.match(/req\.path\.cont:"([^"]+)"/g);
-    const statusGte = httpql.match(/resp\.code\.gte:(\d+)/);
-    return D.requests.filter(r => {
-      if (hostMatch && r.host !== hostMatch[1]) return false;
-      if (statusGte && r.status < parseInt(statusGte[1])) return false;
-      if (pathCont) {
-        const terms = pathCont.map(m => m.match(/"([^"]+)"/)[1]);
-        if (!terms.some(t => r.path.includes(t))) return false;
-      }
-      return true;
-    });
-  }, [httpql, D.requests]);
+  useEffectCA(() => {
+    if (!target && firstTarget(D)) setTarget(firstTarget(D));
+  }, [D]);
 
-  const selReq = D.requests.find(r => r.id === sel);
+  useEffectCA(() => {
+    if (API.demo) return;
+    API.request('/api/integrations/caido?check_health=1')
+      .then(payload => setConnection(payload || {}))
+      .catch(err => setConnection(prev => ({ ...prev, ok: false, error: err.message || String(err) })));
+  }, []);
 
-  const connOk = D.connection.ok;
+  const selectedRows = useMemoCA(
+    () => results.filter(r => checkedIds.includes(r.id)),
+    [results, checkedIds],
+  );
+  const conn = connection || {};
+  const schemaCaps = conn.schema?.capabilities || {};
+
+  async function runSearch(nextHttpql = httpql) {
+    setBusy('search');
+    setError('');
+    try {
+      const payload = await API.request('/api/integrations/caido/search', {
+        method: 'POST',
+        body: { target, httpql: nextHttpql, limit: 75 },
+      });
+      setResults(payload.requests || []);
+      setHttpql(payload.httpql || nextHttpql || '');
+      setCheckedIds([]);
+      setSelectedId(null);
+      setDetail(null);
+      if (!payload.ok) setError(payload.error || 'Caido search failed');
+    } catch (err) {
+      setError(err.message || String(err));
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function openDetail(id) {
+    setSelectedId(id);
+    const local = results.find(r => r.id === id);
+    if (local?.requestSnippet || local?.responseSnippet) {
+      setDetail({
+        ok: true,
+        request: {
+          id: local.caidoRequestId || local.id,
+          method: local.method,
+          host: local.host,
+          port: local.port || '',
+          path: local.path,
+          status: local.status,
+          request_snippet: local.requestSnippet || '',
+          response_snippet: local.responseSnippet || '',
+          request_truncated: false,
+          response_truncated: false,
+        },
+      });
+      return;
+    }
+    setLoadingDetail(true);
+    setError('');
+    try {
+      const caidoId = local?.caidoRequestId || id;
+      const payload = await API.request(`/api/integrations/caido/requests/${encodeURIComponent(caidoId)}`);
+      setDetail(payload);
+      if (!payload.ok) setError(payload.error || 'Request detail failed');
+    } catch (err) {
+      setError(err.message || String(err));
+    } finally {
+      setLoadingDetail(false);
+    }
+  }
+
+  function toggleId(id) {
+    setCheckedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  }
+
+  async function importSelected() {
+    if (!checkedIds.length) return;
+    setBusy('import');
+    setError('');
+    try {
+      const payload = await API.post('/api/integrations/caido/import', { target, request_ids: checkedIds, httpql });
+      const imported = payload.result?.imported || [];
+      const errors = payload.result?.errors || [];
+      if (errors.length) setError(errors.map(e => e.error).join('; '));
+      if (imported.length && API.refresh) API.refresh();
+      setCheckedIds([]);
+    } catch (err) {
+      setError(err.message || String(err));
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function draftReplay() {
+    setBusy('draft');
+    setError('');
+    setDraft(null);
+    setConfirmed(false);
+    try {
+      const payload = await API.request('/api/integrations/caido/replay/draft', {
+        method: 'POST',
+        body: { target, raw_request: replayRaw },
+      });
+      setDraft(payload);
+      if (!payload.ok) setError(payload.error || 'Replay draft failed');
+    } catch (err) {
+      setError(err.message || String(err));
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function sendReplay() {
+    if (!draft?.parsed?.raw_sha256 || !confirmed) {
+      setError('Confirm the draft hash before sending Replay.');
+      return;
+    }
+    setBusy('send');
+    setError('');
+    try {
+      const payload = await API.post('/api/integrations/caido/replay/send', {
+        target,
+        raw_request: replayRaw,
+        session_id: draft.session?.id,
+        confirmation: draft.parsed.raw_sha256,
+      });
+      if (!payload.ok) setError(payload.error || 'Replay send failed');
+      setDraft(null);
+      setConfirmed(false);
+      if (API.refresh) API.refresh();
+    } catch (err) {
+      setError(err.message || String(err));
+    } finally {
+      setBusy('');
+    }
+  }
+
+  const applyTarget = (handle) => {
+    setTarget(handle);
+    const next = targetHttpql(D, handle);
+    setHttpql(next);
+  };
 
   return (
     <>
       <window.TopBar
         crumbs={['primordial', 'caido', 'proxy integration']}
         stats={[
-          { k: 'requests', v: D.requests.length },
-          { k: 'replays',  v: D.replays.length },
-          { k: 'filtered', v: filtered.length },
-          { k: 'status',   v: connOk ? 'live' : 'offline' },
+          { k: 'results', v: results.length },
+          { k: 'selected', v: checkedIds.length },
+          { k: 'imports', v: (D.requests || []).length },
+          { k: 'status', v: conn.ok ? 'live' : conn.configured ? 'configured' : 'offline' },
         ]}
       />
 
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', gap: 0 }}>
-
-        {/* left sidebar */}
-        <aside style={{ width: 220, flex: '0 0 220px', borderRight: '1px solid var(--line)', display: 'flex', flexDirection: 'column', background: 'var(--bg-deep)' }}>
-          {/* connection */}
-          <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--line)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-              <Dot tone={connOk ? 'green' : 'red'} />
-              <span className="upper" style={{ fontSize: 10 }}>CAIDO PROXY</span>
-              <Pill tone={connOk ? 'green' : 'red'} style={{ marginLeft: 'auto' }}>{connOk ? 'LIVE' : 'OFFLINE'}</Pill>
+      <div style={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: '260px minmax(360px, 1fr) 460px', overflow: 'hidden' }}>
+        <aside style={{ borderRight: '1px solid var(--line)', display: 'flex', flexDirection: 'column', background: 'var(--bg-deep)', minHeight: 0 }}>
+          <div style={{ padding: 10, borderBottom: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Dot tone={conn.ok ? 'green' : conn.configured ? 'yellow' : 'red'} />
+              <span className="upper">CAIDO GRAPHQL</span>
+              <Pill tone={conn.ok ? 'green' : conn.configured ? 'yellow' : 'red'} style={{ marginLeft: 'auto' }}>
+                {conn.ok ? 'LIVE' : conn.configured ? 'READY' : 'MISSING'}
+              </Pill>
             </div>
-            <div className="dim mono" style={{ fontSize: 10 }}>{D.connection.graphql_url}</div>
+            <div className="dim mono" style={{ fontSize: 10, overflowWrap: 'anywhere' }}>{conn.graphql_url || 'No GraphQL URL configured'}</div>
+            <div className="dim mono" style={{ fontSize: 10 }}>
+              schema {schemaCaps.requests_by_offset || schemaCaps.requests ? 'search' : 'unknown'} | replay {schemaCaps.start_replay_task ? 'send' : 'unknown'}
+            </div>
           </div>
 
-          {/* saved filters */}
-          <div style={{ padding: '6px 10px 4px', borderBottom: '1px solid var(--line)' }}>
-            <div className="upper" style={{ color: 'var(--txt-mute)', marginBottom: 6 }}>SAVED FILTERS</div>
-            {D.savedFilters.map(f => (
-              <button key={f.id}
-                onClick={() => { setActiveFilt(f.id); setHttpql(f.httpql); }}
-                style={{
-                  width: '100%', textAlign: 'left', background: activeFilt === f.id ? 'var(--cyan-soft)' : 'transparent',
-                  border: 0, borderLeft: `2px solid ${activeFilt === f.id ? 'var(--cyan)' : 'transparent'}`,
-                  padding: '5px 8px', color: activeFilt === f.id ? 'var(--cyan)' : 'var(--txt-dim)',
-                  cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 2,
-                }}>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600 }}>{f.label}</span>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 9.5, color: 'var(--txt-mute)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.httpql}</span>
-              </button>
-            ))}
+          <div style={{ padding: 10, borderBottom: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <label className="upper" style={{ color: 'var(--txt-mute)' }}>TARGET</label>
+            <select className="input" value={target} onChange={e => applyTarget(e.target.value)} style={{ fontFamily: 'var(--mono)', fontSize: 11 }}>
+              {(D.targetOptions || []).map(t => <option key={t.id || t.handle} value={t.handle}>{t.handle}</option>)}
+            </select>
+            <button className="btn sm" onClick={() => runSearch()} disabled={busy === 'search'}>SEARCH</button>
           </div>
 
-          {/* replays */}
-          <div style={{ flex: 1, padding: '6px 10px', overflow: 'auto' }}>
-            <div className="upper" style={{ color: 'var(--txt-mute)', marginBottom: 6 }}>REPLAYS</div>
-            {D.replays.map(r => (
-              <div key={r.id} style={{ padding: '6px 8px', marginBottom: 4, border: '1px solid var(--line)', borderRadius: 'var(--r-2)', background: 'var(--bg)', fontFamily: 'var(--mono)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span className="strong" style={{ fontSize: 11 }}>{r.name}</span>
-                  <Pill tone={r.status === 'completed' ? 'green' : 'cyan'}>{r.status.toUpperCase()}</Pill>
-                </div>
-                <div className="dim" style={{ fontSize: 10, marginTop: 2 }}>{r.requests} reqs · {r.created} · {r.target}</div>
-                <div style={{ display: 'flex', gap: 4, marginTop: 6 }}>
-                  <button className="btn ghost sm" style={{ flex: 1 }}>▶ LOAD</button>
-                  <button className="btn ghost sm">↓</button>
-                </div>
+          <div style={{ padding: 10, borderBottom: '1px solid var(--line)' }}>
+            <div className="upper" style={{ color: 'var(--txt-mute)', marginBottom: 6 }}>HTTPQL PRESETS</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+              {(D.savedFilters || []).map(f => (
+                <button key={f.id} className="btn ghost sm" style={{ justifyContent: 'flex-start', overflow: 'hidden' }} onClick={() => { setHttpql(f.httpql || ''); runSearch(f.httpql || ''); }}>
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ padding: 10, flex: 1, minHeight: 0, overflow: 'auto' }}>
+            <div className="upper" style={{ color: 'var(--txt-mute)', marginBottom: 6 }}>IMPORT QUEUE</div>
+            {selectedRows.length ? selectedRows.map(r => (
+              <div key={r.id} className="mono" style={{ fontSize: 10.5, padding: '6px 0', borderBottom: '1px solid var(--line)' }}>
+                <span style={{ color: METHOD_COLOR[r.method] || 'var(--txt-mute)', fontWeight: 700 }}>{r.method}</span> {r.host}{r.path}
               </div>
-            ))}
-            <button className="btn ghost sm" style={{ width: '100%', marginTop: 4 }}>+ NEW REPLAY</button>
+            )) : <div className="dim mono" style={{ fontSize: 11 }}>No selected rows.</div>}
+            <button className="btn primary sm" style={{ width: '100%', marginTop: 8 }} onClick={importSelected} disabled={!checkedIds.length || busy === 'import'}>
+              IMPORT SELECTED
+            </button>
           </div>
         </aside>
 
-        {/* center — request list */}
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-          {/* HTTPQL bar */}
-          <div style={{ padding: '6px 10px', borderBottom: '1px solid var(--line)', background: 'var(--bg-deep)', display: 'flex', gap: 6, alignItems: 'center' }}>
+        <main style={{ display: 'flex', flexDirection: 'column', minHeight: 0, minWidth: 0 }}>
+          <div style={{ padding: '7px 10px', borderBottom: '1px solid var(--line)', background: 'var(--bg-deep)', display: 'flex', gap: 6, alignItems: 'center' }}>
             <span className="upper" style={{ color: 'var(--cyan)', fontSize: 10, flex: '0 0 auto' }}>HTTPQL</span>
             <input
               className="input"
               value={httpql}
               onChange={e => setHttpql(e.target.value)}
-              placeholder='req.host.eq:"pirate.htb" AND resp.code.gte:400'
+              placeholder='req.host.eq:"target.htb" AND resp.code.gte:400'
               style={{ flex: 1, fontFamily: 'var(--mono)', fontSize: 11 }}
             />
-            <button className="btn sm" onClick={() => setHttpql('')}>✕</button>
-            <span className="dim mono" style={{ fontSize: 10, flex: '0 0 auto' }}>{filtered.length} results</span>
+            <button className="btn sm" onClick={() => setHttpql('')}>CLEAR</button>
           </div>
-
-          {/* request table */}
+          {error && (
+            <div style={{ padding: '6px 10px', borderBottom: '1px solid var(--line)', color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 11, display: 'flex', gap: 8 }}>
+              <span style={{ flex: 1, overflowWrap: 'anywhere' }}>{error}</span>
+              <button className="btn ghost sm" onClick={() => setError('')}>CLEAR</button>
+            </div>
+          )}
           <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
             <table className="t">
               <thead>
-                <tr><th>METHOD</th><th>HOST</th><th>PATH</th><th>STATUS</th><th>LENGTH</th><th>TIME</th><th>SOURCE</th></tr>
+                <tr><th></th><th>METHOD</th><th>HOST</th><th>PATH</th><th>STATUS</th><th>LEN</th><th>SOURCE</th></tr>
               </thead>
               <tbody>
-                {filtered.map(r => <ReqRow key={r.id} r={r} sel={sel} onSel={setSel} />)}
+                {results.map(r => (
+                  <ReqRow key={r.id} r={r} selected={selectedId} checked={checkedIds.includes(r.id)} onOpen={openDetail} onToggle={toggleId} />
+                ))}
               </tbody>
             </table>
           </div>
-        </div>
+        </main>
 
-        {/* right — request detail */}
-        <aside style={{ width: 460, flex: '0 0 460px', borderLeft: '1px solid var(--line)', display: 'flex', flexDirection: 'column', background: 'var(--bg)' }}>
-          <div style={{ padding: '7px 10px', borderBottom: '1px solid var(--line)', background: 'linear-gradient(180deg, var(--elev-1), var(--bg))' }}>
-            <span className="upper" style={{ fontSize: 10, fontWeight: 600, color: 'var(--txt-strong)' }}>REQUEST DETAIL</span>
+        <aside style={{ borderLeft: '1px solid var(--line)', display: 'flex', flexDirection: 'column', background: 'var(--bg)', minHeight: 0 }}>
+          <div style={{ height: '52%', minHeight: 0, borderBottom: '1px solid var(--line)', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ padding: '7px 10px', borderBottom: '1px solid var(--line)' }}>
+              <span className="upper" style={{ fontSize: 10, fontWeight: 600, color: 'var(--txt-strong)' }}>REQUEST DETAIL</span>
+            </div>
+            <RequestDetail detail={detail} loading={loadingDetail} onReplaySeed={req => { setReplayRaw(replayTemplate(req)); setDraft(null); setConfirmed(false); }} />
           </div>
-          <RequestDetail req={selReq} />
+
+          <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 8, padding: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span className="upper" style={{ color: 'var(--txt-strong)' }}>RAW REPLAY</span>
+              {draft?.parsed?.raw_sha256 && <Pill tone="cyan" style={{ marginLeft: 'auto' }}>{shortHash(draft.parsed.raw_sha256)}</Pill>}
+            </div>
+            <textarea
+              className="input"
+              value={replayRaw}
+              onChange={e => { setReplayRaw(e.target.value); setDraft(null); setConfirmed(false); }}
+              spellCheck="false"
+              style={{ flex: 1, minHeight: 120, resize: 'none', fontFamily: 'var(--mono)', fontSize: 11, lineHeight: 1.45 }}
+            />
+            {draft?.parsed && (
+              <label className="dim mono" style={{ fontSize: 10.5, display: 'flex', gap: 6, alignItems: 'center' }}>
+                <input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />
+                confirm one request to {draft.parsed.host}:{draft.parsed.port} with hash {shortHash(draft.parsed.raw_sha256)}
+              </label>
+            )}
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button className="btn sm" onClick={draftReplay} disabled={!replayRaw.trim() || busy === 'draft'}>DRAFT</button>
+              <button className="btn primary sm" onClick={sendReplay} disabled={!draft?.parsed || !confirmed || busy === 'send'}>SEND ONE</button>
+              <button className="btn ghost sm" onClick={() => { setReplayRaw(''); setDraft(null); setConfirmed(false); }} style={{ marginLeft: 'auto' }}>CLEAR</button>
+            </div>
+          </div>
         </aside>
       </div>
     </>

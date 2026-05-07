@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 import unittest
@@ -94,6 +95,138 @@ class WebConsoleTests(unittest.TestCase):
         self.assertIn("skills", skills)
         self.assertIn("workspace", findings)
         self.assertIn("guidance_path", findings["workspace"])
+
+    def test_caido_import_creates_redacted_evidence_and_artifact(self) -> None:
+        detail = {
+            "ok": True,
+            "request": {
+                "id": "42",
+                "method": "POST",
+                "host": "pirate.htb",
+                "port": 80,
+                "path": "/login",
+                "status": 200,
+                "source": "INTERCEPT",
+                "request_sha256": "reqhash",
+                "response_sha256": "resphash",
+                "request_snippet": "POST /login HTTP/1.1\nHost: pirate.htb\nAuthorization: [redacted]\n\npassword=[redacted]",
+                "response_snippet": "HTTP/1.1 200 OK\nSet-Cookie: [redacted]\n\nok",
+                "request_truncated": False,
+                "response_truncated": False,
+                "raw_bodies_stored": False,
+            },
+        }
+        with patch.object(self.runtime.caido, "request_detail", return_value=detail):
+            response = self.app.dispatch(
+                "POST",
+                "/api/integrations/caido/import",
+                json.dumps(
+                    {
+                        "target": "pirate.htb",
+                        "request_ids": ["42"],
+                        "httpql": 'req.host.eq:"pirate.htb"',
+                    }
+                ).encode("utf-8"),
+            )
+
+        payload = json.loads(response.body)
+        records = self.runtime.records_payload(limit=10)
+        evidence = records["evidence"][0]
+        artifact = records["artifacts"][0]
+        artifact_body = Path(artifact["path"]).read_text(encoding="utf-8")
+        serialized = json.dumps(payload) + json.dumps(records) + artifact_body
+
+        self.assertEqual(response.status, 200)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(evidence["type"], "http_replay")
+        self.assertEqual(artifact["kind"], "caido_capture")
+        self.assertIn("Authorization: [redacted]", serialized)
+        self.assertIn("password=[redacted]", serialized)
+        self.assertNotIn("Bearer abc", serialized)
+        self.assertNotIn("swordfish", serialized)
+        self.assertNotIn("\"raw\":", serialized)
+        self.assertFalse(evidence["metadata"]["raw_bodies_stored"])
+
+    def test_caido_replay_send_gates_confirmation_scope_and_batches(self) -> None:
+        valid_raw = "GET / HTTP/1.1\nHost: pirate.htb\nConnection: close\n\n"
+        out_of_scope_raw = "GET / HTTP/1.1\nHost: evil.example\nConnection: close\n\n"
+        batch_raw = (
+            "GET /one HTTP/1.1\nHost: pirate.htb\nConnection: close\n\n"
+            "GET /two HTTP/1.1\nHost: pirate.htb\nConnection: close\n\n"
+        )
+
+        missing = self.app.dispatch(
+            "POST",
+            "/api/integrations/caido/replay/send",
+            json.dumps({"target": "pirate.htb", "raw_request": valid_raw, "session_id": "1"}).encode("utf-8"),
+        )
+        out_of_scope = self.app.dispatch(
+            "POST",
+            "/api/integrations/caido/replay/send",
+            json.dumps(
+                {
+                    "target": "pirate.htb",
+                    "raw_request": out_of_scope_raw,
+                    "session_id": "1",
+                    "confirmation": hashlib.sha256(out_of_scope_raw.strip("\n").encode("utf-8")).hexdigest(),
+                }
+            ).encode("utf-8"),
+        )
+        malformed = self.app.dispatch(
+            "POST",
+            "/api/integrations/caido/replay/send",
+            json.dumps({"target": "pirate.htb", "raw_request": "not an http request", "confirmation": "x"}).encode("utf-8"),
+        )
+        batch = self.app.dispatch(
+            "POST",
+            "/api/integrations/caido/replay/send",
+            json.dumps(
+                {
+                    "target": "pirate.htb",
+                    "raw_request": batch_raw,
+                    "session_id": "1",
+                    "confirmation": hashlib.sha256(batch_raw.strip("\n").encode("utf-8")).hexdigest(),
+                }
+            ).encode("utf-8"),
+        )
+
+        parsed = self.runtime.caido.parse_raw_request(valid_raw)
+        with patch.object(
+            self.runtime.caido,
+            "send_replay",
+            return_value={
+                "ok": True,
+                "parsed": parsed.as_payload(),
+                "task": {"id": "8", "replay_entry_id": "2"},
+            },
+        ) as send_replay:
+            sent = self.app.dispatch(
+                "POST",
+                "/api/integrations/caido/replay/send",
+                json.dumps(
+                    {
+                        "target": "pirate.htb",
+                        "raw_request": valid_raw,
+                        "session_id": "1",
+                        "confirmation": parsed.raw_sha256,
+                    }
+                ).encode("utf-8"),
+            )
+
+        self.assertEqual(missing.status, 400)
+        self.assertIn("confirmation", json.loads(missing.body)["error"])
+        self.assertEqual(out_of_scope.status, 400)
+        self.assertIn("not in target scope", json.loads(out_of_scope.body)["error"])
+        self.assertEqual(malformed.status, 400)
+        self.assertIn("request line", json.loads(malformed.body)["error"])
+        self.assertEqual(batch.status, 400)
+        self.assertIn("one HTTP request", json.loads(batch.body)["error"])
+        self.assertEqual(sent.status, 200)
+        send_replay.assert_called_once()
+        audit = self.runtime.audit_payload(limit=5)
+        self.assertEqual(audit["recent_events"][0]["type"], "caido_replay_sent")
+        self.assertEqual(audit["recent_events"][0]["metadata"]["raw_sha256"], parsed.raw_sha256)
+        self.assertFalse(audit["recent_events"][0]["metadata"]["raw_persisted"])
 
     def test_target_guidance_can_be_updated_from_web_console(self) -> None:
         update_response = self.app.dispatch(
