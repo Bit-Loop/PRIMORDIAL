@@ -29,19 +29,26 @@ class AutonomySettings:
     require_human_for_high_risk: bool = True
     max_poc_timeout_seconds: int = 30
     max_poc_requests: int = 20
+    # Maximum candidates a CHAIN_CANDIDATES task may spawn. Consumed by _handle_chain_candidates when implemented.
     max_chaining_fanout: int = 5
+    # Upper bound on task.max_attempts regardless of blueprint value. Wired in workflow._plan_task.
     max_auto_retries: int = 2
-    context_budget_warn_ratio: float = 0.65
     memory_light_interval_minutes: int = 10
     memory_heavy_interval_minutes: int = 180
+    # Daily spend cap for REMOTE_PREMIUM route. Enforced by PolicyEngine once CTRL-7 cost ledger is implemented.
     daily_remote_budget: float = 25.0
-    notification_cooldown_seconds: int = 300
     hot_path_concurrency: int = 1
     compact_path_concurrency: int = 2
     cold_path_concurrency: int = 1
     remote_premium_concurrency: int = 1
     high_risk_concurrency: int = 1
     defer_retry_seconds: int = 20
+    # After this many consecutive defers a task escalates to NEEDS_APPROVAL rather than
+    # continuing to defer silently. Prevents infinite scheduler-busy loops.
+    max_defer_count: int = 6
+    # Hard cap on total tasks that may be RUNNING at once across all lanes.
+    # Enforced by ModelScheduler.offer() before any per-lane concurrency check.
+    max_total_concurrent_tasks: int = 4
     # Agents whose agent_safety_approval is accepted by the policy engine.
     approved_reviewer_agents: frozenset[str] = field(
         default_factory=lambda: frozenset({"behavior_verifier", "policy_verifier", "exploit_safety_reviewer"})

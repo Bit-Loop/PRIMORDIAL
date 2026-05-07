@@ -34,7 +34,7 @@ SOLARIZED = {
 }
 
 
-def launcher_target_state(runtime: PrimordialRuntime, preferred_handle: str = "pirate.htb") -> dict[str, object]:
+def launcher_target_state(runtime: PrimordialRuntime, preferred_handle: str = "") -> dict[str, object]:
     """Return persisted target state the launcher should display on startup."""
     targets = runtime.store.list_targets()
     if not targets:
@@ -83,12 +83,12 @@ class PrimordialLauncher:
         self.host_var = tk.StringVar(value="127.0.0.1")
         self.port_var = tk.IntVar(value=1337)
         # scope_handle_var / scope_active_ip_var are canonical; target_var / ip_var are aliases
-        self.scope_handle_var = tk.StringVar(value="pirate.htb")
+        self.scope_handle_var = tk.StringVar(value="")
         self.target_var = self.scope_handle_var
-        self.scope_active_ip_var = tk.StringVar(value="10.129.47.117")
+        self.scope_active_ip_var = tk.StringVar(value="")
         self.ip_var = self.scope_active_ip_var
-        self.title_var = tk.StringVar(value="HTB Pirate Session")
-        self.scope_display_name_var = tk.StringVar(value="HTB Pirate")
+        self.title_var = tk.StringVar(value="")
+        self.scope_display_name_var = tk.StringVar(value="")
         self.scope_profile_var = tk.StringVar(value=ScopeProfile.HACK_THE_BOX.value)
         self.scope_assets_var = tk.StringVar(value="")
         self.scope_in_scope_var = tk.BooleanVar(value=True)
@@ -96,7 +96,7 @@ class PrimordialLauncher:
         self.scope_profile_label_var = tk.StringVar()
         self.scope_profile_base_var = tk.StringVar(value=ScopeProfile.HACK_THE_BOX.value)
         self.scope_profile_description_var = tk.StringVar()
-        self.guidance_target_var = tk.StringVar(value="pirate.htb")
+        self.guidance_target_var = tk.StringVar(value="")
         self.cycles_var = tk.IntVar(value=10)
         self.max_executions_var = tk.IntVar(value=3)
         self.web_status_var = tk.StringVar(value="Web server: stopped")
@@ -132,7 +132,7 @@ class PrimordialLauncher:
         self.scope_profiles_tree: ttk.Treeview | None = None
         self.cpu_progress: ttk.Progressbar | None = None
         self.gpu_progress: ttk.Progressbar | None = None
-        self.chat_target_var = tk.StringVar(value="pirate.htb")
+        self.chat_target_var = tk.StringVar(value="")
         self.notion_api_key_var = tk.StringVar()
         self.notion_parent_page_id_var = tk.StringVar()
         self.notion_version_var = tk.StringVar(value="2022-06-28")
@@ -1191,7 +1191,7 @@ class PrimordialLauncher:
 
     def _workflow_config(self) -> dict[str, object]:
         return {
-            "handle": self.target_var.get().strip() or "pirate.htb",
+            "handle": self.target_var.get().strip(),
             "ip": self.ip_var.get().strip(),
             "title": self.title_var.get().strip() or "HTB Pirate Session",
             "cycles": max(1, int(self.cycles_var.get())),
@@ -1218,7 +1218,7 @@ class PrimordialLauncher:
                 )
             self.runtime.update_target_fields(
                 handle=handle,
-                display_name="HTB Pirate" if handle == "pirate.htb" else handle,
+                display_name=handle,
                 profile=ScopeProfile.HACK_THE_BOX,
                 assets=assets,
                 active_ip=ip or None,
@@ -1256,7 +1256,7 @@ class PrimordialLauncher:
         with self._runtime_lock:
             target = self.runtime.update_target_fields(
                 handle=handle,
-                display_name="HTB Pirate" if handle == "pirate.htb" else handle,
+                display_name=handle,
                 profile=ScopeProfile.HACK_THE_BOX,
                 assets=assets,
                 active_ip=ip or None,
@@ -1793,7 +1793,7 @@ class PrimordialLauncher:
         self._queue.put(("refresh_tabs", ""))
 
     def _ask_status(self) -> None:
-        handle = self.target_var.get().strip() or "pirate.htb"
+        handle = self.target_var.get().strip()
         self._run_background("Asking Primordial", lambda: self._status_text(handle))
 
     def _status_text(self, handle: str) -> str:

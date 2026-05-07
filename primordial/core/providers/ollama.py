@@ -11,6 +11,8 @@ class OllamaResponse:
     model: str
     text: str
     elapsed_seconds: float | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
 
 
 @dataclass(slots=True)
@@ -39,7 +41,7 @@ class OllamaClient:
         model: str,
         prompt: str,
         system: str,
-        temperature: float = 0.2,
+        temperature: float = 0.0,
         num_ctx: int = 8192,
         num_gpu: int | None = None,
         keep_alive: str | None = None,
@@ -65,7 +67,15 @@ class OllamaClient:
             raise RuntimeError("Ollama returned an empty response")
         elapsed = data.get("total_duration")
         elapsed_seconds = float(elapsed) / 1_000_000_000 if isinstance(elapsed, (int, float)) else None
-        return OllamaResponse(model=str(data.get("model", model)), text=text, elapsed_seconds=elapsed_seconds)
+        prompt_tokens = int(data["prompt_eval_count"]) if isinstance(data.get("prompt_eval_count"), int) else None
+        completion_tokens = int(data["eval_count"]) if isinstance(data.get("eval_count"), int) else None
+        return OllamaResponse(
+            model=str(data.get("model", model)),
+            text=text,
+            elapsed_seconds=elapsed_seconds,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
 
     def preload(
         self,

@@ -32,9 +32,11 @@ class PolicyEngine:
         settings: AutonomySettings,
         *,
         credentials_status_loader: Callable[[], dict[str, object]] | None = None,
+        daily_remote_cost_loader: Callable[[], float] | None = None,
     ) -> None:
         self.settings = settings
         self.credentials_status_loader = credentials_status_loader
+        self.daily_remote_cost_loader = daily_remote_cost_loader
 
     def evaluate_task(self, task: Task, target: Target | None) -> PolicyDecision:
         if target is not None and not target.in_scope:
@@ -54,6 +56,18 @@ class PolicyEngine:
                 target_id=task.target_id,
                 task_id=task.id,
             )
+
+        if task.provider_route == ProviderRoute.REMOTE_PREMIUM and self.daily_remote_cost_loader is not None:
+            daily_spent = self.daily_remote_cost_loader()
+            if daily_spent >= self.settings.daily_remote_budget:
+                return PolicyDecision(
+                    action_kind=task.kind.value,
+                    verdict=PolicyVerdict.DENY,
+                    reason=f"daily remote budget exhausted: ${daily_spent:.2f} >= ${self.settings.daily_remote_budget:.2f}",
+                    target_id=task.target_id,
+                    task_id=task.id,
+                    metadata={"daily_spent_usd": daily_spent, "daily_budget_usd": self.settings.daily_remote_budget},
+                )
 
         action_policy = self._task_action_policy(task, target)
         bounded_gate = self._evaluate_task_bounds(task, action_policy)

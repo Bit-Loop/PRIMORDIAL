@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import ipaddress
 import json
 import os
 from typing import Any
@@ -141,8 +142,11 @@ class CaidoIntegrationService:
             return None
         if host in {"localhost", "127.0.0.1", "::1"}:
             return None
-        if host.startswith("10.") or host.startswith("192.168.") or host.startswith("172.16."):
-            return None
+        try:
+            if ipaddress.ip_address(host).is_private:
+                return None
+        except ValueError:
+            pass
         return "Refusing non-local Caido URL unless PRIMORDIAL_ALLOW_REMOTE_CAIDO=1 is set."
 
     def _remote_caido_allowed(self) -> bool:

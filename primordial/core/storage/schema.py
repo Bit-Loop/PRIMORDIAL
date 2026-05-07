@@ -323,6 +323,19 @@ CREATE TABLE IF NOT EXISTS operator_messages (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS remote_provider_costs (
+    id TEXT PRIMARY KEY,
+    route TEXT NOT NULL,
+    model TEXT NOT NULL,
+    task_id TEXT,
+    prompt_tokens INTEGER,
+    completion_tokens INTEGER,
+    estimated_cost_usd REAL NOT NULL DEFAULT 0.0,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_remote_costs_created_at ON remote_provider_costs(created_at);
+
 CREATE INDEX IF NOT EXISTS idx_tasks_target_status ON tasks(target_id, status);
 CREATE INDEX IF NOT EXISTS idx_task_runs_task_status ON task_runs(task_id, status);
 CREATE INDEX IF NOT EXISTS idx_evidence_target ON evidence(target_id);

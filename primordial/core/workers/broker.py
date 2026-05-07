@@ -225,7 +225,25 @@ class WorkerBroker:
         runner = self._accepted_runners.pop(dispatch.offer_id, None)
         if runner is None:
             return None
-        return runner.execute_assignment(dispatch.offer_id, task, context)
+        try:
+            result = runner.execute_assignment(dispatch.offer_id, task, context)
+        except Exception as exc:
+            if self._event_bus is not None:
+                self._event_bus.emit(
+                    RuntimeSignal.WORKER_FAILED,
+                    {"task_id": task.id, "runner_id": dispatch.runner_id, "error": str(exc)},
+                )
+            raise
+        if self._event_bus is not None:
+            self._event_bus.emit(
+                RuntimeSignal.WORKER_COMPLETED,
+                {
+                    "task_id": task.id,
+                    "runner_id": dispatch.runner_id,
+                    "success": result.success if result else False,
+                },
+            )
+        return result
 
     def _score_offer(
         self,
@@ -254,6 +272,9 @@ class WorkerBroker:
         return score
 
     def _expected_processor(self, route: ProviderRoute) -> str:
-        if route in {ProviderRoute.LOCAL_CODE, ProviderRoute.LOCAL_COMPACT, ProviderRoute.COLD_REVIEW}:
+        # LOCAL_COMPACT runs on CPU (phi4-mini / compact models).
+        # LOCAL_CODE is GPU-accelerated cold path per CLAUDE.md model topology.
+        # COLD_REVIEW is GPU-accelerated offline review.
+        if route in {ProviderRoute.LOCAL_COMPACT}:
             return "cpu"
         return "gpu"

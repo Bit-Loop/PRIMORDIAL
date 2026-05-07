@@ -38,6 +38,8 @@ from primordial.core.domain.enums import (
 from primordial.core.domain.models import (
     AgentTrace,
     ArtifactRecord,
+    TraceMetadata,
+    new_id as _new_id,
     CheckpointRecord,
     DiscordDelivery,
     EventRecord,
@@ -75,6 +77,9 @@ def _load(value: str | None, default: Any) -> Any:
     return json.loads(value)
 
 
+_SCHEMA_VERSION = 1
+
+
 class RuntimeStore:
     def __init__(self, database_path: Path) -> None:
         self.database_path = database_path
@@ -84,11 +89,27 @@ class RuntimeStore:
         with closing(self.connect()) as connection:
             connection.executescript(SCHEMA_SQL)
             self._apply_compat_migrations(connection)
+            self._assert_schema_version(connection)
             connection.commit()
+
+    def _assert_schema_version(self, connection: sqlite3.Connection) -> None:
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)"
+        )
+        row = connection.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
+        if row is None:
+            connection.execute("INSERT INTO schema_version (version) VALUES (?)", (_SCHEMA_VERSION,))
+        elif int(row[0]) > _SCHEMA_VERSION:
+            raise RuntimeError(
+                f"Database schema version {row[0]} is newer than this code ({_SCHEMA_VERSION}). "
+                "Upgrade the application before opening this database."
+            )
 
     def connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database_path)
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA synchronous=NORMAL")
         connection.execute("PRAGMA foreign_keys=ON")
         return connection
 
@@ -322,8 +343,11 @@ class RuntimeStore:
         )
 
     def delete_scope_assets_for_target(self, target_id: str) -> int:
-        self._execute("DELETE FROM scope_assets WHERE target_id = ?", (target_id,))
-        return self._conn.total_changes
+        with closing(self.connect()) as connection:
+            connection.execute("DELETE FROM scope_assets WHERE target_id = ?", (target_id,))
+            total = connection.total_changes
+            connection.commit()
+            return total
 
     def list_scope_assets(self, target_id: str | None = None) -> list[ScopeAsset]:
         if target_id:
@@ -413,22 +437,25 @@ class RuntimeStore:
         return [self._task_from_row(row) for row in rows]
 
     def claim_next_pending_task(self) -> Task | None:
-        rows = self._query(
-            """
-            SELECT * FROM tasks
-            WHERE status = ?
-            ORDER BY priority DESC, created_at ASC
-            LIMIT 1
-            """,
-            (TaskStatus.PENDING.value,),
-        )
+        # Single atomic statement: SQLite serializes writers so no two callers
+        # can claim the same row. Requires SQLite 3.35+ for RETURNING support.
+        with closing(self.connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = list(connection.execute(
+                """
+                UPDATE tasks SET status = ?, updated_at = ?
+                WHERE id = (
+                    SELECT id FROM tasks WHERE status = ?
+                    ORDER BY priority DESC, created_at ASC LIMIT 1
+                )
+                RETURNING *
+                """,
+                (TaskStatus.RUNNING.value, utc_now().isoformat(), TaskStatus.PENDING.value),
+            ))
+            connection.commit()
         if not rows:
             return None
-        task = self._task_from_row(rows[0])
-        task.status = TaskStatus.RUNNING
-        task.updated_at = utc_now()
-        self.insert_task(task)
-        return task
+        return self._task_from_row(rows[0])
 
     def has_active_task(self, target_id: str | None, kind: TaskKind) -> bool:
         row = self._query_one(
@@ -496,6 +523,13 @@ class RuntimeStore:
                 _dump(run.metadata),
             ),
         )
+
+    def list_running_task_runs(self) -> list[TaskRun]:
+        rows = self._query(
+            "SELECT * FROM task_runs WHERE status = ? ORDER BY started_at DESC",
+            (TaskRunStatus.RUNNING.value,),
+        )
+        return [self._task_run_from_row(row) for row in rows]
 
     def list_task_runs(self, task_id: str | None = None, limit: int = 100) -> list[TaskRun]:
         if task_id:
@@ -967,7 +1001,19 @@ class RuntimeStore:
         rows = self._query("SELECT * FROM checkpoints ORDER BY created_at DESC LIMIT ?", (limit,))
         return [self._checkpoint_from_row(row) for row in rows]
 
+    @staticmethod
+    def _validate_trace_metadata(trace: AgentTrace) -> None:
+        missing = TraceMetadata.REQUIRED_KEYS - trace.metadata.keys()
+        if missing:
+            import logging
+            logging.getLogger(__name__).warning(
+                "AgentTrace %s missing required metadata fields: %s",
+                trace.id,
+                sorted(missing),
+            )
+
     def insert_trace(self, trace: AgentTrace) -> None:
+        self._validate_trace_metadata(trace)
         self._execute(
             """
             INSERT OR REPLACE INTO agent_traces
@@ -984,6 +1030,46 @@ class RuntimeStore:
                 trace.created_at.isoformat(),
             ),
         )
+
+    def insert_remote_cost(
+        self,
+        *,
+        route: str,
+        model: str,
+        task_id: str | None = None,
+        prompt_tokens: int | None = None,
+        completion_tokens: int | None = None,
+        estimated_cost_usd: float = 0.0,
+    ) -> None:
+        self._execute(
+            """
+            INSERT INTO remote_provider_costs
+            (id, route, model, task_id, prompt_tokens, completion_tokens, estimated_cost_usd, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                _new_id("rcost"),
+                route,
+                model,
+                task_id,
+                prompt_tokens,
+                completion_tokens,
+                estimated_cost_usd,
+                utc_now().isoformat(),
+            ),
+        )
+
+    def get_daily_remote_cost_usd(self) -> float:
+        rows = self._query(
+            """
+            SELECT COALESCE(SUM(estimated_cost_usd), 0.0)
+            FROM remote_provider_costs
+            WHERE created_at >= date('now')
+            """,
+        )
+        if rows:
+            return float(rows[0][0] or 0.0)
+        return 0.0
 
     def list_traces(self, task_id: str | None = None, limit: int = 100) -> list[AgentTrace]:
         if task_id:

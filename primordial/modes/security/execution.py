@@ -524,6 +524,10 @@ class PrimitiveExecutor:
 
         command_results = self._run_dns_enumeration_commands(dns_server, domain)
         parsed = self._parse_dns_enumeration(command_results)
+        dns_records: list[dict[str, str]] = parsed["records"] if isinstance(parsed["records"], list) else []
+        # Extract DC hostnames from LDAP SRV records as a fallback for AD enumeration
+        # when DC01.domain A-record lookup fails or no hostname is pre-configured.
+        dc_hostnames = self._extract_dc_hostnames_from_srv(dns_records, domain)
         artifact = self._write_artifact(
             task,
             target.id,
@@ -552,9 +556,10 @@ class PrimitiveExecutor:
                 "kind": "dns_enumeration",
                 "dns_server": dns_server,
                 "domain": domain,
-                "records": parsed["records"],
+                "records": dns_records,
                 "zone_transfer_success": parsed["zone_transfer_success"],
                 "executed_tools": [item["tool"] for item in command_results if item.get("executed")],
+                "dc_hostnames": dc_hostnames,
             },
         )
         result.evidence.append(evidence)
@@ -569,7 +574,7 @@ class PrimitiveExecutor:
                 metadata={"phase": task.phase.value, "domain": domain, "dns_server": dns_server},
             )
         )
-        if parsed["records"]:
+        if dns_records:
             result.interests.append(
                 Interest(
                     target_id=target.id,
@@ -581,8 +586,9 @@ class PrimitiveExecutor:
                     metadata={
                         "origin_task": task.id,
                         "class": "dns_inventory",
-                        "record_count": len(parsed["records"]),
+                        "record_count": len(dns_records),
                         "zone_transfer_success": parsed["zone_transfer_success"],
+                        "dc_hostnames": dc_hostnames,
                     },
                 )
             )
@@ -592,7 +598,7 @@ class PrimitiveExecutor:
                 summary=f"DNS enumeration completed for {domain}",
                 target_id=target.id,
                 task_id=task.id,
-                metadata={"record_count": len(parsed["records"])},
+                metadata={"record_count": len(dns_records)},
             )
         )
         return result
@@ -1273,7 +1279,9 @@ class PrimitiveExecutor:
             result.error = "target not found"
             return result
 
-        evidence = self._task_generation_records(task, target, self.store.list_evidence(target_id=target.id, limit=24))
+        _evidence_raw = self._task_generation_records(task, target, self.store.list_evidence(target_id=target.id, limit=25))
+        _evidence_overflow = len(_evidence_raw) > 24
+        evidence = _evidence_raw[:24]
         auth_refs = [
             item.id
             for item in evidence
@@ -1299,16 +1307,20 @@ class PrimitiveExecutor:
                 if isinstance(name, str) and name
             }
         )
+        _analysis_body = self._build_analysis_summary(observed_paths, observed_parameters, len(auth_refs))
+        if _evidence_overflow:
+            _analysis_body += " [Warning: evidence truncated to 24 items; older records excluded from this analysis.]"
         result.notes.append(
             Note(
                 target_id=target.id,
                 task_id=task.id,
                 title="Evidence analysis summary",
-                body=self._build_analysis_summary(observed_paths, observed_parameters, len(auth_refs)),
+                body=_analysis_body,
                 confidence=0.78,
                 freshness=0.9,
                 metadata={
                     "evidence_count": len(evidence),
+                    "evidence_truncated": _evidence_overflow,
                     "observed_paths": observed_paths[:self.config.max_evidence_items],
                     "observed_parameters": observed_parameters[:self.config.max_evidence_items],
                 },
@@ -1625,7 +1637,7 @@ class PrimitiveExecutor:
             "- capability_gaps: list of concrete missing capabilities\n"
             "Do not wrap the JSON in markdown fences."
         )
-        response = self.ai_generate(task, system, prompt, 0.2)
+        response = self.ai_generate(task, system, prompt, 0.0)
         if not response or not response.get("text"):
             return None
         text = str(response["text"]).strip()
@@ -1634,8 +1646,13 @@ class PrimitiveExecutor:
         metadata = {
             "kind": "worker_ai_review",
             "task_kind": task.kind.value,
+            "role_name": task.role.value if task.role else None,
+            "stage": task.phase.value if task.phase else None,
             "model": response.get("model"),
             "elapsed_seconds": response.get("elapsed_seconds"),
+            "prompt_tokens": response.get("prompt_tokens"),
+            "completion_tokens": response.get("completion_tokens"),
+            "retry_count": max(0, (task.attempts or 0) - 1),
             "num_gpu": response.get("num_gpu"),
             "processor": response.get("processor"),
             "structured_output": proposal is not None,
@@ -1665,7 +1682,7 @@ class PrimitiveExecutor:
         target = self.store.get_target(target_id)
         active_generation = self._target_active_generation(target)
         evidence = self._records_for_generation(
-            self.store.list_evidence(target_id=target_id, limit=18),
+            self.store.list_evidence(target_id=target_id, limit=24),
             active_generation,
         )
         interests = self._records_for_generation(
@@ -2373,6 +2390,26 @@ class PrimitiveExecutor:
             results.append(result)
         return results
 
+    def _extract_dc_hostnames_from_srv(self, records: list[dict[str, str]], domain: str) -> list[str]:
+        """Return DC hostnames found in LDAP/Kerberos SRV records.
+
+        SRV value format: '<priority> <weight> <port> <target-hostname>'.
+        Extracts the target and qualifies bare names against the domain.
+        """
+        hostnames: list[str] = []
+        for record in records:
+            if record.get("type") != "SRV":
+                continue
+            name = record.get("name", "").lower()
+            if "_ldap._tcp" not in name and "_kerberos._tcp" not in name:
+                continue
+            parts = record.get("value", "").split()
+            if len(parts) >= 4:
+                host = parts[3].rstrip(".")
+                if host and host not in hostnames:
+                    hostnames.append(host if "." in host else f"{host}.{domain}")
+        return hostnames
+
     def _parse_dns_enumeration(self, command_results: list[dict[str, object]]) -> dict[str, object]:
         records: dict[tuple[str, str, str], dict[str, str]] = {}
         zone_transfer_success = False
@@ -2486,7 +2523,10 @@ class PrimitiveExecutor:
             },
             {
                 "tool": "netexec",
-                "argv": ["netexec", "smb", host, "-u", "", "-p", "", "--shares"],
+                "argv": [
+                    next((t for t in ["netexec", "nxc", "crackmapexec", "cme"] if shutil.which(t)), "netexec"),
+                    "smb", host, "-u", "", "-p", "", "--shares",
+                ],
                 "timeout": 30,
             },
         ]
@@ -3027,19 +3067,46 @@ class PrimitiveExecutor:
             "has_iis": "iis" in combined or "microsoft-httpapi" in combined,
             "has_ad": any(token in combined for token in ("ldap", "kerberos", "active directory", "global-catalog")),
             "has_windows_2000": "windows 2000" in combined or "server 2000" in combined,
+            "has_smb": "smb" in combined or "samba" in combined or "netbios" in combined,
+            "has_ssh": "ssh" in combined or ":22 " in combined,
+            "has_ftp": "ftp" in combined,
+            "has_rdp": "rdp" in combined or "remote desktop" in combined or ":3389 " in combined,
+            "has_mssql": "mssql" in combined or "sql server" in combined or ":1433 " in combined,
+            "has_mysql": "mysql" in combined or ":3306 " in combined,
+            "has_postgres": "postgres" in combined or ":5432 " in combined,
+            "has_tomcat": "tomcat" in combined or "apache tomcat" in combined,
+            "has_apache": "apache" in combined and "tomcat" not in combined,
+            "has_nginx": "nginx" in combined,
+            "has_wordpress": "wordpress" in combined or "wp-content" in combined,
+            "has_drupal": "drupal" in combined,
+            "has_joomla": "joomla" in combined,
+            "has_struts": "struts" in combined,
+            "has_spring": "spring" in combined,
+            "has_jenkins": "jenkins" in combined,
+            "has_webdav": "webdav" in combined,
         }
 
     def _poc_has_foothold(self, evidence: list[EvidenceRecord]) -> bool:
         for item in evidence:
-            if item.metadata.get("kind") != "credentialed_access_check":
-                continue
             if item.verification_status != VerificationStatus.VERIFIED:
                 continue
             metadata = item.metadata if isinstance(item.metadata, dict) else {}
-            auth_results = metadata.get("auth_results", [])
-            if isinstance(auth_results, list) and any(
-                isinstance(result, dict) and result.get("valid") is True for result in auth_results
-            ):
+            kind = metadata.get("kind", "")
+            # Credentialed access check with a valid auth result
+            if kind == "credentialed_access_check":
+                auth_results = metadata.get("auth_results", [])
+                if isinstance(auth_results, list) and any(
+                    isinstance(result, dict) and result.get("valid") is True for result in auth_results
+                ):
+                    return True
+            # Remote shell / RCE evidence from execution handlers
+            if kind in ("shell_access", "rce_verification", "initial_access"):
+                return True
+            # Evidence tagged with explicit foothold signal
+            if metadata.get("foothold") is True or metadata.get("shell_obtained") is True:
+                return True
+            # WinRM/SMB pwn3d signal written by credentialed-access handler
+            if metadata.get("pwn3d") is True or metadata.get("winrm_success") is True:
                 return True
         return False
 
@@ -3073,6 +3140,54 @@ class PrimitiveExecutor:
                 reasons.append("IIS surface exists, but exact version and exploit preconditions still need bounded verification")
             else:
                 reasons.append("target evidence does not show IIS-specific service details")
+        elif any(term in lowered for term in ("smb", "samba", "netbios", "eternalblue", "ms17-010")):
+            if service_facts.get("has_smb"):
+                status = "ready_for_review"
+                reasons.append("SMB/Samba surface exists; exact OS version and patch level must be confirmed before use")
+            else:
+                reasons.append("target evidence does not show SMB/Samba services")
+        elif "ssh" in lowered:
+            if service_facts.get("has_ssh"):
+                status = "ready_for_review"
+                reasons.append("SSH surface exists; exact version and configuration must be verified before use")
+            else:
+                reasons.append("target evidence does not show SSH service")
+        elif any(term in lowered for term in ("tomcat", "apache tomcat")):
+            if service_facts.get("has_tomcat"):
+                status = "ready_for_review"
+                reasons.append("Tomcat surface exists; exact version and manager configuration must be verified")
+            else:
+                reasons.append("target evidence does not show Apache Tomcat")
+        elif any(term in lowered for term in ("struts", "apache struts")):
+            if service_facts.get("has_struts"):
+                status = "ready_for_review"
+                reasons.append("Struts surface exists; exact version needed before candidate is actionable")
+            else:
+                reasons.append("target evidence does not show Apache Struts")
+        elif "jenkins" in lowered:
+            if service_facts.get("has_jenkins"):
+                status = "ready_for_review"
+                reasons.append("Jenkins surface exists; authentication state and version must be confirmed")
+            else:
+                reasons.append("target evidence does not show Jenkins")
+        elif any(term in lowered for term in ("mssql", "sql server", "ms sql")):
+            if service_facts.get("has_mssql"):
+                status = "ready_for_review"
+                reasons.append("MSSQL surface exists; authentication mode and version must be confirmed")
+            else:
+                reasons.append("target evidence does not show MSSQL")
+        elif "rdp" in lowered or "remote desktop" in lowered:
+            if service_facts.get("has_rdp"):
+                status = "ready_for_review"
+                reasons.append("RDP surface exists; exact Windows build and patch level must be confirmed")
+            else:
+                reasons.append("target evidence does not show RDP service")
+        elif "wordpress" in lowered or "wp-" in lowered:
+            if service_facts.get("has_wordpress"):
+                status = "ready_for_review"
+                reasons.append("WordPress surface exists; exact version and plugin inventory must be confirmed")
+            else:
+                reasons.append("target evidence does not show WordPress")
         else:
             reasons.append("no exact target service/version or prerequisite match is available")
         return {
@@ -3562,7 +3677,12 @@ class PrimitiveExecutor:
             )
             command_results.append(winrm_result)
             stdout = str(winrm_result.get("stdout", ""))
-            valid = bool(winrm_result.get("executed")) and ("[+]" in stdout or "pwn3d" in stdout.lower())
+            winrm_rc = winrm_result.get("returncode")
+            valid = (
+                bool(winrm_result.get("executed"))
+                and winrm_rc is not None
+                and (int(winrm_rc) == 0 or "[+]" in stdout or "pwn3d" in stdout.lower())
+            )
             auth_results.append({"protocol": "winrm", "valid": valid, "tool": "netexec"})
         else:
             command_results.append(
@@ -3593,6 +3713,33 @@ class PrimitiveExecutor:
         path.chmod(0o600)
         return str(path)
 
+    def _smb_flag_candidates(
+        self, target_id: str, username: str
+    ) -> list[tuple[str, str, str]]:
+        """Return (share, remote_path, flag_name) tuples.
+
+        Operators can override via target.metadata["flag_paths"]: a list of
+        {"share": "C$", "path": "Users\\...\\flag.txt", "name": "flag.txt"} dicts.
+        Falls back to standard HTB user.txt / root.txt paths.
+        """
+        target = self.store.get_target(target_id)
+        custom = target.metadata.get("flag_paths") if target else None
+        if isinstance(custom, list) and custom:
+            result = []
+            for entry in custom:
+                if isinstance(entry, dict) and entry.get("path") and entry.get("name"):
+                    result.append((
+                        str(entry.get("share", "C$")),
+                        str(entry["path"]),
+                        str(entry["name"]),
+                    ))
+            if result:
+                return result
+        return [
+            ("C$", f"Users\\{username}\\Desktop\\user.txt", "user.txt"),
+            ("C$", "Users\\Administrator\\Desktop\\root.txt", "root.txt"),
+        ]
+
     def _collect_smb_flags(
         self,
         task: Task,
@@ -3602,10 +3749,7 @@ class PrimitiveExecutor:
         username: str,
     ) -> list[dict[str, object]]:
         flag_hits: list[dict[str, object]] = []
-        candidates = [
-            ("C$", f"Users\\{username}\\Desktop\\user.txt", "user.txt"),
-            ("C$", "Users\\Administrator\\Desktop\\root.txt", "root.txt"),
-        ]
+        candidates = self._smb_flag_candidates(target_id, username)
         flag_dir = self.config.artifacts_dir / (task.id or "task") / "flags"
         flag_dir.mkdir(parents=True, exist_ok=True)
         flag_dir.chmod(0o700)

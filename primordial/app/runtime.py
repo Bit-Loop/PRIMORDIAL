@@ -118,7 +118,11 @@ class PrimordialRuntime:
         self.event_bus = EventBus()
         self.modules = ModuleRegistry(self.event_bus)
         self.crash_journal = CrashJournal(config.crash_journal_path)
-        self.policy = PolicyEngine(config.autonomy, credentials_status_loader=self.credentials_payload)
+        self.policy = PolicyEngine(
+            config.autonomy,
+            credentials_status_loader=self.credentials_payload,
+            daily_remote_cost_loader=self.store.get_daily_remote_cost_usd,
+        )
         self.router = ProviderRouter(config.topology)
         self.ollama = OllamaClient()
         self.model_scheduler = ModelScheduler(config.autonomy)
@@ -186,6 +190,7 @@ class PrimordialRuntime:
             )
         self._recover_runtime_state()
         self._apply_runtime_tuning()
+        self._validate_topology_models()
         self.repair_execution_state()
         for target in self.store.list_targets():
             self.findings_context.ensure_target(target)
@@ -658,6 +663,9 @@ class PrimordialRuntime:
                     },
                 )
             )
+            # Supersede EPISODIC memory entries from the previous generation so stale
+            # IP-specific facts don't contaminate current-generation reasoning.
+            self.memory.supersede_stale_generation_entries(updated.id, str(generation))
         self.store.insert_event(
             EventRecord(
                 type=EventType.SCOPE_UPDATED,
@@ -1774,7 +1782,7 @@ class PrimordialRuntime:
         task: Task,
         system: str,
         prompt: str,
-        temperature: float = 0.2,
+        temperature: float = 0.0,
     ) -> dict[str, object] | None:
         if not self.ollama.is_reachable(timeout_seconds=1.5):
             return None
@@ -1809,6 +1817,8 @@ class PrimordialRuntime:
             "elapsed_seconds": response.elapsed_seconds,
             "num_gpu": num_gpu,
             "processor": processor,
+            "prompt_tokens": response.prompt_tokens,
+            "completion_tokens": response.completion_tokens,
         }
 
     def _operator_state_ai_review(
@@ -1819,7 +1829,9 @@ class PrimordialRuntime:
         target_id: str | None,
         route_model: str,
         route_num_gpu: int | None,
+        max_wall_seconds: int = 90,
     ) -> dict[str, object] | None:
+        _wall_start = time.monotonic()
         system = (
             "You are Primordial's local deep-review assistant. The deterministic state block is the source "
             "of truth. Do not contradict it, invent findings, invent flags, or claim actions ran. Add only "
@@ -1835,13 +1847,15 @@ class PrimordialRuntime:
             "Return 3-6 concise bullets under no extra heading. No generic disclaimers. No exploit code. "
             "Use current-generation records only for target claims."
         )
+        if time.monotonic() - _wall_start >= max_wall_seconds:
+            return None
         try:
             processor = "cpu" if route_num_gpu == 0 else "gpu"
             response = self.ollama.generate(
                 model=route_model,
                 system=system,
                 prompt=prompt,
-                temperature=0.15,
+                temperature=0.0,
                 num_gpu=route_num_gpu,
                 keep_alive="2h",
                 timeout_seconds=self._ollama_timeout_seconds_for_processor(processor),
@@ -2638,6 +2652,23 @@ class PrimordialRuntime:
                 "winrm session",
                 "smb session",
                 "meterpreter",
+                # Linux / generic shell indicators
+                "interactive shell",
+                "shell obtained",
+                "reverse shell",
+                "bind shell",
+                "command execution",
+                "rce confirmed",
+                "arbitrary command",
+                "shell_access",
+                "initial_access",
+                # HTB/CTF flag patterns
+                "flag.txt",
+                "proof.txt",
+                "local.txt",
+                "pwned",
+                "pwn3d",
+                "foothold",
             )
         )
 
@@ -2651,6 +2682,23 @@ class PrimordialRuntime:
                 "privilege escalation",
                 "lpe",
                 "privesc",
+                # Linux LPE signals
+                "sudo exploit",
+                "suid",
+                "sgid",
+                "kernel exploit",
+                "dirtycow",
+                "dirty cow",
+                "dirty pipe",
+                "pwnkit",
+                "polkit",
+                "cve-2021-4034",
+                "cve-2022-0847",
+                "writable /etc/passwd",
+                "writable sudoers",
+                "no passwd sudo",
+                "capabilities exploit",
+                "cap_setuid",
             )
         )
 
@@ -2705,6 +2753,37 @@ class PrimordialRuntime:
         self.WORKER_AI_TIMEOUT_SECONDS_GPU = int(tuning["gpu_ai_timeout_seconds"])
         self.WORKER_AI_TIMEOUT_SECONDS_CPU = int(tuning["cpu_ai_timeout_seconds"])
         self.workflow.stale_run_max_age_seconds = int(tuning["stale_run_timeout_seconds"])
+
+    def _validate_topology_models(self) -> None:
+        """Check that configured topology model names exist in Ollama; emit warnings for missing models."""
+        import logging
+        result = self.ollama.list_models()
+        if not result.ok:
+            logging.getLogger(__name__).warning(
+                "Ollama unreachable at startup — cannot validate topology models: %s", result.error
+            )
+            return
+        installed = set(result.models)
+        topology = self.config.topology
+        role_model_map = {
+            "local_fast": topology.local_fast,
+            "local_deep": topology.local_deep,
+            "local_code": topology.local_code,
+            "local_compact": topology.local_compact,
+        }
+        missing = [role for role, model in role_model_map.items() if model and model not in installed]
+        if missing:
+            logging.getLogger(__name__).warning(
+                "Topology models not found in Ollama: %s — run 'ollama pull <model>' or update MODEL_ROLE_CONFIG.",
+                {r: role_model_map[r] for r in missing},
+            )
+            self.store.insert_event(
+                EventRecord(
+                    type=EventType.SYNC_FAILED,
+                    summary=f"Topology models missing from Ollama: {', '.join(missing)}",
+                    metadata={"missing_roles": {r: role_model_map[r] for r in missing}},
+                )
+            )
 
     def _bounded_int(self, raw: object, *, default: int, minimum: int) -> int:
         try:

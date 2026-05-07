@@ -39,6 +39,17 @@ class ModelScheduler:
             if run.metadata.get("risk_tier") in {RiskTier.HIGH.value, RiskTier.CRITICAL.value}
         )
 
+        # Global cap across all lanes — checked before per-lane limits.
+        if len(running) >= self.settings.max_total_concurrent_tasks:
+            lane, _, hot_path = self._lane_config(selection.route)
+            return LeaseDecision(
+                granted=False,
+                reason=f"global concurrency cap reached ({len(running)}/{self.settings.max_total_concurrent_tasks})",
+                hot_path=hot_path,
+                lane=lane,
+                defer_seconds=self.settings.defer_retry_seconds,
+            )
+
         lane, limit, hot_path = self._lane_config(selection.route)
         active_in_lane = lane_counts.get(lane, 0)
         if limit > 0 and active_in_lane >= limit:

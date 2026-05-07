@@ -84,21 +84,28 @@ class BehaviorVerifier:
                     )
                 )
 
-        weak_evidence = [item for item in evidence if item.confidence < 0.45]
-        if len(weak_evidence) >= 4:
-            signals.append(
-                VerifierSignal(
-                    code="weak_evidence_accumulation",
-                    score=2,
-                    reason="many low-confidence evidence records are accumulating without consolidation",
-                )
-            )
-
         current_generation_by_target = {
             target.id: str(target.metadata.get("active_ip_generation", ""))
             for target in targets
             if target.metadata.get("active_ip_generation") is not None
         }
+
+        # Count weak evidence per (target, active_ip_generation) to avoid cross-generation false positives.
+        weak_by_gen: dict[tuple[str, str], int] = defaultdict(int)
+        for item in evidence:
+            if item.confidence < 0.45:
+                gen = str(item.metadata.get("active_ip_generation", "")) or current_generation_by_target.get(item.target_id, "")
+                weak_by_gen[(item.target_id, gen)] += 1
+        for (target_id, _gen), count in weak_by_gen.items():
+            if count >= 4:
+                signals.append(
+                    VerifierSignal(
+                        code="weak_evidence_accumulation",
+                        score=2,
+                        reason="many low-confidence evidence records are accumulating without consolidation",
+                        target_id=target_id,
+                    )
+                )
         evidence_generations: dict[str, set[str]] = defaultdict(set)
         generationless_current_targets: set[str] = set()
         for item in evidence:
@@ -159,7 +166,7 @@ class BehaviorVerifier:
                         target_id=finding.target_id,
                     )
                 )
-            if finding.confidence >= 0.8 and not any(ref in verified_evidence_ids for ref in finding.evidence_refs):
+            if finding.confidence >= 0.8 and finding.evidence_refs and not any(ref in verified_evidence_ids for ref in finding.evidence_refs):
                 signals.append(
                     VerifierSignal(
                         code="confidence_without_evidence_growth",

@@ -963,6 +963,11 @@ class WorkflowOrchestrator:
             for item in evidence
         ):
             return False
+        # Require current-generation remote-admin surface evidence before attempting
+        # credential checks — avoids spraying creds against a stale or unknown surface.
+        current_gen_evidence = [e for e in evidence if self._evidence_matches_active_generation(target, e)]
+        if not self._target_has_remote_admin_surface(current_gen_evidence):
+            return False
         if not self.credentials_status_loader:
             return False
         status = self.credentials_status_loader()
@@ -1094,7 +1099,7 @@ class WorkflowOrchestrator:
             required_capabilities=list(blueprint.capabilities),
             priority=blueprint.default_priority,
             risk_tier=blueprint.risk_tier,
-            max_attempts=blueprint.max_attempts,
+            max_attempts=min(blueprint.max_attempts, self.autonomy.max_auto_retries),
             metadata={"autonomy_mode": self.autonomy.mode.value},
         )
         route = self.provider_router.select_route(task)
@@ -1173,7 +1178,7 @@ class WorkflowOrchestrator:
             scheduler_decision = self.model_scheduler.evaluate(
                 task,
                 selection,
-                active_runs=self.store.list_task_runs(limit=200),
+                active_runs=self.store.list_running_task_runs(),
             )
             if not scheduler_decision.granted:
                 self.resume_tracker.defer_task(
@@ -1255,7 +1260,7 @@ class WorkflowOrchestrator:
             task.provider_model = selection.model_name
             self.store.insert_task_run(run)
             self.store.insert_task(task)
-            self._write_checkpoint(task, run, summary="pre-execution checkpoint", payload={"task": task.as_payload()})
+            self._write_checkpoint(task, run, summary="pre-execution checkpoint", payload={"task": task.as_payload()}, phase="pre")
             dispatch = self.worker_broker.dispatch(task, selection)
             if not dispatch.accepted:
                 run.status = TaskRunStatus.CANCELLED
@@ -1272,16 +1277,35 @@ class WorkflowOrchestrator:
                     }
                 )
                 self.store.insert_task_run(run)
-                self.resume_tracker.defer_task(
-                    task,
-                    dispatch.reason,
-                    delay_seconds=dispatch.defer_seconds,
-                    metadata={
-                        "lane": dispatch.lane,
-                        "runner_id": dispatch.runner_id,
-                        "offer_count": dispatch.offer_count,
-                    },
-                )
+                defer_count = int(task.metadata.get("defer_count", 0)) + 1
+                task.metadata["defer_count"] = defer_count
+                if defer_count >= self.autonomy.max_defer_count:
+                    task.status = TaskStatus.NEEDS_APPROVAL
+                    task.metadata["defer_escalation_reason"] = (
+                        f"deferred {defer_count} times without dispatch: {dispatch.reason}"
+                    )
+                    self.store.insert_task(task)
+                    report.events.append(
+                        EventRecord(
+                            type=EventType.TASK_FAILED,
+                            summary=f"Task escalated to NEEDS_APPROVAL after {defer_count} defers: {task.title}",
+                            target_id=task.target_id,
+                            task_id=task.id,
+                            metadata={"defer_count": defer_count, "reason": dispatch.reason},
+                        )
+                    )
+                else:
+                    self.resume_tracker.defer_task(
+                        task,
+                        dispatch.reason,
+                        delay_seconds=dispatch.defer_seconds,
+                        metadata={
+                            "lane": dispatch.lane,
+                            "runner_id": dispatch.runner_id,
+                            "offer_count": dispatch.offer_count,
+                            "defer_count": defer_count,
+                        },
+                    )
                 continue
 
             run.status = TaskRunStatus.RUNNING
@@ -1426,24 +1450,42 @@ class WorkflowOrchestrator:
             self.store.insert_event(event)
             report.events.append(event)
 
-        if result.escalation_package and not self.store.has_active_task(task.target_id, TaskKind.REVIEW_PREMIUM_ESCALATION):
-            escalation_task = self._build_task(
-                target_id=task.target_id,
-                kind=TaskKind.REVIEW_PREMIUM_ESCALATION,
-                title="Premium review requested",
-                summary=result.escalation_package.reason,
-                session_id=task.session_id,
-            )
-            escalation_task.evidence_refs = result.escalation_package.evidence_refs
-            escalation_task.metadata["escalation_package"] = result.escalation_package.as_payload()
-            self._register_task(escalation_task, self.store.get_target(task.target_id), report)
+        if result.escalation_package:
+            if not self.autonomy.allow_remote_premium:
+                # Remote premium is policy-disabled — record the suppressed escalation so the
+                # operator can act on it if they later enable allow_remote_premium.
+                note = Note(
+                    target_id=task.target_id,
+                    task_id=task.id,
+                    title="Premium escalation suppressed (allow_remote_premium=False)",
+                    body=(
+                        f"An escalation package was generated but remote premium review is "
+                        f"policy-disabled. Reason: {result.escalation_package.reason}. "
+                        "Enable PRIMORDIAL_ALLOW_REMOTE_PREMIUM to activate premium routing."
+                    ),
+                    confidence=0.95,
+                    freshness=1.0,
+                    metadata={"escalation_suppressed": True, "reason": result.escalation_package.reason},
+                )
+                self.store.insert_note(note)
+            elif not self.store.has_active_task(task.target_id, TaskKind.REVIEW_PREMIUM_ESCALATION):
+                escalation_task = self._build_task(
+                    target_id=task.target_id,
+                    kind=TaskKind.REVIEW_PREMIUM_ESCALATION,
+                    title="Premium review requested",
+                    summary=result.escalation_package.reason,
+                    session_id=task.session_id,
+                )
+                escalation_task.evidence_refs = result.escalation_package.evidence_refs
+                escalation_task.metadata["escalation_package"] = result.escalation_package.as_payload()
+                self._register_task(escalation_task, self.store.get_target(task.target_id), report)
 
         if result.success:
             task.status = TaskStatus.SUCCEEDED
             run.status = TaskRunStatus.SUCCEEDED
             run.trace_summary = result.summary
             task.attempts += 1
-            if task.target_id:
+            if task.target_id and self._memory_service().needs_compaction(task.target_id):
                 self._memory_service().compact_target(task.target_id)
                 self._memory_service().apply_freshness_decay(task.target_id)
         else:
@@ -1475,6 +1517,7 @@ class WorkflowOrchestrator:
             run,
             summary="post-execution checkpoint",
             payload={"task": task.as_payload(), "run": run.as_payload(), "summary": result.summary},
+            phase="post",
         )
         self.store.insert_event(
             EventRecord(
@@ -1496,6 +1539,14 @@ class WorkflowOrchestrator:
             )
         report.completed_runs.append(run)
 
+    @staticmethod
+    def _is_transient_exception(exc: Exception) -> bool:
+        # OSError covers socket/network/IO errors; TimeoutError is a subclass of OSError.
+        # urllib errors are also OSError subclasses on Python 3.3+.
+        # These failures are infrastructure-level — the task logic was never exercised,
+        # so burning a retry budget on them is incorrect.
+        return isinstance(exc, (OSError, TimeoutError))
+
     def _persist_execution_exception(
         self,
         task: Task,
@@ -1504,10 +1555,16 @@ class WorkflowOrchestrator:
         report: OrchestrationReport,
     ) -> None:
         now = utc_now()
-        task.attempts += 1
-        task.status = TaskStatus.PENDING if task.attempts < task.max_attempts else TaskStatus.FAILED
+        transient = self._is_transient_exception(exc)
+        if transient:
+            # Network/IO glitch: reset to PENDING without consuming retry budget.
+            task.status = TaskStatus.PENDING
+        else:
+            task.attempts += 1
+            task.status = TaskStatus.PENDING if task.attempts < task.max_attempts else TaskStatus.FAILED
         task.updated_at = now
         task.metadata["execution_exception"] = str(exc)
+        task.metadata["last_exception_transient"] = transient
         run.status = TaskRunStatus.FAILED
         run.error = str(exc)
         run.trace_summary = f"execution crashed: {exc}"
@@ -1530,6 +1587,7 @@ class WorkflowOrchestrator:
             run,
             summary="execution exception checkpoint",
             payload={"task": task.as_payload(), "run": run.as_payload(), "error": str(exc)},
+            phase="exception",
         )
         event = EventRecord(
             type=EventType.TASK_FAILED,
@@ -1564,10 +1622,10 @@ class WorkflowOrchestrator:
                 return True
         return False
 
-    def _write_checkpoint(self, task: Task, run: TaskRun, summary: str, payload: dict[str, object]) -> None:
+    def _write_checkpoint(self, task: Task, run: TaskRun, summary: str, payload: dict[str, object], *, phase: str = "checkpoint") -> None:
         task_dir = self.checkpoints_dir / (task.id or "task")
         task_dir.mkdir(parents=True, exist_ok=True)
-        path = task_dir / f"{run.id}.json"
+        path = task_dir / f"{run.id}-{phase}.json"
         path.write_text(json.dumps(payload, indent=2, sort_keys=True))
         checkpoint = CheckpointRecord(
             task_id=task.id,

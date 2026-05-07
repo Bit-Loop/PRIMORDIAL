@@ -61,3 +61,14 @@ runtime/crash.journal
 docs/HUMAN_CHANGE_GUIDE.md
 claude-instructions.md
 CLAUDE.md
+claude-living_prd-context-todo_list.tracker.tmp
+runtime/
+runtime/primordial.db
+my-todo
+TEMP-worth-pulling-from-n8n.md
+findings/notion/pirate.htb/notion-export.md
+findings/notion/principal.htb/notion-export.md
+findings/targets/pirate.htb/evidence.md
+findings/targets/principal.htb/evidence.md
+findings/targets/principal.htb/findings.md
+findings/targets/principal.htb/guidance.md

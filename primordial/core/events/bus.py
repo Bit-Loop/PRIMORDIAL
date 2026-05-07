@@ -22,6 +22,8 @@ class RuntimeSignal(StrEnum):
     TASK_FINISHED = "task_finished"
     TASK_CHECKPOINTED = "task_checkpointed"
     WORKER_DISPATCHED = "worker_dispatched"
+    WORKER_COMPLETED = "worker_completed"
+    WORKER_FAILED = "worker_failed"
     NOTIFICATION_DELIVERED = "notification_delivered"
     SYNC_COMPLETED = "sync_completed"
 

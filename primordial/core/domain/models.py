@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 from uuid import uuid4
 
 from primordial.core.domain.enums import (
@@ -436,6 +436,35 @@ class CheckpointRecord:
 
     def as_payload(self) -> dict[str, Any]:
         return json_ready(self)
+
+
+@dataclass(slots=True)
+class TraceMetadata:
+    """Typed container for required trace fields (CLAUDE.md §Required Trace Metadata).
+
+    Build with as_dict() when passing to AgentTrace.metadata so callers get type-checked
+    field names without having to remember raw string keys.
+    """
+    model: str
+    role_name: str
+    task_type: str
+    stage: str
+    passed: bool | None = None
+    confidence: float | None = None
+    outcome_notes: str | None = None
+    failure_reason: str | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    latency_seconds: float | None = None
+    retry_count: int | None = None
+    evidence_quality: str | None = None
+
+    # Required fields — any AgentTrace whose metadata dict lacks these keys will
+    # trigger a warning at insert_trace.
+    REQUIRED_KEYS: ClassVar[frozenset[str]] = frozenset({"model", "role_name", "task_type", "stage"})
+
+    def as_dict(self) -> dict[str, Any]:
+        return {k: v for k, v in asdict(self).items() if not k.startswith("REQUIRED") and v is not None}
 
 
 @dataclass(slots=True)
