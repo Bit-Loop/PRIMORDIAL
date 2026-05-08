@@ -54,7 +54,7 @@ class LMStudioClient:
 
     def list_models(self) -> LMStudioModelListResult:
         errors: list[str] = []
-        for endpoint in ("/api/v1/models", "/api/v0/models"):
+        for endpoint in ("/api/v1/models", "/api/v0/models", "/v1/models"):
             try:
                 data = self._request_json("GET", endpoint, timeout_seconds=min(10, self.timeout_seconds))
             except Exception as exc:  # noqa: BLE001 - v1 to v0 fallback is intentional
@@ -74,19 +74,38 @@ class LMStudioClient:
         num_ctx: int | None = None,
         timeout_seconds: int | None = None,
     ) -> LMStudioResponse:
-        payload: dict[str, object] = {
-            "model": model,
-            "messages": [
+        def payload_with(messages: list[dict[str, str]]) -> dict[str, object]:
+            payload: dict[str, object] = {
+                "model": model,
+                "messages": messages,
+                "temperature": temperature,
+                "stream": False,
+            }
+            if num_ctx is not None:
+                payload["max_tokens"] = max(128, min(2048, num_ctx // 8))
+            return payload
+
+        payload = payload_with(
+            [
                 {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
-            ],
-            "temperature": temperature,
-            "stream": False,
-        }
-        if num_ctx is not None:
-            payload["max_tokens"] = max(128, min(2048, num_ctx // 8))
+            ]
+        )
+        fallback_payload = payload_with(
+            [{"role": "user", "content": f"{system.strip()}\n\n{prompt.strip()}".strip()}]
+        )
         started = time.monotonic()
-        data = self._request_json("POST", "/v1/chat/completions", payload, timeout_seconds=timeout_seconds)
+        try:
+            data = self._request_json("POST", "/v1/chat/completions", payload, timeout_seconds=timeout_seconds)
+        except RuntimeError as exc:
+            if "Only user and assistant roles are supported" not in str(exc):
+                raise
+            data = self._request_json(
+                "POST",
+                "/v1/chat/completions",
+                fallback_payload,
+                timeout_seconds=timeout_seconds,
+            )
         elapsed_seconds = time.monotonic() - started
         text = self._extract_chat_text(data)
         if not text:
@@ -170,6 +189,12 @@ class LMStudioClient:
         try:
             with request.urlopen(req, timeout=timeout_seconds or self.timeout_seconds) as response:
                 decoded = json.loads(response.read().decode("utf-8") or "{}")
+        except error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace").strip()
+            detail = f"{exc.code} {exc.reason}"
+            if body:
+                detail = f"{detail}: {body}"
+            raise RuntimeError(f"LM Studio request to {self.base_url}{endpoint} failed: {detail}") from exc
         except error.URLError as exc:
             raise RuntimeError(f"LM Studio is not reachable at {self.base_url}: {exc}") from exc
         except json.JSONDecodeError as exc:
@@ -191,20 +216,41 @@ class LMStudioClient:
         for item in raw_models:
             if not isinstance(item, dict):
                 continue
-            model_id = str(item.get("id") or item.get("model") or item.get("path") or item.get("name") or "").strip()
+            model_id = str(
+                item.get("id")
+                or item.get("model")
+                or item.get("key")
+                or item.get("path")
+                or item.get("name")
+                or item.get("display_name")
+                or ""
+            ).strip()
             if not model_id:
                 continue
             kind = str(item.get("type") or item.get("kind") or item.get("model_type") or "").lower()
             if "embedding" in kind or "embedding" in model_id.lower():
                 continue
-            loaded = bool(item.get("loaded") or item.get("is_loaded") or item.get("state") == "loaded")
+            loaded_instances = item.get("loaded_instances")
+            loaded = bool(
+                item.get("loaded")
+                or item.get("is_loaded")
+                or item.get("state") == "loaded"
+                or (isinstance(loaded_instances, list) and loaded_instances)
+            )
+            quantization = item.get("quantization")
+            quantization_name = quantization.get("name") if isinstance(quantization, dict) else quantization
             models.append(
                 LMStudioModelInfo(
                     id=model_id,
                     loaded=loaded,
                     architecture=self._optional_str(item.get("architecture") or item.get("arch")),
-                    quantization=self._optional_str(item.get("quantization") or item.get("quant")),
-                    params=self._optional_str(item.get("params") or item.get("parameter_count") or item.get("parameters")),
+                    quantization=self._optional_str(quantization_name or item.get("quant")),
+                    params=self._optional_str(
+                        item.get("params")
+                        or item.get("params_string")
+                        or item.get("parameter_count")
+                        or item.get("parameters")
+                    ),
                     size=self._optional_int(item.get("size") or item.get("size_bytes")),
                     max_context_length=self._optional_int(
                         item.get("max_context_length")

@@ -15,7 +15,9 @@ from primordial.core.catalog.interpolation import interpolate_argv
 from primordial.core.catalog.loader import CatalogValidationError
 from primordial.core.catalog.playbooks import PlaybookCatalog
 from primordial.core.domain.enums import EvidenceType, ScopeProfile, VerificationStatus
-from primordial.core.domain.models import EvidenceRecord
+from primordial.core.domain.enums import AgentRole, MethodologyPhase, TaskKind
+from primordial.core.domain.models import EvidenceRecord, Target, Task
+from primordial.core.intent.models import KerberosPolicy, OperatorIntentPolicy
 from primordial.core.intent import OperatorIntentRegistry
 from primordial.core.primitives.catalog import PrimitiveCatalog
 from tests.support import write_scope_file
@@ -33,6 +35,11 @@ class OperatorIntentCatalogAutonomyTests(unittest.TestCase):
         self.assertIn("recon_only", {item.id for item in intents})
         self.assertFalse(registry.get("recon_only").policy.public_poc_research)
         self.assertTrue(registry.get("htb_lab").policy.lab_policy.lab_flag_collection_allowed)
+        ad_intent = registry.get("ad_lab")
+        self.assertIn("In-House AD Attack Path", ad_intent.label)
+        self.assertTrue(ad_intent.policy.kerberos_policy.asrep_roast_check_allowed)
+        self.assertTrue(ad_intent.policy.kerberos_policy.kerberoast_check_allowed)
+        self.assertFalse(ad_intent.policy.lab_policy.lab_flag_collection_allowed)
 
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -43,6 +50,78 @@ class OperatorIntentCatalogAutonomyTests(unittest.TestCase):
             )
             with self.assertRaises(CatalogValidationError):
                 OperatorIntentRegistry(root).load()
+
+    def test_kerberos_planning_records_only_allowed_split_checks(self) -> None:
+        from primordial.core.orchestration.workflow import WorkflowOrchestrator
+
+        class Store:
+            def __init__(self, evidence: list[EvidenceRecord]) -> None:
+                self.evidence = evidence
+                self.events = []
+
+            def list_evidence(self, target_id=None, limit: int = 200):
+                return self.evidence
+
+            def insert_target(self, target) -> None:
+                self.target = target
+
+            def insert_event(self, event) -> None:
+                self.events.append(event)
+
+        target = Target(
+            handle="ad.internal",
+            display_name="ad.internal",
+            profile=ScopeProfile.HACKERONE,
+        )
+        evidence = [
+            EvidenceRecord(
+                target_id=target.id,
+                type=EvidenceType.TOOL_OUTPUT,
+                title="Kerberos principals",
+                summary="Discovered users and SPNs.",
+                source_ref="fixture://kerberos-users",
+                verification_status=VerificationStatus.VERIFIED,
+                confidence=0.8,
+                freshness=0.9,
+                metadata={
+                    "kind": "kerberos_user_discovery",
+                    "users": [{"username": "alice"}],
+                    "spn_candidates": [{"username": "svc_web", "spn": "HTTP/web.ad.internal"}],
+                },
+            )
+        ]
+        workflow = WorkflowOrchestrator.__new__(WorkflowOrchestrator)
+        workflow.store = Store(evidence)
+        workflow.active_intent_policy_loader = lambda: OperatorIntentPolicy(
+            kerberos_policy=KerberosPolicy(asrep_roast_check_allowed=True, kerberoast_check_allowed=False)
+        )
+        workflow.active_intent_id_loader = lambda: "asrep_only_fixture"
+
+        self.assertEqual(workflow._planned_kerberos_check_types(target), ["asrep_roast"])
+
+    def test_kerberos_execution_enforces_split_flags(self) -> None:
+        from primordial.modes.security.execution import PrimitiveExecutor
+
+        executor = PrimitiveExecutor.__new__(PrimitiveExecutor)
+        executor.active_intent_policy_loader = lambda: OperatorIntentPolicy(
+            kerberos_policy=KerberosPolicy(asrep_roast_check_allowed=True, kerberoast_check_allowed=False)
+        )
+        executor.active_intent_id_loader = lambda: "asrep_only_fixture"
+        task = Task(
+            target_id=None,
+            phase=MethodologyPhase.EXPLOITATION,
+            kind=TaskKind.KERBEROS_ATTACK_CHECK,
+            title="Kerberoast-only fixture",
+            summary="Should be blocked because only AS-REP is allowed.",
+            role=AgentRole.EXPLOITATION_WORKER,
+            metadata={"kerberos_checks": ["kerberoast"]},
+        )
+
+        result = executor._require_intent(task)
+
+        self.assertIsNotNone(result)
+        self.assertFalse(result.success)
+        self.assertIn("Kerberoast", result.error or "")
 
     def test_recon_only_blocks_research_heavy_planning(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

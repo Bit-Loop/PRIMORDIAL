@@ -23,7 +23,7 @@ The main assembly point is:
 `PrimordialRuntime` wires together:
 
 - `RuntimeStore`
-  - SQLite-backed durable operational state.
+  - Postgres/pgvector-backed durable operational state.
 
 - `CredentialStore`
   - Local credential storage and redacted status.
@@ -64,7 +64,7 @@ Runtime storage lives in:
 - `primordial/core/storage/schema.py`
 - `primordial/core/storage/runtime.py`
 
-The development store is SQLite under `runtime/primordial.db`.
+The V1 runtime store is Postgres with pgvector. `PRIMORDIAL_DATABASE_URL` is required; `runtime/` is only for local output files such as artifacts, checkpoints, exports, and secrets.
 
 Important records include:
 
@@ -373,7 +373,7 @@ Examples:
 - Credentials are stored in the credential store.
 - Scope is stored in target and scope-asset tables.
 - Guidance is stored in per-target markdown files and exposed through runtime payloads.
-- Tasks, traces, and evidence are stored in SQLite.
+- Tasks, traces, and evidence are stored in Postgres.
 
 The GUI and web app do not directly talk to each other. They mirror each other by sharing the same runtime and storage.
 
@@ -424,7 +424,7 @@ GUI/Web/CLI render refreshed state
 - `primordial/modes/security/execution.py` is too large and mixes many primitive families.
 - Web routing in `PrimordialWebApp.dispatch()` is a long if/else chain.
 - Continuous mode is currently UI-driven, not a durable server-side scheduler.
-- SQLite is useful for v1, but production architecture still points toward Postgres/pgvector.
+- V1 runtime storage is Postgres with pgvector only; SQLite is historical context and must not be used by active runtime code.
 - There is no web authentication layer.
 - There is no formal API schema.
 - The n8n reference tree pollutes searches unless excluded.
@@ -438,4 +438,3 @@ GUI/Web/CLI render refreshed state
 - Do not turn continuous mode into an unbounded loop.
 - Do not expose arbitrary shell execution to AI workers.
 - Add tests for new runtime/web/workflow/policy behavior.
-

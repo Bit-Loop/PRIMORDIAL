@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
-from threading import Thread
+from threading import Event, Thread
 from typing import Any
 
 from primordial.app.runtime import PrimordialRuntime
@@ -84,6 +84,7 @@ class WebConsoleThread:
         self.port = port
         self.web_app = PrimordialWebApp(runtime)
         self.server = build_web_console_server(runtime, host=host, port=port, web_app=self.web_app)
+        self.tick_runner = _ContinuousTickRunner(self.web_app)
         self.thread = Thread(target=self.server.serve_forever, name="primordial-web-console", daemon=True)
 
     @property
@@ -96,13 +97,44 @@ class WebConsoleThread:
 
     def start(self) -> None:
         if not self.thread.is_alive():
+            self.web_app.runtime.repair_execution_state()
+            self.tick_runner.start()
             self.thread.start()
 
     def stop(self) -> None:
+        self.tick_runner.stop()
         self.server.shutdown()
         self.server.server_close()
         if self.thread.is_alive():
             self.thread.join(timeout=2)
+
+
+class _ContinuousTickRunner:
+    def __init__(self, web_app: PrimordialWebApp) -> None:
+        self.web_app = web_app
+        self._stop = Event()
+        self._thread = Thread(target=self._run, name="primordial-continuous-tick", daemon=True)
+
+    def start(self) -> None:
+        if not self._thread.is_alive():
+            self._stop.clear()
+            self._thread = Thread(target=self._run, name="primordial-continuous-tick", daemon=True)
+            self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=2)
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            interval_seconds = 30
+            try:
+                outcome = self.web_app.continuous_tick_once()
+                interval_seconds = max(2, int(outcome.get("interval_seconds") or 30))
+            except Exception:
+                interval_seconds = 30
+            self._stop.wait(interval_seconds)
 
 
 def serve_web_console(
@@ -111,11 +143,16 @@ def serve_web_console(
     host: str = "127.0.0.1",
     port: int = 1337,
 ) -> None:
-    server = build_web_console_server(runtime, host=host, port=port)
+    runtime.repair_execution_state()
+    web_app = PrimordialWebApp(runtime)
+    tick_runner = _ContinuousTickRunner(web_app)
+    server = build_web_console_server(runtime, host=host, port=port, web_app=web_app)
     print(f"Primordial web console listening on http://{host}:{port}")
     try:
+        tick_runner.start()
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        tick_runner.stop()
         server.server_close()

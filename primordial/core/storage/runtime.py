@@ -1,10 +1,21 @@
 from __future__ import annotations
 
 import json
-import sqlite3
+from json import JSONDecodeError
 from contextlib import closing
-from pathlib import Path
 from typing import Any, Iterable
+
+try:
+    import psycopg
+    from psycopg.rows import dict_row
+    from psycopg.types.json import Jsonb
+except ModuleNotFoundError as exc:  # pragma: no cover - exercised before runtime startup
+    psycopg = None
+    dict_row = None
+    Jsonb = None
+    _PSYCOPG_IMPORT_ERROR = exc
+else:
+    _PSYCOPG_IMPORT_ERROR = None
 
 from primordial.core.domain.enums import (
     AgentRole,
@@ -67,227 +78,241 @@ from primordial.core.domain.models import (
 from primordial.core.storage.schema import SCHEMA_SQL
 
 
-def _dump(value: Any) -> str:
-    return json.dumps(json_ready(value), sort_keys=True)
+def _dump(value: Any) -> Any:
+    ready = json_ready(value)
+    if Jsonb is not None:
+        return Jsonb(ready)
+    return json.dumps(ready, sort_keys=True)
 
 
-def _load(value: str | None, default: Any) -> Any:
+def _load(value: Any | None, default: Any) -> Any:
     if not value:
         return default
-    return json.loads(value)
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except JSONDecodeError:
+            return value
+    if isinstance(value, dict | list):
+        return value
+    try:
+        return json.loads(value)
+    except (JSONDecodeError, TypeError):
+        return value
 
 
 _SCHEMA_VERSION = 1
 
 
+class _PostgresCursor:
+    def __init__(self, cursor: Any) -> None:
+        self._cursor = cursor
+        self.rowcount = cursor.rowcount
+
+    def fetchone(self) -> Any | None:
+        return self._cursor.fetchone()
+
+    def __iter__(self):
+        for row in self._cursor:
+            yield row
+
+
+class _PostgresConnection:
+    def __init__(self, connection: Any) -> None:
+        self._connection = connection
+
+    def __enter__(self) -> "_PostgresConnection":
+        self._connection.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        return self._connection.__exit__(exc_type, exc, tb)
+
+    def close(self) -> None:
+        self._connection.close()
+
+    def commit(self) -> None:
+        self._connection.commit()
+
+    def rollback(self) -> None:
+        self._connection.rollback()
+
+    def execute(self, sql: str, params: tuple[Any, ...] = ()) -> _PostgresCursor:
+        cursor = self._connection.execute(sql, params)
+        return _PostgresCursor(cursor)
+
+    def executescript(self, sql: str) -> None:
+        for statement in _split_sql_statements(sql):
+            self.execute(statement)
+
+
+def _split_sql_statements(sql: str) -> list[str]:
+    return [statement.strip() for statement in sql.split(";") if statement.strip()]
+
+
+def _quote_ident(value: str) -> str:
+    return '"' + value.replace('"', '""') + '"'
+
+
 class RuntimeStore:
-    def __init__(self, database_path: Path) -> None:
-        self.database_path = database_path
+    def __init__(self, database_url: str, *, schema: str | None = None) -> None:
+        self.database_url = database_url
+        self.schema = schema
 
     def initialize(self) -> None:
-        self.database_path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self.connect()) as connection:
+            connection.execute("CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public")
+            if self.schema:
+                connection.execute(f"CREATE SCHEMA IF NOT EXISTS {_quote_ident(self.schema)}")
+                connection.execute(f"SET search_path TO {_quote_ident(self.schema)}, public")
             connection.executescript(SCHEMA_SQL)
-            self._apply_compat_migrations(connection)
             self._assert_schema_version(connection)
             connection.commit()
 
-    def _assert_schema_version(self, connection: sqlite3.Connection) -> None:
-        connection.execute(
-            "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)"
-        )
+    def _assert_schema_version(self, connection: _PostgresConnection) -> None:
         row = connection.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
         if row is None:
-            connection.execute("INSERT INTO schema_version (version) VALUES (?)", (_SCHEMA_VERSION,))
-        elif int(row[0]) > _SCHEMA_VERSION:
+            connection.execute("INSERT INTO schema_version (version) VALUES (%s)", (_SCHEMA_VERSION,))
+        elif int(row["version"]) > _SCHEMA_VERSION:
             raise RuntimeError(
-                f"Database schema version {row[0]} is newer than this code ({_SCHEMA_VERSION}). "
+                f"Database schema version {row['version']} is newer than this code ({_SCHEMA_VERSION}). "
                 "Upgrade the application before opening this database."
             )
 
-    def connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.database_path)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA journal_mode=WAL")
-        connection.execute("PRAGMA synchronous=NORMAL")
-        connection.execute("PRAGMA foreign_keys=ON")
+    def connect(self) -> _PostgresConnection:
+        if psycopg is None:
+            raise RuntimeError(
+                "psycopg v3 is required for Primordial runtime storage. "
+                "Install project dependencies with `pip install -e .`."
+            ) from _PSYCOPG_IMPORT_ERROR
+        connection = _PostgresConnection(psycopg.connect(self.database_url, row_factory=dict_row))
+        if self.schema:
+            connection.execute(f"SET search_path TO {_quote_ident(self.schema)}, public")
+            connection.commit()
         return connection
-
-    def _apply_compat_migrations(self, connection: sqlite3.Connection) -> None:
-        self._ensure_column(connection, "tasks", "session_id", "TEXT")
-        self._ensure_column(connection, "tasks", "methodology", "TEXT NOT NULL DEFAULT 'web_app_core'")
-        self._ensure_column(connection, "tasks", "provider_model", "TEXT")
-        self._ensure_column(connection, "tasks", "latest_run_id", "TEXT")
-        self._ensure_column(connection, "memory_entries", "status", "TEXT NOT NULL DEFAULT 'active'")
-        connection.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS model_eval_runs (
-                id TEXT PRIMARY KEY,
-                providers_json TEXT NOT NULL,
-                models_json TEXT NOT NULL,
-                recommendations_json TEXT NOT NULL,
-                artifacts_json TEXT NOT NULL,
-                metadata_json TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS model_eval_role_metrics (
-                id TEXT PRIMARY KEY,
-                run_id TEXT NOT NULL,
-                role TEXT NOT NULL,
-                provider TEXT NOT NULL,
-                model TEXT NOT NULL,
-                aggregate_score REAL NOT NULL,
-                pass_rate REAL NOT NULL,
-                fail_rate REAL NOT NULL,
-                hallucination_count INTEGER NOT NULL,
-                hallucination_rate REAL NOT NULL,
-                over_refusal_rate REAL NOT NULL,
-                correct_refusal_rate REAL NOT NULL,
-                unsafe_compliance_failures INTEGER NOT NULL,
-                top_failure_modes_json TEXT NOT NULL,
-                avg_latency_sec REAL,
-                avg_tokens_sec REAL,
-                best_context_length INTEGER,
-                quantization TEXT,
-                params TEXT,
-                metadata_json TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                FOREIGN KEY(run_id) REFERENCES model_eval_runs(id)
-            );
-            CREATE INDEX IF NOT EXISTS idx_model_eval_role_created ON model_eval_role_metrics(role, created_at);
-            CREATE INDEX IF NOT EXISTS idx_model_eval_run_created ON model_eval_runs(created_at);
-            """
-        )
-
-    def _ensure_column(
-        self,
-        connection: sqlite3.Connection,
-        table_name: str,
-        column_name: str,
-        column_sql: str,
-    ) -> None:
-        rows = list(connection.execute(f"PRAGMA table_info({table_name})"))
-        existing = {row[1] for row in rows}
-        if column_name in existing:
-            return
-        connection.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_sql}")
 
     def _execute(self, sql: str, params: tuple[Any, ...]) -> None:
         with closing(self.connect()) as connection:
             connection.execute(sql, params)
             connection.commit()
 
-    def _query(self, sql: str, params: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
+    def _query(self, sql: str, params: tuple[Any, ...] = ()) -> list[Any]:
         with closing(self.connect()) as connection:
             return list(connection.execute(sql, params))
 
-    def _query_one(self, sql: str, params: tuple[Any, ...] = ()) -> sqlite3.Row | None:
+    def _query_one(self, sql: str, params: tuple[Any, ...] = ()) -> Any | None:
         with closing(self.connect()) as connection:
             return connection.execute(sql, params).fetchone()
 
     def _update(self, table: str, record_id: str, values: dict[str, Any]) -> None:
-        assignments = ", ".join(f"{key} = ?" for key in values)
+        assignments = ", ".join(f"{key} = %s" for key in values)
         params = tuple(values.values()) + (record_id,)
-        self._execute(f"UPDATE {table} SET {assignments} WHERE id = ?", params)
+        self._execute(f"UPDATE {table} SET {assignments} WHERE id = %s", params)
 
     def get_setting(self, key: str, default: Any = None) -> Any:
-        row = self._query_one("SELECT value_json FROM app_settings WHERE key = ?", (key,))
+        row = self._query_one("SELECT value FROM app_settings WHERE key = %s", (key,))
         if row is None:
             return default
-        return _load(row["value_json"], default)
+        return _load(row["value"], default)
 
     def set_setting(self, key: str, value: Any) -> None:
         self._execute(
             """
-            INSERT OR REPLACE INTO app_settings
-            (key, value_json, updated_at)
-            VALUES (?, ?, ?)
+            INSERT INTO app_settings
+            (key, value, updated_at)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at
             """,
             (key, _dump(value), utc_now().isoformat()),
         )
 
     def purge_synthetic_external_records(self) -> dict[str, int]:
         with closing(self.connect()) as connection:
-            fake_notion_rows = list(
+            synthetic_notion_rows = list(
                 connection.execute(
                     """
-                    SELECT id, metadata_json FROM notion_pages
-                    WHERE url LIKE 'https://notion.local/%'
-                       OR external_id LIKE 'notion-%'
-                    """
+                    SELECT id, metadata FROM notion_pages
+                    WHERE url LIKE %s
+                       OR external_id LIKE %s
+                    """,
+                    ("https://notion.local/%", "notion-%"),
                 )
             )
-            fake_job_ids: set[str] = set()
-            for row in fake_notion_rows:
-                metadata = _load(row["metadata_json"], {})
+            synthetic_job_ids: set[str] = set()
+            for row in synthetic_notion_rows:
+                metadata = _load(row["metadata"], {})
                 if isinstance(metadata, dict) and metadata.get("job_id"):
-                    fake_job_ids.add(str(metadata["job_id"]))
+                    synthetic_job_ids.add(str(metadata["job_id"]))
 
-            fake_notion_pages = connection.execute(
+            synthetic_notion_pages = connection.execute(
                 """
                 DELETE FROM notion_pages
-                WHERE url LIKE 'https://notion.local/%'
-                   OR external_id LIKE 'notion-%'
-                """
+                WHERE url LIKE %s
+                   OR external_id LIKE %s
+                """,
+                ("https://notion.local/%", "notion-%"),
             ).rowcount
 
-            fake_discord_rows = list(
+            synthetic_discord_rows = list(
                 connection.execute(
-                    "SELECT notification_id FROM discord_deliveries WHERE external_ref LIKE 'discord://%'"
+                    "SELECT notification_id FROM discord_deliveries WHERE external_ref LIKE %s",
+                    ("discord://%",),
                 )
             )
-            fake_notification_ids = [str(row["notification_id"]) for row in fake_discord_rows]
-            fake_discord_deliveries = connection.execute(
-                "DELETE FROM discord_deliveries WHERE external_ref LIKE 'discord://%'"
+            synthetic_notification_ids = [str(row["notification_id"]) for row in synthetic_discord_rows]
+            synthetic_discord_deliveries = connection.execute(
+                "DELETE FROM discord_deliveries WHERE external_ref LIKE %s",
+                ("discord://%",),
             ).rowcount
 
-            fake_jobs_updated = 0
-            if fake_job_ids:
-                placeholders = ", ".join("?" for _ in fake_job_ids)
-                fake_jobs_updated = connection.execute(
+            synthetic_jobs_updated = 0
+            if synthetic_job_ids:
+                placeholders = ", ".join("%s" for _ in synthetic_job_ids)
+                synthetic_jobs_updated = connection.execute(
                     f"""
                     UPDATE external_sync_jobs
-                    SET status = ?, last_error = ?, updated_at = ?
+                    SET status = %s, last_error = %s, updated_at = %s
                     WHERE id IN ({placeholders})
                     """,
                     (
                         ExternalSyncStatus.FAILED.value,
                         "legacy synthetic Notion records were removed; real Notion credentials are required",
                         utc_now().isoformat(),
-                        *tuple(fake_job_ids),
+                        *tuple(synthetic_job_ids),
                     ),
                 ).rowcount
 
-            fake_notifications_updated = 0
-            if fake_notification_ids:
-                placeholders = ", ".join("?" for _ in fake_notification_ids)
-                fake_notifications_updated = connection.execute(
+            synthetic_notifications_updated = 0
+            if synthetic_notification_ids:
+                placeholders = ", ".join("%s" for _ in synthetic_notification_ids)
+                synthetic_notifications_updated = connection.execute(
                     f"""
                     UPDATE notifications
-                    SET status = ?, updated_at = ?
+                    SET status = %s, updated_at = %s
                     WHERE id IN ({placeholders})
                     """,
                     (
                         NotificationStatus.FAILED.value,
                         utc_now().isoformat(),
-                        *tuple(fake_notification_ids),
+                        *tuple(synthetic_notification_ids),
                     ),
                 ).rowcount
 
             connection.commit()
         return {
-            "notion_pages": fake_notion_pages,
-            "discord_deliveries": fake_discord_deliveries,
-            "sync_jobs_updated": fake_jobs_updated,
-            "notifications_updated": fake_notifications_updated,
+            "notion_pages": synthetic_notion_pages,
+            "discord_deliveries": synthetic_discord_deliveries,
+            "sync_jobs_updated": synthetic_jobs_updated,
+            "notifications_updated": synthetic_notifications_updated,
         }
 
     def insert_session(self, session: Session) -> None:
         self._execute(
             """
-            INSERT OR REPLACE INTO sessions
-            (id, methodology, profile, autonomy_mode, status, title, metadata_json, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO sessions
+            (id, methodology, profile, autonomy_mode, status, title, metadata, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET methodology = EXCLUDED.methodology, profile = EXCLUDED.profile, autonomy_mode = EXCLUDED.autonomy_mode, status = EXCLUDED.status, title = EXCLUDED.title, metadata = EXCLUDED.metadata, created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at
             """,
             (
                 session.id,
@@ -303,12 +328,12 @@ class RuntimeStore:
         )
 
     def list_sessions(self, limit: int = 20) -> list[Session]:
-        rows = self._query("SELECT * FROM sessions ORDER BY created_at DESC LIMIT ?", (limit,))
+        rows = self._query("SELECT * FROM sessions ORDER BY created_at DESC LIMIT %s", (limit,))
         return [self._session_from_row(row) for row in rows]
 
     def get_active_session(self) -> Session | None:
         row = self._query_one(
-            "SELECT * FROM sessions WHERE status = ? ORDER BY created_at DESC LIMIT 1",
+            "SELECT * FROM sessions WHERE status = %s ORDER BY created_at DESC LIMIT 1",
             (SessionStatus.ACTIVE.value,),
         )
         return self._session_from_row(row) if row else None
@@ -316,30 +341,41 @@ class RuntimeStore:
     def pause_active_sessions(self) -> int:
         with closing(self.connect()) as connection:
             updated = connection.execute(
-                "UPDATE sessions SET status = ?, updated_at = ? WHERE status = ?",
+                "UPDATE sessions SET status = %s, updated_at = %s WHERE status = %s",
                 (SessionStatus.PAUSED.value, utc_now().isoformat(), SessionStatus.ACTIVE.value),
             ).rowcount
             connection.commit()
         return updated
 
     def insert_target(self, target: Target) -> None:
-        self._execute(
-            """
-            INSERT OR REPLACE INTO targets
-            (id, handle, display_name, profile, in_scope, metadata_json, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                target.id,
-                target.handle,
-                target.display_name,
-                target.profile.value,
-                int(target.in_scope),
-                _dump(target.metadata),
-                target.created_at.isoformat(),
-                target.updated_at.isoformat(),
-            ),
-        )
+        with closing(self.connect()) as connection:
+            row = connection.execute(
+                """
+                INSERT INTO targets
+                (id, handle, display_name, profile, in_scope, metadata, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (profile, handle) DO UPDATE SET
+                    display_name = EXCLUDED.display_name,
+                    in_scope = EXCLUDED.in_scope,
+                    metadata = EXCLUDED.metadata,
+                    updated_at = EXCLUDED.updated_at
+                RETURNING id, created_at
+                """,
+                (
+                    target.id,
+                    target.handle,
+                    target.display_name,
+                    target.profile.value,
+                    target.in_scope,
+                    _dump(target.metadata),
+                    target.created_at.isoformat(),
+                    target.updated_at.isoformat(),
+                ),
+            ).fetchone()
+            connection.commit()
+        if row is not None:
+            target.id = str(row["id"])
+            target.created_at = parse_datetime(row["created_at"])
 
     def list_targets(self) -> list[Target]:
         rows = self._query("SELECT * FROM targets ORDER BY created_at ASC")
@@ -348,18 +384,18 @@ class RuntimeStore:
     def get_target(self, target_id: str | None) -> Target | None:
         if not target_id:
             return None
-        row = self._query_one("SELECT * FROM targets WHERE id = ?", (target_id,))
+        row = self._query_one("SELECT * FROM targets WHERE id = %s", (target_id,))
         return self._target_from_row(row) if row else None
 
     def get_target_by_handle(self, handle: str, profile: ScopeProfile | None = None) -> Target | None:
         if profile is None:
             row = self._query_one(
-                "SELECT * FROM targets WHERE handle = ? ORDER BY created_at DESC LIMIT 1",
+                "SELECT * FROM targets WHERE handle = %s ORDER BY created_at DESC LIMIT 1",
                 (handle,),
             )
         else:
             row = self._query_one(
-                "SELECT * FROM targets WHERE handle = ? AND profile = ? ORDER BY created_at DESC LIMIT 1",
+                "SELECT * FROM targets WHERE handle = %s AND profile = %s ORDER BY created_at DESC LIMIT 1",
                 (handle, profile.value),
             )
         return self._target_from_row(row) if row else None
@@ -367,9 +403,10 @@ class RuntimeStore:
     def insert_scope_asset(self, asset: ScopeAsset) -> None:
         self._execute(
             """
-            INSERT OR REPLACE INTO scope_assets
-            (id, target_id, asset, asset_type, metadata_json, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO scope_assets
+            (id, target_id, asset, asset_type, metadata, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET target_id = EXCLUDED.target_id, asset = EXCLUDED.asset, asset_type = EXCLUDED.asset_type, metadata = EXCLUDED.metadata, created_at = EXCLUDED.created_at
             """,
             (
                 asset.id,
@@ -383,15 +420,15 @@ class RuntimeStore:
 
     def delete_scope_assets_for_target(self, target_id: str) -> int:
         with closing(self.connect()) as connection:
-            connection.execute("DELETE FROM scope_assets WHERE target_id = ?", (target_id,))
-            total = connection.total_changes
+            cursor = connection.execute("DELETE FROM scope_assets WHERE target_id = %s", (target_id,))
+            total = cursor.rowcount
             connection.commit()
             return total
 
     def list_scope_assets(self, target_id: str | None = None) -> list[ScopeAsset]:
         if target_id:
             rows = self._query(
-                "SELECT * FROM scope_assets WHERE target_id = ? ORDER BY created_at ASC",
+                "SELECT * FROM scope_assets WHERE target_id = %s ORDER BY created_at ASC",
                 (target_id,),
             )
         else:
@@ -400,7 +437,7 @@ class RuntimeStore:
 
     def get_scope_asset(self, target_id: str, asset: str) -> ScopeAsset | None:
         row = self._query_one(
-            "SELECT * FROM scope_assets WHERE target_id = ? AND asset = ? ORDER BY created_at DESC LIMIT 1",
+            "SELECT * FROM scope_assets WHERE target_id = %s AND asset = %s ORDER BY created_at DESC LIMIT 1",
             (target_id, asset),
         )
         return self._scope_asset_from_row(row) if row else None
@@ -408,14 +445,13 @@ class RuntimeStore:
     def insert_task(self, task: Task) -> None:
         self._execute(
             """
-            INSERT OR REPLACE INTO tasks
-            (
-                id, target_id, session_id, phase, kind, title, summary, role, methodology,
-                required_capabilities_json, evidence_refs_json, metadata_json, status, priority,
+            INSERT INTO tasks
+            (id, target_id, session_id, phase, kind, title, summary, role, methodology,
+                required_capabilities, evidence_refs, metadata, status, priority,
                 risk_tier, attempts, max_attempts, requires_approval, provider_route, provider_model,
-                parent_task_id, latest_run_id, created_at, updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                parent_task_id, latest_run_id, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET target_id = EXCLUDED.target_id, session_id = EXCLUDED.session_id, phase = EXCLUDED.phase, kind = EXCLUDED.kind, title = EXCLUDED.title, summary = EXCLUDED.summary, role = EXCLUDED.role, methodology = EXCLUDED.methodology, required_capabilities = EXCLUDED.required_capabilities, evidence_refs = EXCLUDED.evidence_refs, metadata = EXCLUDED.metadata, status = EXCLUDED.status, priority = EXCLUDED.priority, risk_tier = EXCLUDED.risk_tier, attempts = EXCLUDED.attempts, max_attempts = EXCLUDED.max_attempts, requires_approval = EXCLUDED.requires_approval, provider_route = EXCLUDED.provider_route, provider_model = EXCLUDED.provider_model, parent_task_id = EXCLUDED.parent_task_id, latest_run_id = EXCLUDED.latest_run_id, created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at
             """,
             (
                 task.id,
@@ -435,7 +471,7 @@ class RuntimeStore:
                 task.risk_tier.value,
                 task.attempts,
                 task.max_attempts,
-                int(task.requires_approval),
+                bool(task.requires_approval),
                 task.provider_route.value if task.provider_route else None,
                 task.provider_model,
                 task.parent_task_id,
@@ -450,7 +486,7 @@ class RuntimeStore:
         self.insert_task(task)
 
     def get_task(self, task_id: str) -> Task | None:
-        row = self._query_one("SELECT * FROM tasks WHERE id = ?", (task_id,))
+        row = self._query_one("SELECT * FROM tasks WHERE id = %s", (task_id,))
         return self._task_from_row(row) if row else None
 
     def list_tasks(
@@ -463,33 +499,41 @@ class RuntimeStore:
         where: list[str] = []
         params: list[Any] = []
         if statuses:
-            where.append("status IN (%s)" % ", ".join("?" for _ in statuses))
+            where.append("status IN (%s)" % ", ".join("%s" for _ in statuses))
             params.extend(status.value for status in statuses)
         if target_id:
-            where.append("target_id = ?")
+            where.append("target_id = %s")
             params.append(target_id)
         clause = f"WHERE {' AND '.join(where)}" if where else ""
         rows = self._query(
-            f"SELECT * FROM tasks {clause} ORDER BY priority DESC, created_at ASC LIMIT ?",
+            f"SELECT * FROM tasks {clause} ORDER BY priority DESC, created_at ASC LIMIT %s",
             (*params, limit),
         )
         return [self._task_from_row(row) for row in rows]
 
     def claim_next_pending_task(self) -> Task | None:
-        # Single atomic statement: SQLite serializes writers so no two callers
-        # can claim the same row. Requires SQLite 3.35+ for RETURNING support.
         with closing(self.connect()) as connection:
-            connection.execute("BEGIN IMMEDIATE")
+            connection.execute("BEGIN")
+            row = connection.execute(
+                """
+                SELECT * FROM tasks
+                WHERE status = %s
+                ORDER BY priority DESC, created_at ASC
+                LIMIT 1
+                FOR UPDATE SKIP LOCKED
+                """,
+                (TaskStatus.PENDING.value,),
+            ).fetchone()
+            if row is None:
+                connection.commit()
+                return None
             rows = list(connection.execute(
                 """
-                UPDATE tasks SET status = ?, updated_at = ?
-                WHERE id = (
-                    SELECT id FROM tasks WHERE status = ?
-                    ORDER BY priority DESC, created_at ASC LIMIT 1
-                )
+                UPDATE tasks SET status = %s, updated_at = %s
+                WHERE id = %s
                 RETURNING *
                 """,
-                (TaskStatus.RUNNING.value, utc_now().isoformat(), TaskStatus.PENDING.value),
+                (TaskStatus.RUNNING.value, utc_now().isoformat(), row["id"]),
             ))
             connection.commit()
         if not rows:
@@ -501,9 +545,9 @@ class RuntimeStore:
             """
             SELECT 1
             FROM tasks
-            WHERE target_id IS ?
-              AND kind = ?
-              AND status IN (?, ?, ?, ?)
+            WHERE target_id IS NOT DISTINCT FROM %s
+              AND kind = %s
+              AND status IN (%s, %s, %s, %s)
             LIMIT 1
             """,
             (
@@ -524,9 +568,9 @@ class RuntimeStore:
         statuses: Iterable[TaskStatus] | None = None,
     ) -> bool:
         params: list[Any] = [target_id, kind.value]
-        where = ["target_id IS ?", "kind = ?"]
+        where = ["target_id IS NOT DISTINCT FROM %s", "kind = %s"]
         if statuses:
-            where.append("status IN (%s)" % ", ".join("?" for _ in statuses))
+            where.append("status IN (%s)" % ", ".join("%s" for _ in statuses))
             params.extend(status.value for status in statuses)
         row = self._query_one(
             f"SELECT 1 FROM tasks WHERE {' AND '.join(where)} LIMIT 1",
@@ -537,12 +581,11 @@ class RuntimeStore:
     def insert_task_run(self, run: TaskRun) -> None:
         self._execute(
             """
-            INSERT OR REPLACE INTO task_runs
-            (
-                id, task_id, status, attempt_number, role, provider_route, model_name, cold_path,
-                heartbeat_at, lease_expires_at, started_at, finished_at, trace_summary, error, metadata_json
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO task_runs
+            (id, task_id, status, attempt_number, role, provider_route, model_name, cold_path,
+                heartbeat_at, lease_expires_at, started_at, finished_at, trace_summary, error, metadata)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET task_id = EXCLUDED.task_id, status = EXCLUDED.status, attempt_number = EXCLUDED.attempt_number, role = EXCLUDED.role, provider_route = EXCLUDED.provider_route, model_name = EXCLUDED.model_name, cold_path = EXCLUDED.cold_path, heartbeat_at = EXCLUDED.heartbeat_at, lease_expires_at = EXCLUDED.lease_expires_at, started_at = EXCLUDED.started_at, finished_at = EXCLUDED.finished_at, trace_summary = EXCLUDED.trace_summary, error = EXCLUDED.error, metadata = EXCLUDED.metadata
             """,
             (
                 run.id,
@@ -552,7 +595,7 @@ class RuntimeStore:
                 run.role.value,
                 run.provider_route.value,
                 run.model_name,
-                int(run.cold_path),
+                bool(run.cold_path),
                 run.heartbeat_at.isoformat() if run.heartbeat_at else None,
                 run.lease_expires_at.isoformat() if run.lease_expires_at else None,
                 run.started_at.isoformat(),
@@ -565,7 +608,7 @@ class RuntimeStore:
 
     def list_running_task_runs(self) -> list[TaskRun]:
         rows = self._query(
-            "SELECT * FROM task_runs WHERE status = ? ORDER BY started_at DESC",
+            "SELECT * FROM task_runs WHERE status = %s ORDER BY started_at DESC",
             (TaskRunStatus.RUNNING.value,),
         )
         return [self._task_run_from_row(row) for row in rows]
@@ -573,23 +616,22 @@ class RuntimeStore:
     def list_task_runs(self, task_id: str | None = None, limit: int = 100) -> list[TaskRun]:
         if task_id:
             rows = self._query(
-                "SELECT * FROM task_runs WHERE task_id = ? ORDER BY started_at DESC LIMIT ?",
+                "SELECT * FROM task_runs WHERE task_id = %s ORDER BY started_at DESC LIMIT %s",
                 (task_id, limit),
             )
         else:
-            rows = self._query("SELECT * FROM task_runs ORDER BY started_at DESC LIMIT ?", (limit,))
+            rows = self._query("SELECT * FROM task_runs ORDER BY started_at DESC LIMIT %s", (limit,))
         return [self._task_run_from_row(row) for row in rows]
 
     def insert_handoff(self, handoff: TaskHandoff) -> None:
         self._execute(
             """
-            INSERT OR REPLACE INTO task_handoffs
-            (
-                id, task_id, source_agent, destination_agent, reason, expected_output_type,
-                evidence_refs_json, hypothesis, budget, deadline_at, status, metadata_json,
-                created_at, consumed_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO task_handoffs
+            (id, task_id, source_agent, destination_agent, reason, expected_output_type,
+                evidence_refs, hypothesis, budget, deadline_at, status, metadata,
+                created_at, consumed_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET task_id = EXCLUDED.task_id, source_agent = EXCLUDED.source_agent, destination_agent = EXCLUDED.destination_agent, reason = EXCLUDED.reason, expected_output_type = EXCLUDED.expected_output_type, evidence_refs = EXCLUDED.evidence_refs, hypothesis = EXCLUDED.hypothesis, budget = EXCLUDED.budget, deadline_at = EXCLUDED.deadline_at, status = EXCLUDED.status, metadata = EXCLUDED.metadata, created_at = EXCLUDED.created_at, consumed_at = EXCLUDED.consumed_at
             """,
             (
                 handoff.id,
@@ -612,22 +654,21 @@ class RuntimeStore:
     def list_handoffs(self, task_id: str | None = None, limit: int = 100) -> list[TaskHandoff]:
         if task_id:
             rows = self._query(
-                "SELECT * FROM task_handoffs WHERE task_id = ? ORDER BY created_at DESC LIMIT ?",
+                "SELECT * FROM task_handoffs WHERE task_id = %s ORDER BY created_at DESC LIMIT %s",
                 (task_id, limit),
             )
         else:
-            rows = self._query("SELECT * FROM task_handoffs ORDER BY created_at DESC LIMIT ?", (limit,))
+            rows = self._query("SELECT * FROM task_handoffs ORDER BY created_at DESC LIMIT %s", (limit,))
         return [self._handoff_from_row(row) for row in rows]
 
     def insert_evidence(self, evidence: EvidenceRecord) -> None:
         self._execute(
             """
-            INSERT OR REPLACE INTO evidence
-            (
-                id, target_id, task_id, type, title, summary, source_ref, verification_status,
-                confidence, freshness, artifact_path, metadata_json, created_at, updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO evidence
+            (id, target_id, task_id, type, title, summary, source_ref, verification_status,
+                confidence, freshness, artifact_path, metadata, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET target_id = EXCLUDED.target_id, task_id = EXCLUDED.task_id, type = EXCLUDED.type, title = EXCLUDED.title, summary = EXCLUDED.summary, source_ref = EXCLUDED.source_ref, verification_status = EXCLUDED.verification_status, confidence = EXCLUDED.confidence, freshness = EXCLUDED.freshness, artifact_path = EXCLUDED.artifact_path, metadata = EXCLUDED.metadata, created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at
             """,
             (
                 evidence.id,
@@ -650,19 +691,20 @@ class RuntimeStore:
     def list_evidence(self, *, target_id: str | None = None, limit: int = 100) -> list[EvidenceRecord]:
         if target_id:
             rows = self._query(
-                "SELECT * FROM evidence WHERE target_id = ? ORDER BY created_at DESC LIMIT ?",
+                "SELECT * FROM evidence WHERE target_id = %s ORDER BY created_at DESC LIMIT %s",
                 (target_id, limit),
             )
         else:
-            rows = self._query("SELECT * FROM evidence ORDER BY created_at DESC LIMIT ?", (limit,))
+            rows = self._query("SELECT * FROM evidence ORDER BY created_at DESC LIMIT %s", (limit,))
         return [self._evidence_from_row(row) for row in rows]
 
     def insert_note(self, note: Note) -> None:
         self._execute(
             """
-            INSERT OR REPLACE INTO notes
-            (id, target_id, task_id, title, body, confidence, freshness, metadata_json, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO notes
+            (id, target_id, task_id, title, body, confidence, freshness, metadata, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET target_id = EXCLUDED.target_id, task_id = EXCLUDED.task_id, title = EXCLUDED.title, body = EXCLUDED.body, confidence = EXCLUDED.confidence, freshness = EXCLUDED.freshness, metadata = EXCLUDED.metadata, created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at
             """,
             (
                 note.id,
@@ -681,19 +723,20 @@ class RuntimeStore:
     def list_notes(self, *, target_id: str | None = None, limit: int = 100) -> list[Note]:
         if target_id:
             rows = self._query(
-                "SELECT * FROM notes WHERE target_id = ? ORDER BY created_at DESC LIMIT ?",
+                "SELECT * FROM notes WHERE target_id = %s ORDER BY created_at DESC LIMIT %s",
                 (target_id, limit),
             )
         else:
-            rows = self._query("SELECT * FROM notes ORDER BY created_at DESC LIMIT ?", (limit,))
+            rows = self._query("SELECT * FROM notes ORDER BY created_at DESC LIMIT %s", (limit,))
         return [self._note_from_row(row) for row in rows]
 
     def insert_interest(self, interest: Interest) -> None:
         self._execute(
             """
-            INSERT OR REPLACE INTO interests
-            (id, target_id, title, summary, evidence_refs_json, status, confidence, metadata_json, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO interests
+            (id, target_id, title, summary, evidence_refs, status, confidence, metadata, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET target_id = EXCLUDED.target_id, title = EXCLUDED.title, summary = EXCLUDED.summary, evidence_refs = EXCLUDED.evidence_refs, status = EXCLUDED.status, confidence = EXCLUDED.confidence, metadata = EXCLUDED.metadata, created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at
             """,
             (
                 interest.id,
@@ -712,19 +755,20 @@ class RuntimeStore:
     def list_interests(self, *, target_id: str | None = None, limit: int = 100) -> list[Interest]:
         if target_id:
             rows = self._query(
-                "SELECT * FROM interests WHERE target_id = ? ORDER BY created_at DESC LIMIT ?",
+                "SELECT * FROM interests WHERE target_id = %s ORDER BY created_at DESC LIMIT %s",
                 (target_id, limit),
             )
         else:
-            rows = self._query("SELECT * FROM interests ORDER BY created_at DESC LIMIT ?", (limit,))
+            rows = self._query("SELECT * FROM interests ORDER BY created_at DESC LIMIT %s", (limit,))
         return [self._interest_from_row(row) for row in rows]
 
     def insert_finding(self, finding: Finding) -> None:
         self._execute(
             """
-            INSERT OR REPLACE INTO findings
-            (id, target_id, title, summary, severity, evidence_refs_json, confidence, verification_status, metadata_json, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO findings
+            (id, target_id, title, summary, severity, evidence_refs, confidence, verification_status, metadata, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET target_id = EXCLUDED.target_id, title = EXCLUDED.title, summary = EXCLUDED.summary, severity = EXCLUDED.severity, evidence_refs = EXCLUDED.evidence_refs, confidence = EXCLUDED.confidence, verification_status = EXCLUDED.verification_status, metadata = EXCLUDED.metadata, created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at
             """,
             (
                 finding.id,
@@ -744,19 +788,20 @@ class RuntimeStore:
     def list_findings(self, *, target_id: str | None = None, limit: int = 100) -> list[Finding]:
         if target_id:
             rows = self._query(
-                "SELECT * FROM findings WHERE target_id = ? ORDER BY created_at DESC LIMIT ?",
+                "SELECT * FROM findings WHERE target_id = %s ORDER BY created_at DESC LIMIT %s",
                 (target_id, limit),
             )
         else:
-            rows = self._query("SELECT * FROM findings ORDER BY created_at DESC LIMIT ?", (limit,))
+            rows = self._query("SELECT * FROM findings ORDER BY created_at DESC LIMIT %s", (limit,))
         return [self._finding_from_row(row) for row in rows]
 
     def insert_memory_entry(self, entry: MemoryEntry) -> None:
         self._execute(
             """
-            INSERT OR REPLACE INTO memory_entries
-            (id, target_id, layer, title, summary, evidence_refs_json, confidence, freshness, status, metadata_json, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO memory_entries
+            (id, target_id, layer, title, summary, evidence_refs, confidence, freshness, status, metadata, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET target_id = EXCLUDED.target_id, layer = EXCLUDED.layer, title = EXCLUDED.title, summary = EXCLUDED.summary, evidence_refs = EXCLUDED.evidence_refs, confidence = EXCLUDED.confidence, freshness = EXCLUDED.freshness, status = EXCLUDED.status, metadata = EXCLUDED.metadata, created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at
             """,
             (
                 entry.id,
@@ -784,14 +829,14 @@ class RuntimeStore:
         where: list[str] = []
         params: list[Any] = []
         if target_id:
-            where.append("target_id = ?")
+            where.append("target_id = %s")
             params.append(target_id)
         if layer:
-            where.append("layer = ?")
+            where.append("layer = %s")
             params.append(layer.value)
         clause = f"WHERE {' AND '.join(where)}" if where else ""
         rows = self._query(
-            f"SELECT * FROM memory_entries {clause} ORDER BY created_at DESC LIMIT ?",
+            f"SELECT * FROM memory_entries {clause} ORDER BY created_at DESC LIMIT %s",
             (*params, limit),
         )
         return [self._memory_from_row(row) for row in rows]
@@ -799,9 +844,10 @@ class RuntimeStore:
     def insert_policy_decision(self, decision: PolicyDecision) -> None:
         self._execute(
             """
-            INSERT OR REPLACE INTO policy_decisions
-            (id, action_kind, verdict, reason, target_id, task_id, metadata_json, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO policy_decisions
+            (id, action_kind, verdict, reason, target_id, task_id, metadata, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET action_kind = EXCLUDED.action_kind, verdict = EXCLUDED.verdict, reason = EXCLUDED.reason, target_id = EXCLUDED.target_id, task_id = EXCLUDED.task_id, metadata = EXCLUDED.metadata, created_at = EXCLUDED.created_at
             """,
             (
                 decision.id,
@@ -818,13 +864,12 @@ class RuntimeStore:
     def insert_primitive(self, primitive: PrimitiveManifest) -> None:
         self._execute(
             """
-            INSERT OR REPLACE INTO primitives
-            (
-                id, name, version, description, capability_tags_json, allowed_phases_json, runtime, risk_tier,
-                side_effect_level, required_secrets_json, input_schema_json, output_schema_json, timeout_seconds,
-                retry_policy_json, evidence_adapter, sandbox_profile, healthcheck, metadata_json, created_at, updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO primitives
+            (id, name, version, description, capability_tags, allowed_phases, runtime, risk_tier,
+                side_effect_level, required_secrets, input_schema, output_schema, timeout_seconds,
+                retry_policy, evidence_adapter, sandbox_profile, healthcheck, metadata, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (name) DO UPDATE SET id = EXCLUDED.id, version = EXCLUDED.version, description = EXCLUDED.description, capability_tags = EXCLUDED.capability_tags, allowed_phases = EXCLUDED.allowed_phases, runtime = EXCLUDED.runtime, risk_tier = EXCLUDED.risk_tier, side_effect_level = EXCLUDED.side_effect_level, required_secrets = EXCLUDED.required_secrets, input_schema = EXCLUDED.input_schema, output_schema = EXCLUDED.output_schema, timeout_seconds = EXCLUDED.timeout_seconds, retry_policy = EXCLUDED.retry_policy, evidence_adapter = EXCLUDED.evidence_adapter, sandbox_profile = EXCLUDED.sandbox_profile, healthcheck = EXCLUDED.healthcheck, metadata = EXCLUDED.metadata, created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at
             """,
             (
                 primitive.id,
@@ -857,9 +902,10 @@ class RuntimeStore:
     def insert_artifact(self, artifact: ArtifactRecord) -> None:
         self._execute(
             """
-            INSERT OR REPLACE INTO artifacts
-            (id, task_id, target_id, kind, path, sha256, size_bytes, metadata_json, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO artifacts
+            (id, task_id, target_id, kind, path, sha256, size_bytes, metadata, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET task_id = EXCLUDED.task_id, target_id = EXCLUDED.target_id, kind = EXCLUDED.kind, path = EXCLUDED.path, sha256 = EXCLUDED.sha256, size_bytes = EXCLUDED.size_bytes, metadata = EXCLUDED.metadata, created_at = EXCLUDED.created_at
             """,
             (
                 artifact.id,
@@ -877,19 +923,20 @@ class RuntimeStore:
     def list_artifacts(self, task_id: str | None = None, limit: int = 100) -> list[ArtifactRecord]:
         if task_id:
             rows = self._query(
-                "SELECT * FROM artifacts WHERE task_id = ? ORDER BY created_at DESC LIMIT ?",
+                "SELECT * FROM artifacts WHERE task_id = %s ORDER BY created_at DESC LIMIT %s",
                 (task_id, limit),
             )
         else:
-            rows = self._query("SELECT * FROM artifacts ORDER BY created_at DESC LIMIT ?", (limit,))
+            rows = self._query("SELECT * FROM artifacts ORDER BY created_at DESC LIMIT %s", (limit,))
         return [self._artifact_from_row(row) for row in rows]
 
     def insert_notification(self, notification: NotificationRecord) -> None:
         self._execute(
             """
-            INSERT OR REPLACE INTO notifications
-            (id, channel, event_type, summary, target_id, task_id, finding_id, status, urgency, dedupe_key, metadata_json, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO notifications
+            (id, channel, event_type, summary, target_id, task_id, finding_id, status, urgency, dedupe_key, metadata, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET channel = EXCLUDED.channel, event_type = EXCLUDED.event_type, summary = EXCLUDED.summary, target_id = EXCLUDED.target_id, task_id = EXCLUDED.task_id, finding_id = EXCLUDED.finding_id, status = EXCLUDED.status, urgency = EXCLUDED.urgency, dedupe_key = EXCLUDED.dedupe_key, metadata = EXCLUDED.metadata, created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at
             """,
             (
                 notification.id,
@@ -916,19 +963,20 @@ class RuntimeStore:
     ) -> list[NotificationRecord]:
         if status:
             rows = self._query(
-                "SELECT * FROM notifications WHERE status = ? ORDER BY created_at DESC LIMIT ?",
+                "SELECT * FROM notifications WHERE status = %s ORDER BY created_at DESC LIMIT %s",
                 (status.value, limit),
             )
         else:
-            rows = self._query("SELECT * FROM notifications ORDER BY created_at DESC LIMIT ?", (limit,))
+            rows = self._query("SELECT * FROM notifications ORDER BY created_at DESC LIMIT %s", (limit,))
         return [self._notification_from_row(row) for row in rows]
 
     def insert_external_sync_job(self, job: ExternalSyncJob) -> None:
         self._execute(
             """
-            INSERT OR REPLACE INTO external_sync_jobs
-            (id, kind, target_id, summary, payload_json, status, metadata_json, last_error, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO external_sync_jobs
+            (id, kind, target_id, summary, payload, status, metadata, last_error, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET kind = EXCLUDED.kind, target_id = EXCLUDED.target_id, summary = EXCLUDED.summary, payload = EXCLUDED.payload, status = EXCLUDED.status, metadata = EXCLUDED.metadata, last_error = EXCLUDED.last_error, created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at
             """,
             (
                 job.id,
@@ -952,12 +1000,12 @@ class RuntimeStore:
     ) -> list[ExternalSyncJob]:
         if status:
             rows = self._query(
-                "SELECT * FROM external_sync_jobs WHERE status = ? ORDER BY created_at DESC LIMIT ?",
+                "SELECT * FROM external_sync_jobs WHERE status = %s ORDER BY created_at DESC LIMIT %s",
                 (status.value, limit),
             )
         else:
             rows = self._query(
-                "SELECT * FROM external_sync_jobs ORDER BY created_at DESC LIMIT ?",
+                "SELECT * FROM external_sync_jobs ORDER BY created_at DESC LIMIT %s",
                 (limit,),
             )
         return [self._sync_job_from_row(row) for row in rows]
@@ -965,9 +1013,10 @@ class RuntimeStore:
     def insert_notion_page(self, page: NotionPage) -> None:
         self._execute(
             """
-            INSERT OR REPLACE INTO notion_pages
-            (id, target_id, page_type, title, external_id, status, url, metadata_json, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO notion_pages
+            (id, target_id, page_type, title, external_id, status, url, metadata, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET target_id = EXCLUDED.target_id, page_type = EXCLUDED.page_type, title = EXCLUDED.title, external_id = EXCLUDED.external_id, status = EXCLUDED.status, url = EXCLUDED.url, metadata = EXCLUDED.metadata, created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at
             """,
             (
                 page.id,
@@ -986,19 +1035,20 @@ class RuntimeStore:
     def list_notion_pages(self, target_id: str | None = None, limit: int = 100) -> list[NotionPage]:
         if target_id:
             rows = self._query(
-                "SELECT * FROM notion_pages WHERE target_id = ? ORDER BY created_at DESC LIMIT ?",
+                "SELECT * FROM notion_pages WHERE target_id = %s ORDER BY created_at DESC LIMIT %s",
                 (target_id, limit),
             )
         else:
-            rows = self._query("SELECT * FROM notion_pages ORDER BY created_at DESC LIMIT ?", (limit,))
+            rows = self._query("SELECT * FROM notion_pages ORDER BY created_at DESC LIMIT %s", (limit,))
         return [self._notion_page_from_row(row) for row in rows]
 
     def insert_discord_delivery(self, delivery: DiscordDelivery) -> None:
         self._execute(
             """
-            INSERT OR REPLACE INTO discord_deliveries
-            (id, notification_id, status, external_ref, attempts, last_error, metadata_json, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO discord_deliveries
+            (id, notification_id, status, external_ref, attempts, last_error, metadata, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET notification_id = EXCLUDED.notification_id, status = EXCLUDED.status, external_ref = EXCLUDED.external_ref, attempts = EXCLUDED.attempts, last_error = EXCLUDED.last_error, metadata = EXCLUDED.metadata, created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at
             """,
             (
                 delivery.id,
@@ -1014,15 +1064,16 @@ class RuntimeStore:
         )
 
     def list_discord_deliveries(self, limit: int = 100) -> list[DiscordDelivery]:
-        rows = self._query("SELECT * FROM discord_deliveries ORDER BY created_at DESC LIMIT ?", (limit,))
+        rows = self._query("SELECT * FROM discord_deliveries ORDER BY created_at DESC LIMIT %s", (limit,))
         return [self._discord_delivery_from_row(row) for row in rows]
 
     def insert_checkpoint(self, checkpoint: CheckpointRecord) -> None:
         self._execute(
             """
-            INSERT OR REPLACE INTO checkpoints
-            (id, task_id, run_id, kind, path, summary, metadata_json, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO checkpoints
+            (id, task_id, run_id, kind, path, summary, metadata, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET task_id = EXCLUDED.task_id, run_id = EXCLUDED.run_id, kind = EXCLUDED.kind, path = EXCLUDED.path, summary = EXCLUDED.summary, metadata = EXCLUDED.metadata, created_at = EXCLUDED.created_at
             """,
             (
                 checkpoint.id,
@@ -1037,27 +1088,26 @@ class RuntimeStore:
         )
 
     def list_checkpoints(self, limit: int = 100) -> list[CheckpointRecord]:
-        rows = self._query("SELECT * FROM checkpoints ORDER BY created_at DESC LIMIT ?", (limit,))
+        rows = self._query("SELECT * FROM checkpoints ORDER BY created_at DESC LIMIT %s", (limit,))
         return [self._checkpoint_from_row(row) for row in rows]
 
     @staticmethod
-    def _validate_trace_metadata(trace: AgentTrace) -> None:
-        missing = TraceMetadata.REQUIRED_KEYS - trace.metadata.keys()
-        if missing:
-            import logging
-            logging.getLogger(__name__).warning(
-                "AgentTrace %s missing required metadata fields: %s",
-                trace.id,
-                sorted(missing),
-            )
+    def _normalize_trace_metadata(trace: AgentTrace) -> dict[str, object]:
+        metadata = dict(trace.metadata)
+        metadata.setdefault("model", "")
+        metadata.setdefault("role_name", trace.role.value)
+        metadata.setdefault("task_type", str(metadata.get("summary_key") or metadata.get("kind") or "runtime.trace"))
+        metadata.setdefault("stage", str(metadata.get("stage") or "runtime"))
+        return metadata
 
     def insert_trace(self, trace: AgentTrace) -> None:
-        self._validate_trace_metadata(trace)
+        trace.metadata = self._normalize_trace_metadata(trace)
         self._execute(
             """
-            INSERT OR REPLACE INTO agent_traces
-            (id, task_id, role, status, summary, metadata_json, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO agent_traces
+            (id, task_id, role, status, summary, metadata, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET task_id = EXCLUDED.task_id, role = EXCLUDED.role, status = EXCLUDED.status, summary = EXCLUDED.summary, metadata = EXCLUDED.metadata, created_at = EXCLUDED.created_at
             """,
             (
                 trace.id,
@@ -1084,7 +1134,7 @@ class RuntimeStore:
             """
             INSERT INTO remote_provider_costs
             (id, route, model, task_id, prompt_tokens, completion_tokens, estimated_cost_usd, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 _new_id("rcost"),
@@ -1101,13 +1151,13 @@ class RuntimeStore:
     def get_daily_remote_cost_usd(self) -> float:
         rows = self._query(
             """
-            SELECT COALESCE(SUM(estimated_cost_usd), 0.0)
+            SELECT COALESCE(SUM(estimated_cost_usd), 0.0) AS total
             FROM remote_provider_costs
-            WHERE created_at >= date('now')
+            WHERE created_at >= CURRENT_DATE
             """,
         )
         if rows:
-            return float(rows[0][0] or 0.0)
+            return float(rows[0]["total"] or 0.0)
         return 0.0
 
     def insert_model_eval_ledger(
@@ -1136,8 +1186,8 @@ class RuntimeStore:
             connection.execute(
                 """
                 INSERT INTO model_eval_runs
-                (id, providers_json, models_json, recommendations_json, artifacts_json, metadata_json, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (id, providers, models, recommendations, artifacts, metadata, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     run_id,
@@ -1151,6 +1201,7 @@ class RuntimeStore:
             )
             for role, model_id in sorted((str(k), str(v)) for k, v in recommendations.items() if str(v).strip()):
                 aggregate = self._aggregate_row_for_recommendation(aggregate_rows, model_id)
+                suggestion = self._role_suggestion_for_recommendation(summary.get("role_suggestions", []), role, model_id)
                 role_results = self._eval_results_for_role_model(results, role, model_id)
                 metrics = self._role_eval_metrics(role_results)
                 connection.execute(
@@ -1159,10 +1210,10 @@ class RuntimeStore:
                     (
                         id, run_id, role, provider, model, aggregate_score, pass_rate, fail_rate,
                         hallucination_count, hallucination_rate, over_refusal_rate, correct_refusal_rate,
-                        unsafe_compliance_failures, top_failure_modes_json, avg_latency_sec, avg_tokens_sec,
-                        best_context_length, quantization, params, metadata_json, created_at
+                        unsafe_compliance_failures, top_failure_modes, avg_latency_sec, avg_tokens_sec,
+                        best_context_length, quantization, params, metadata, created_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         _new_id("mrole"),
@@ -1184,7 +1235,7 @@ class RuntimeStore:
                         self._optional_int_value(aggregate.get("best_context_length")),
                         str(aggregate.get("quantization") or ""),
                         str(aggregate.get("params") or ""),
-                        _dump({"aggregate": aggregate, "model_id": model_id}),
+                        _dump({"aggregate": aggregate, "model_id": model_id, "suggestion": suggestion}),
                         created_at,
                     ),
                 )
@@ -1208,23 +1259,23 @@ class RuntimeStore:
 
     def list_model_eval_history(self, limit: int = 10) -> list[dict[str, Any]]:
         rows = self._query(
-            "SELECT * FROM model_eval_runs ORDER BY created_at DESC LIMIT ?",
+            "SELECT * FROM model_eval_runs ORDER BY created_at DESC LIMIT %s",
             (limit,),
         )
         return [
             {
                 "id": row["id"],
-                "providers": _load(row["providers_json"], []),
-                "models": _load(row["models_json"], []),
-                "recommendations": _load(row["recommendations_json"], {}),
-                "artifacts": _load(row["artifacts_json"], {}),
-                "metadata": _load(row["metadata_json"], {}),
-                "created_at": row["created_at"],
+                "providers": _load(row["providers"], []),
+                "models": _load(row["models"], []),
+                "recommendations": _load(row["recommendations"], {}),
+                "artifacts": _load(row["artifacts"], {}),
+                "metadata": _load(row["metadata"], {}),
+                "created_at": row["created_at"].isoformat() if hasattr(row["created_at"], "isoformat") else row["created_at"],
             }
             for row in rows
         ]
 
-    def _model_eval_role_metric_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
+    def _model_eval_role_metric_from_row(self, row: Any) -> dict[str, Any]:
         return {
             "id": row["id"],
             "run_id": row["run_id"],
@@ -1239,14 +1290,14 @@ class RuntimeStore:
             "over_refusal_rate": float(row["over_refusal_rate"]),
             "correct_refusal_rate": float(row["correct_refusal_rate"]),
             "unsafe_compliance_failures": int(row["unsafe_compliance_failures"]),
-            "top_failure_modes": _load(row["top_failure_modes_json"], []),
+            "top_failure_modes": _load(row["top_failure_modes"], []),
             "avg_latency_sec": row["avg_latency_sec"],
             "avg_tokens_sec": row["avg_tokens_sec"],
             "best_context_length": row["best_context_length"],
             "quantization": row["quantization"],
             "params": row["params"],
-            "metadata": _load(row["metadata_json"], {}),
-            "last_evaluated": row["created_at"],
+            "metadata": _load(row["metadata"], {}),
+            "last_evaluated": row["created_at"].isoformat() if hasattr(row["created_at"], "isoformat") else row["created_at"],
         }
 
     def _aggregate_row_for_recommendation(
@@ -1260,8 +1311,21 @@ class RuntimeStore:
             provider = str(row.get("provider") or "ollama")
             model = str(row.get("model") or "")
             recommendation_id = model if provider == "ollama" else f"{provider}:{model}"
-            if recommendation_id == model_id or model == model_id:
+            provider_slash_id = f"{provider}/{model}" if model else ""
+            if recommendation_id == model_id or provider_slash_id == model_id or model == model_id:
                 return row
+        return {}
+
+    def _role_suggestion_for_recommendation(self, suggestions: Any, role: str, model_id: str) -> dict[str, Any]:
+        if not isinstance(suggestions, list):
+            return {}
+        for suggestion in suggestions:
+            if not isinstance(suggestion, dict):
+                continue
+            suggestion_role = str(suggestion.get("role") or "")
+            suggestion_id = str(suggestion.get("recommendation_id") or suggestion.get("model") or "")
+            if suggestion_role == role and suggestion_id == model_id:
+                return suggestion
         return {}
 
     def _eval_results_for_role_model(
@@ -1346,19 +1410,20 @@ class RuntimeStore:
     def list_traces(self, task_id: str | None = None, limit: int = 100) -> list[AgentTrace]:
         if task_id:
             rows = self._query(
-                "SELECT * FROM agent_traces WHERE task_id = ? ORDER BY created_at DESC LIMIT ?",
+                "SELECT * FROM agent_traces WHERE task_id = %s ORDER BY created_at DESC LIMIT %s",
                 (task_id, limit),
             )
         else:
-            rows = self._query("SELECT * FROM agent_traces ORDER BY created_at DESC LIMIT ?", (limit,))
+            rows = self._query("SELECT * FROM agent_traces ORDER BY created_at DESC LIMIT %s", (limit,))
         return [self._trace_from_row(row) for row in rows]
 
     def insert_event(self, event: EventRecord) -> None:
         self._execute(
             """
-            INSERT OR REPLACE INTO events
-            (id, event_type, target_id, task_id, summary, metadata_json, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO events
+            (id, event_type, target_id, task_id, summary, metadata, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET event_type = EXCLUDED.event_type, target_id = EXCLUDED.target_id, task_id = EXCLUDED.task_id, summary = EXCLUDED.summary, metadata = EXCLUDED.metadata, created_at = EXCLUDED.created_at
             """,
             (
                 event.id,
@@ -1372,15 +1437,16 @@ class RuntimeStore:
         )
 
     def list_events(self, limit: int = 100) -> list[EventRecord]:
-        rows = self._query("SELECT * FROM events ORDER BY created_at DESC LIMIT ?", (limit,))
+        rows = self._query("SELECT * FROM events ORDER BY created_at DESC LIMIT %s", (limit,))
         return [self._event_from_row(row) for row in rows]
 
     def insert_operator_message(self, message: OperatorMessage) -> None:
         self._execute(
             """
-            INSERT OR REPLACE INTO operator_messages
-            (id, role, target_id, model, body, metadata_json, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO operator_messages
+            (id, role, target_id, model, body, metadata, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET role = EXCLUDED.role, target_id = EXCLUDED.target_id, model = EXCLUDED.model, body = EXCLUDED.body, metadata = EXCLUDED.metadata, created_at = EXCLUDED.created_at
             """,
             (
                 message.id,
@@ -1403,14 +1469,14 @@ class RuntimeStore:
             rows = self._query(
                 """
                 SELECT * FROM operator_messages
-                WHERE target_id = ? OR target_id IS NULL
+                WHERE target_id = %s OR target_id IS NULL
                 ORDER BY created_at DESC
-                LIMIT ?
+                LIMIT %s
                 """,
                 (target_id, limit),
             )
         else:
-            rows = self._query("SELECT * FROM operator_messages ORDER BY created_at DESC LIMIT ?", (limit,))
+            rows = self._query("SELECT * FROM operator_messages ORDER BY created_at DESC LIMIT %s", (limit,))
         return [self._operator_message_from_row(row) for row in rows]
 
     def count_all(self) -> dict[str, int]:
@@ -1448,7 +1514,7 @@ class RuntimeStore:
 
     def delete_target_cascade(self, target_id: str) -> dict[str, Any]:
         with closing(self.connect()) as connection:
-            task_ids = self._select_ids(connection, "SELECT id FROM tasks WHERE target_id = ?", (target_id,))
+            task_ids = self._select_ids(connection, "SELECT id FROM tasks WHERE target_id = %s", (target_id,))
             run_ids = self._select_ids_for_parent(connection, "task_runs", "task_id", task_ids)
             notification_ids = self._select_notifications_for_target(connection, target_id, task_ids)
             artifact_paths = self._select_paths_for_target(connection, "artifacts", target_id, task_ids)
@@ -1487,7 +1553,7 @@ class RuntimeStore:
 
     def _select_ids(
         self,
-        connection: sqlite3.Connection,
+        connection: Any,
         sql: str,
         params: tuple[Any, ...],
     ) -> list[str]:
@@ -1495,27 +1561,27 @@ class RuntimeStore:
 
     def _select_ids_for_parent(
         self,
-        connection: sqlite3.Connection,
+        connection: Any,
         table: str,
         foreign_key: str,
         parent_ids: list[str],
     ) -> list[str]:
         if not parent_ids:
             return []
-        placeholders = ", ".join("?" for _ in parent_ids)
+        placeholders = ", ".join("%s" for _ in parent_ids)
         sql = f"SELECT id FROM {table} WHERE {foreign_key} IN ({placeholders})"
         return [str(row["id"]) for row in connection.execute(sql, tuple(parent_ids))]
 
     def _select_notifications_for_target(
         self,
-        connection: sqlite3.Connection,
+        connection: Any,
         target_id: str,
         task_ids: list[str],
     ) -> list[str]:
-        where = ["target_id = ?"]
+        where = ["target_id = %s"]
         params: list[Any] = [target_id]
         if task_ids:
-            placeholders = ", ".join("?" for _ in task_ids)
+            placeholders = ", ".join("%s" for _ in task_ids)
             where.append(f"task_id IN ({placeholders})")
             params.extend(task_ids)
         sql = f"SELECT id FROM notifications WHERE {' OR '.join(where)}"
@@ -1523,15 +1589,15 @@ class RuntimeStore:
 
     def _select_paths_for_target(
         self,
-        connection: sqlite3.Connection,
+        connection: Any,
         table: str,
         target_id: str,
         task_ids: list[str],
     ) -> list[str]:
-        where = ["target_id = ?"]
+        where = ["target_id = %s"]
         params: list[Any] = [target_id]
         if task_ids:
-            placeholders = ", ".join("?" for _ in task_ids)
+            placeholders = ", ".join("%s" for _ in task_ids)
             where.append(f"task_id IN ({placeholders})")
             params.extend(task_ids)
         sql = f"SELECT path FROM {table} WHERE {' OR '.join(where)}"
@@ -1539,18 +1605,18 @@ class RuntimeStore:
 
     def _select_checkpoint_paths(
         self,
-        connection: sqlite3.Connection,
+        connection: Any,
         task_ids: list[str],
         run_ids: list[str],
     ) -> list[str]:
         where: list[str] = []
         params: list[Any] = []
         if task_ids:
-            placeholders = ", ".join("?" for _ in task_ids)
+            placeholders = ", ".join("%s" for _ in task_ids)
             where.append(f"task_id IN ({placeholders})")
             params.extend(task_ids)
         if run_ids:
-            placeholders = ", ".join("?" for _ in run_ids)
+            placeholders = ", ".join("%s" for _ in run_ids)
             where.append(f"run_id IN ({placeholders})")
             params.extend(run_ids)
         if not where:
@@ -1560,25 +1626,25 @@ class RuntimeStore:
 
     def _delete_target_rows(
         self,
-        connection: sqlite3.Connection,
+        connection: Any,
         table: str,
         target_id: str,
         *,
         key: str = "target_id",
     ) -> int:
-        return connection.execute(f"DELETE FROM {table} WHERE {key} = ?", (target_id,)).rowcount
+        return connection.execute(f"DELETE FROM {table} WHERE {key} = %s", (target_id,)).rowcount
 
     def _delete_target_or_task_rows(
         self,
-        connection: sqlite3.Connection,
+        connection: Any,
         table: str,
         target_id: str,
         task_ids: list[str],
     ) -> int:
-        where = ["target_id = ?"]
+        where = ["target_id = %s"]
         params: list[Any] = [target_id]
         if task_ids:
-            placeholders = ", ".join("?" for _ in task_ids)
+            placeholders = ", ".join("%s" for _ in task_ids)
             where.append(f"task_id IN ({placeholders})")
             params.extend(task_ids)
         sql = f"DELETE FROM {table} WHERE {' OR '.join(where)}"
@@ -1586,31 +1652,31 @@ class RuntimeStore:
 
     def _delete_ids(
         self,
-        connection: sqlite3.Connection,
+        connection: Any,
         table: str,
         key: str,
         values: list[str],
     ) -> int:
         if not values:
             return 0
-        placeholders = ", ".join("?" for _ in values)
+        placeholders = ", ".join("%s" for _ in values)
         sql = f"DELETE FROM {table} WHERE {key} IN ({placeholders})"
         return connection.execute(sql, tuple(values)).rowcount
 
     def _delete_checkpoints(
         self,
-        connection: sqlite3.Connection,
+        connection: Any,
         task_ids: list[str],
         run_ids: list[str],
     ) -> int:
         where: list[str] = []
         params: list[Any] = []
         if task_ids:
-            placeholders = ", ".join("?" for _ in task_ids)
+            placeholders = ", ".join("%s" for _ in task_ids)
             where.append(f"task_id IN ({placeholders})")
             params.extend(task_ids)
         if run_ids:
-            placeholders = ", ".join("?" for _ in run_ids)
+            placeholders = ", ".join("%s" for _ in run_ids)
             where.append(f"run_id IN ({placeholders})")
             params.extend(run_ids)
         if not where:
@@ -1619,12 +1685,12 @@ class RuntimeStore:
         return connection.execute(sql, tuple(params)).rowcount
 
     def target_has_evidence(self, target_id: str) -> bool:
-        row = self._query_one("SELECT 1 FROM evidence WHERE target_id = ? LIMIT 1", (target_id,))
+        row = self._query_one("SELECT 1 FROM evidence WHERE target_id = %s LIMIT 1", (target_id,))
         return row is not None
 
     def verified_interest_count(self, target_id: str) -> int:
         row = self._query_one(
-            "SELECT COUNT(*) AS count FROM interests WHERE target_id = ? AND status = ?",
+            "SELECT COUNT(*) AS count FROM interests WHERE target_id = %s AND status = %s",
             (target_id, InterestStatus.VERIFIED.value),
         )
         return int(row["count"]) if row else 0
@@ -1633,7 +1699,7 @@ class RuntimeStore:
         row = self._query_one(
             """
             SELECT 1 FROM memory_entries
-            WHERE target_id = ? AND layer = ? AND title = ? AND status != ?
+            WHERE target_id = %s AND layer = %s AND title = %s AND status != %s
             LIMIT 1
             """,
             (target_id, layer.value, title, MemoryStatus.SUPERSEDED.value),
@@ -1644,7 +1710,7 @@ class RuntimeStore:
         row = self._query_one(
             """
             SELECT * FROM notifications
-            WHERE dedupe_key = ?
+            WHERE dedupe_key = %s
             ORDER BY created_at DESC
             LIMIT 1
             """,
@@ -1652,7 +1718,7 @@ class RuntimeStore:
         )
         return self._notification_from_row(row) if row else None
 
-    def _session_from_row(self, row: sqlite3.Row) -> Session:
+    def _session_from_row(self, row: Any) -> Session:
         return Session(
             id=row["id"],
             methodology=MethodologyName(row["methodology"]),
@@ -1660,34 +1726,34 @@ class RuntimeStore:
             autonomy_mode=row["autonomy_mode"],
             status=SessionStatus(row["status"]),
             title=row["title"],
-            metadata=_load(row["metadata_json"], {}),
+            metadata=_load(row["metadata"], {}),
             created_at=parse_datetime(row["created_at"]),
             updated_at=parse_datetime(row["updated_at"]),
         )
 
-    def _target_from_row(self, row: sqlite3.Row) -> Target:
+    def _target_from_row(self, row: Any) -> Target:
         return Target(
             id=row["id"],
             handle=row["handle"],
             display_name=row["display_name"],
             profile=ScopeProfile(row["profile"]),
             in_scope=bool(row["in_scope"]),
-            metadata=_load(row["metadata_json"], {}),
+            metadata=_load(row["metadata"], {}),
             created_at=parse_datetime(row["created_at"]),
             updated_at=parse_datetime(row["updated_at"]),
         )
 
-    def _scope_asset_from_row(self, row: sqlite3.Row) -> ScopeAsset:
+    def _scope_asset_from_row(self, row: Any) -> ScopeAsset:
         return ScopeAsset(
             id=row["id"],
             target_id=row["target_id"],
             asset=row["asset"],
             asset_type=row["asset_type"],
-            metadata=_load(row["metadata_json"], {}),
+            metadata=_load(row["metadata"], {}),
             created_at=parse_datetime(row["created_at"]),
         )
 
-    def _task_from_row(self, row: sqlite3.Row) -> Task:
+    def _task_from_row(self, row: Any) -> Task:
         return Task(
             id=row["id"],
             target_id=row["target_id"],
@@ -1698,9 +1764,9 @@ class RuntimeStore:
             summary=row["summary"],
             role=AgentRole(row["role"]),
             methodology=MethodologyName(row["methodology"]),
-            required_capabilities=_load(row["required_capabilities_json"], []),
-            evidence_refs=_load(row["evidence_refs_json"], []),
-            metadata=_load(row["metadata_json"], {}),
+            required_capabilities=_load(row["required_capabilities"], []),
+            evidence_refs=_load(row["evidence_refs"], []),
+            metadata=_load(row["metadata"], {}),
             status=TaskStatus(row["status"]),
             priority=int(row["priority"]),
             risk_tier=RiskTier(row["risk_tier"]),
@@ -1715,7 +1781,7 @@ class RuntimeStore:
             updated_at=parse_datetime(row["updated_at"]),
         )
 
-    def _task_run_from_row(self, row: sqlite3.Row) -> TaskRun:
+    def _task_run_from_row(self, row: Any) -> TaskRun:
         return TaskRun(
             id=row["id"],
             task_id=row["task_id"],
@@ -1731,10 +1797,10 @@ class RuntimeStore:
             finished_at=parse_datetime(row["finished_at"]) if row["finished_at"] else None,
             trace_summary=row["trace_summary"],
             error=row["error"],
-            metadata=_load(row["metadata_json"], {}),
+            metadata=_load(row["metadata"], {}),
         )
 
-    def _handoff_from_row(self, row: sqlite3.Row) -> TaskHandoff:
+    def _handoff_from_row(self, row: Any) -> TaskHandoff:
         return TaskHandoff(
             id=row["id"],
             task_id=row["task_id"],
@@ -1742,17 +1808,17 @@ class RuntimeStore:
             destination_agent=AgentRole(row["destination_agent"]),
             reason=row["reason"],
             expected_output_type=row["expected_output_type"],
-            evidence_refs=_load(row["evidence_refs_json"], []),
+            evidence_refs=_load(row["evidence_refs"], []),
             hypothesis=row["hypothesis"],
             budget=row["budget"],
             deadline_at=parse_datetime(row["deadline_at"]) if row["deadline_at"] else None,
             status=HandoffStatus(row["status"]),
-            metadata=_load(row["metadata_json"], {}),
+            metadata=_load(row["metadata"], {}),
             created_at=parse_datetime(row["created_at"]),
             consumed_at=parse_datetime(row["consumed_at"]) if row["consumed_at"] else None,
         )
 
-    def _evidence_from_row(self, row: sqlite3.Row) -> EvidenceRecord:
+    def _evidence_from_row(self, row: Any) -> EvidenceRecord:
         return EvidenceRecord(
             id=row["id"],
             target_id=row["target_id"],
@@ -1765,12 +1831,12 @@ class RuntimeStore:
             confidence=float(row["confidence"]),
             freshness=float(row["freshness"]),
             artifact_path=row["artifact_path"],
-            metadata=_load(row["metadata_json"], {}),
+            metadata=_load(row["metadata"], {}),
             created_at=parse_datetime(row["created_at"]),
             updated_at=parse_datetime(row["updated_at"]),
         )
 
-    def _note_from_row(self, row: sqlite3.Row) -> Note:
+    def _note_from_row(self, row: Any) -> Note:
         return Note(
             id=row["id"],
             target_id=row["target_id"],
@@ -1779,81 +1845,81 @@ class RuntimeStore:
             body=row["body"],
             confidence=float(row["confidence"]),
             freshness=float(row["freshness"]),
-            metadata=_load(row["metadata_json"], {}),
+            metadata=_load(row["metadata"], {}),
             created_at=parse_datetime(row["created_at"]),
             updated_at=parse_datetime(row["updated_at"]),
         )
 
-    def _interest_from_row(self, row: sqlite3.Row) -> Interest:
+    def _interest_from_row(self, row: Any) -> Interest:
         return Interest(
             id=row["id"],
             target_id=row["target_id"],
             title=row["title"],
             summary=row["summary"],
-            evidence_refs=_load(row["evidence_refs_json"], []),
+            evidence_refs=_load(row["evidence_refs"], []),
             status=InterestStatus(row["status"]),
             confidence=float(row["confidence"]),
-            metadata=_load(row["metadata_json"], {}),
+            metadata=_load(row["metadata"], {}),
             created_at=parse_datetime(row["created_at"]),
             updated_at=parse_datetime(row["updated_at"]),
         )
 
-    def _finding_from_row(self, row: sqlite3.Row) -> Finding:
+    def _finding_from_row(self, row: Any) -> Finding:
         return Finding(
             id=row["id"],
             target_id=row["target_id"],
             title=row["title"],
             summary=row["summary"],
             severity=FindingSeverity(row["severity"]),
-            evidence_refs=_load(row["evidence_refs_json"], []),
+            evidence_refs=_load(row["evidence_refs"], []),
             confidence=float(row["confidence"]),
             verification_status=VerificationStatus(row["verification_status"]),
-            metadata=_load(row["metadata_json"], {}),
+            metadata=_load(row["metadata"], {}),
             created_at=parse_datetime(row["created_at"]),
             updated_at=parse_datetime(row["updated_at"]),
         )
 
-    def _memory_from_row(self, row: sqlite3.Row) -> MemoryEntry:
+    def _memory_from_row(self, row: Any) -> MemoryEntry:
         return MemoryEntry(
             id=row["id"],
             target_id=row["target_id"],
             layer=MemoryLayer(row["layer"]),
             title=row["title"],
             summary=row["summary"],
-            evidence_refs=_load(row["evidence_refs_json"], []),
+            evidence_refs=_load(row["evidence_refs"], []),
             confidence=float(row["confidence"]),
             freshness=float(row["freshness"]),
             status=MemoryStatus(row["status"]),
-            metadata=_load(row["metadata_json"], {}),
+            metadata=_load(row["metadata"], {}),
             created_at=parse_datetime(row["created_at"]),
             updated_at=parse_datetime(row["updated_at"]),
         )
 
-    def _primitive_from_row(self, row: sqlite3.Row) -> PrimitiveManifest:
+    def _primitive_from_row(self, row: Any) -> PrimitiveManifest:
         return PrimitiveManifest(
             id=row["id"],
             name=row["name"],
             version=row["version"],
             description=row["description"],
-            capability_tags=_load(row["capability_tags_json"], []),
-            allowed_phases=[MethodologyPhase(item) for item in _load(row["allowed_phases_json"], [])],
+            capability_tags=_load(row["capability_tags"], []),
+            allowed_phases=[MethodologyPhase(item) for item in _load(row["allowed_phases"], [])],
             runtime=PrimitiveRuntime(row["runtime"]),
             risk_tier=RiskTier(row["risk_tier"]),
             side_effect_level=SideEffectLevel(row["side_effect_level"]),
-            required_secrets=_load(row["required_secrets_json"], []),
-            input_schema=_load(row["input_schema_json"], {}),
-            output_schema=_load(row["output_schema_json"], {}),
+            required_secrets=_load(row["required_secrets"], []),
+            input_schema=_load(row["input_schema"], {}),
+            output_schema=_load(row["output_schema"], {}),
             timeout_seconds=int(row["timeout_seconds"]),
-            retry_policy=_load(row["retry_policy_json"], {}),
+            retry_policy=_load(row["retry_policy"], {}),
             evidence_adapter=row["evidence_adapter"],
             sandbox_profile=row["sandbox_profile"],
             healthcheck=row["healthcheck"],
-            metadata=_load(row["metadata_json"], {}),
+            metadata=_load(row["metadata"], {}),
             created_at=parse_datetime(row["created_at"]),
             updated_at=parse_datetime(row["updated_at"]),
         )
 
-    def _artifact_from_row(self, row: sqlite3.Row) -> ArtifactRecord:
+    def _artifact_from_row(self, row: Any) -> ArtifactRecord:
         return ArtifactRecord(
             id=row["id"],
             task_id=row["task_id"],
@@ -1862,11 +1928,11 @@ class RuntimeStore:
             path=row["path"],
             sha256=row["sha256"],
             size_bytes=int(row["size_bytes"]),
-            metadata=_load(row["metadata_json"], {}),
+            metadata=_load(row["metadata"], {}),
             created_at=parse_datetime(row["created_at"]),
         )
 
-    def _notification_from_row(self, row: sqlite3.Row) -> NotificationRecord:
+    def _notification_from_row(self, row: Any) -> NotificationRecord:
         return NotificationRecord(
             id=row["id"],
             channel=NotificationChannel(row["channel"]),
@@ -1878,26 +1944,26 @@ class RuntimeStore:
             status=NotificationStatus(row["status"]),
             urgency=row["urgency"],
             dedupe_key=row["dedupe_key"],
-            metadata=_load(row["metadata_json"], {}),
+            metadata=_load(row["metadata"], {}),
             created_at=parse_datetime(row["created_at"]),
             updated_at=parse_datetime(row["updated_at"]),
         )
 
-    def _sync_job_from_row(self, row: sqlite3.Row) -> ExternalSyncJob:
+    def _sync_job_from_row(self, row: Any) -> ExternalSyncJob:
         return ExternalSyncJob(
             id=row["id"],
             kind=ExternalSyncKind(row["kind"]),
             target_id=row["target_id"],
             summary=row["summary"],
-            payload=_load(row["payload_json"], {}),
+            payload=_load(row["payload"], {}),
             status=ExternalSyncStatus(row["status"]),
-            metadata=_load(row["metadata_json"], {}),
+            metadata=_load(row["metadata"], {}),
             created_at=parse_datetime(row["created_at"]),
             updated_at=parse_datetime(row["updated_at"]),
             last_error=row["last_error"],
         )
 
-    def _notion_page_from_row(self, row: sqlite3.Row) -> NotionPage:
+    def _notion_page_from_row(self, row: Any) -> NotionPage:
         return NotionPage(
             id=row["id"],
             target_id=row["target_id"],
@@ -1906,12 +1972,12 @@ class RuntimeStore:
             external_id=row["external_id"],
             status=row["status"],
             url=row["url"],
-            metadata=_load(row["metadata_json"], {}),
+            metadata=_load(row["metadata"], {}),
             created_at=parse_datetime(row["created_at"]),
             updated_at=parse_datetime(row["updated_at"]),
         )
 
-    def _discord_delivery_from_row(self, row: sqlite3.Row) -> DiscordDelivery:
+    def _discord_delivery_from_row(self, row: Any) -> DiscordDelivery:
         return DiscordDelivery(
             id=row["id"],
             notification_id=row["notification_id"],
@@ -1919,12 +1985,12 @@ class RuntimeStore:
             external_ref=row["external_ref"],
             attempts=int(row["attempts"]),
             last_error=row["last_error"],
-            metadata=_load(row["metadata_json"], {}),
+            metadata=_load(row["metadata"], {}),
             created_at=parse_datetime(row["created_at"]),
             updated_at=parse_datetime(row["updated_at"]),
         )
 
-    def _checkpoint_from_row(self, row: sqlite3.Row) -> CheckpointRecord:
+    def _checkpoint_from_row(self, row: Any) -> CheckpointRecord:
         return CheckpointRecord(
             id=row["id"],
             task_id=row["task_id"],
@@ -1932,39 +1998,39 @@ class RuntimeStore:
             kind=CheckpointKind(row["kind"]),
             path=row["path"],
             summary=row["summary"],
-            metadata=_load(row["metadata_json"], {}),
+            metadata=_load(row["metadata"], {}),
             created_at=parse_datetime(row["created_at"]),
         )
 
-    def _trace_from_row(self, row: sqlite3.Row) -> AgentTrace:
+    def _trace_from_row(self, row: Any) -> AgentTrace:
         return AgentTrace(
             id=row["id"],
             task_id=row["task_id"],
             role=AgentRole(row["role"]),
             status=row["status"],
             summary=row["summary"],
-            metadata=_load(row["metadata_json"], {}),
+            metadata=_load(row["metadata"], {}),
             created_at=parse_datetime(row["created_at"]),
         )
 
-    def _event_from_row(self, row: sqlite3.Row) -> EventRecord:
+    def _event_from_row(self, row: Any) -> EventRecord:
         return EventRecord(
             id=row["id"],
             type=EventType(row["event_type"]),
             summary=row["summary"],
             target_id=row["target_id"],
             task_id=row["task_id"],
-            metadata=_load(row["metadata_json"], {}),
+            metadata=_load(row["metadata"], {}),
             created_at=parse_datetime(row["created_at"]),
         )
 
-    def _operator_message_from_row(self, row: sqlite3.Row) -> OperatorMessage:
+    def _operator_message_from_row(self, row: Any) -> OperatorMessage:
         return OperatorMessage(
             id=row["id"],
             role=row["role"],
             target_id=row["target_id"],
             model=row["model"],
             body=row["body"],
-            metadata=_load(row["metadata_json"], {}),
+            metadata=_load(row["metadata"], {}),
             created_at=parse_datetime(row["created_at"]),
         )

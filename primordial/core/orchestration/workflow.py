@@ -212,6 +212,28 @@ class WorkflowOrchestrator:
         if not task or task.status != TaskStatus.NEEDS_APPROVAL:
             return task
         action = "approved" if approved else "denied"
+        if task.metadata.get("proposal_only"):
+            task.status = TaskStatus.SUCCEEDED if approved else TaskStatus.CANCELLED
+            task.requires_approval = False
+            task.updated_at = utc_now()
+            task.metadata = {
+                **task.metadata,
+                "proposal_resolved": True,
+                "proposal_approved": bool(approved),
+                "proposal_resolved_at": task.updated_at.isoformat(),
+            }
+            event_type = EventType.APPROVAL_GRANTED if approved else EventType.APPROVAL_DENIED
+            self.store.insert_task(task)
+            self.store.insert_event(
+                EventRecord(
+                    type=event_type,
+                    summary=f"UI command proposal {action}: {task.title}",
+                    target_id=task.target_id,
+                    task_id=task.id,
+                    metadata={"proposal_only": True, "ui_command": task.metadata.get("ui_command")},
+                )
+            )
+            return task
         if approved:
             task.status = TaskStatus.PENDING
             task.requires_approval = False
@@ -229,6 +251,41 @@ class WorkflowOrchestrator:
             )
         )
         return task
+
+    def approve_all_safe_tasks(self, *, limit: int = 200) -> dict[str, object]:
+        approved: list[str] = []
+        skipped: list[dict[str, str]] = []
+        for task in self.store.list_tasks(statuses=[TaskStatus.NEEDS_APPROVAL], limit=limit):
+            if task.metadata.get("proposal_only"):
+                skipped.append({"task_id": task.id, "reason": "proposal-only UI command requires explicit approval"})
+                continue
+            target = self.store.get_target(task.target_id) if task.target_id else None
+            decision = self.policy_engine.evaluate_task(task, target)
+            self.store.insert_policy_decision(decision)
+            if decision.verdict != PolicyVerdict.ALLOW:
+                skipped.append({"task_id": task.id, "reason": decision.reason})
+                continue
+            task.status = TaskStatus.PENDING
+            task.requires_approval = False
+            task.updated_at = utc_now()
+            task.metadata = {
+                **task.metadata,
+                "batch_safe_approved": True,
+                "batch_safe_approved_at": task.updated_at.isoformat(),
+                "batch_safe_approval_reason": decision.reason,
+            }
+            self.store.insert_task(task)
+            self.store.insert_event(
+                EventRecord(
+                    type=EventType.APPROVAL_GRANTED,
+                    summary=f"Safe task batch-approved: {task.title}",
+                    target_id=task.target_id,
+                    task_id=task.id,
+                    metadata={"batch_safe_approved": True, "reason": decision.reason},
+                )
+            )
+            approved.append(task.id)
+        return {"approved": approved, "skipped": skipped, "approved_count": len(approved), "skipped_count": len(skipped)}
 
     def _plan_target(self, target: Target, session_id: str | None, report: OrchestrationReport) -> None:
         if not target.handle.strip():
@@ -495,25 +552,28 @@ class WorkflowOrchestrator:
                 transition_reason="Retained public PoC research exists, but deterministic applicability gating has not run.",
                 prerequisite="current-generation exploit research",
             )
-        if self._should_plan_kerberos_attack_check(target):
+        kerberos_checks = self._planned_kerberos_check_types(target)
+        if kerberos_checks:
             add(
                 TaskKind.KERBEROS_ATTACK_CHECK,
                 "Run Kerberos attack-path checks",
-                f"Check AS-REP/Kerberoast applicability for discovered principals on {target.handle}.",
+                f"Check allowed Kerberos attack-path applicability for discovered principals on {target.handle}.",
                 confidence=0.76,
                 subphase="kerberos_attack_path",
                 transition_reason="Current-generation principal evidence supports bounded Kerberos attack-path checks.",
                 prerequisite="current-generation principal discovery",
+                metadata={"kerberos_checks": kerberos_checks},
             )
         if self._should_plan_credentialed_access_check(target):
             add(
                 TaskKind.CREDENTIALED_ACCESS_CHECK,
                 "Verify credentialed SMB/WinRM access",
-                f"Use configured lab credentials to verify access and collect flags for {target.handle}.",
+                f"Use configured known credentials to verify access for {target.handle}.",
                 confidence=0.75,
                 subphase="credentialed_verification",
-                transition_reason="Operator-configured lab credentials are present and remote-admin surfaces are in scope.",
-                prerequisite="configured lab credentials and current-generation remote-admin evidence",
+                transition_reason="Operator-configured known credentials are present and remote-admin surfaces are in scope.",
+                prerequisite="configured known credentials and current-generation remote-admin evidence",
+                metadata={"credential_namespace": "known"},
             )
         verified_interests = self._verified_interest_count_current_generation(target)
         if verified_interests >= 1:
@@ -563,8 +623,8 @@ class WorkflowOrchestrator:
             blockers.append(
                 "Retained public PoC candidates exist, but no gated PoC applicability/adaptation primitive is registered."
             )
-        if has_remote_admin_surface and not self._lab_credentials_configured():
-            blockers.append("Lab username/password are not configured, so credentialed SMB/WinRM verification cannot run.")
+        if has_remote_admin_surface and not self._known_credentials_configured():
+            blockers.append("Known username/password are not configured, so credentialed SMB/WinRM verification cannot run.")
         policy = self._active_intent_policy()
         if policy is not None:
             if has_research_candidates and not policy.poc_applicability_validation:
@@ -759,15 +819,26 @@ class WorkflowOrchestrator:
         return task
 
     def _lab_credentials_configured(self) -> bool:
+        return self._known_credentials_configured()
+
+    def _known_credentials_configured(self) -> bool:
         if not self.credentials_status_loader:
             return False
         status = self.credentials_status_loader()
         services = status.get("services", {}) if isinstance(status, dict) else {}
-        lab = services.get("lab", {}) if isinstance(services, dict) else {}
-        if not isinstance(lab, dict):
+        if not isinstance(services, dict):
             return False
-        username = lab.get("username", {})
-        password = lab.get("password", {})
+        return self._credential_service_has_username_password(services, "known") or self._credential_service_has_username_password(
+            services,
+            "lab",
+        )
+
+    def _credential_service_has_username_password(self, services: dict[str, object], service: str) -> bool:
+        payload = services.get(service, {})
+        if not isinstance(payload, dict):
+            return False
+        username = payload.get("username", {})
+        password = payload.get("password", {})
         return (
             isinstance(username, dict)
             and isinstance(password, dict)
@@ -805,7 +876,7 @@ class WorkflowOrchestrator:
             reason = "active intent does not allow public PoC applicability validation"
         elif kind == TaskKind.KERBEROS_ATTACK_CHECK:
             allowed = policy.kerberos_policy.asrep_roast_check_allowed or policy.kerberos_policy.kerberoast_check_allowed
-            required = "ad_lab or htb_lab"
+            required = "ad_lab in-house AD attack path or htb_lab"
             category = "kerberos_attack_check"
             reason = "active intent does not allow Kerberos attack-path checks"
         elif kind == TaskKind.CREDENTIALED_ACCESS_CHECK:
@@ -1043,15 +1114,17 @@ class WorkflowOrchestrator:
         )
 
     def _should_plan_kerberos_attack_check(self, target: Target) -> bool:
-        if not self._intent_allows_task(target, TaskKind.KERBEROS_ATTACK_CHECK):
-            return False
+        return bool(self._planned_kerberos_check_types(target))
+
+    def _planned_kerberos_check_types(self, target: Target) -> list[str]:
         evidence = self.store.list_evidence(target_id=target.id, limit=200)
         if any(
             item.metadata.get("kind") == "kerberos_attack_check"
             and self._evidence_matches_active_generation(target, item)
             for item in evidence
         ):
-            return False
+            return []
+        supported: set[str] = set()
         for item in evidence:
             if item.metadata.get("kind") != "kerberos_user_discovery":
                 continue
@@ -1060,10 +1133,30 @@ class WorkflowOrchestrator:
             users = item.metadata.get("users", [])
             spns = item.metadata.get("spn_candidates", [])
             if isinstance(users, list) and users:
-                return True
+                supported.add("asrep_roast")
             if isinstance(spns, list) and spns:
-                return True
-        return False
+                supported.add("kerberoast")
+        if not supported:
+            return []
+        policy = self._active_intent_policy()
+        if policy is None:
+            return sorted(supported)
+        allowed: set[str] = set()
+        if policy.kerberos_policy.asrep_roast_check_allowed:
+            allowed.add("asrep_roast")
+        if policy.kerberos_policy.kerberoast_check_allowed:
+            allowed.add("kerberoast")
+        requested = supported.intersection(allowed)
+        if requested:
+            return sorted(requested)
+        self._record_operator_intent_block(
+            target,
+            TaskKind.KERBEROS_ATTACK_CHECK,
+            "kerberos_attack_check",
+            "ad_lab in-house AD attack path or htb_lab",
+            "active intent does not allow requested Kerberos attack-path checks: " + ", ".join(sorted(supported)),
+        )
+        return []
 
     def _should_plan_credentialed_access_check(self, target: Target) -> bool:
         if not self._intent_allows_task(target, TaskKind.CREDENTIALED_ACCESS_CHECK):
@@ -1080,21 +1173,7 @@ class WorkflowOrchestrator:
         current_gen_evidence = [e for e in evidence if self._evidence_matches_active_generation(target, e)]
         if not self._target_has_remote_admin_surface(current_gen_evidence):
             return False
-        if not self.credentials_status_loader:
-            return False
-        status = self.credentials_status_loader()
-        services = status.get("services", {}) if isinstance(status, dict) else {}
-        lab = services.get("lab", {}) if isinstance(services, dict) else {}
-        if not isinstance(lab, dict):
-            return False
-        username = lab.get("username", {})
-        password = lab.get("password", {})
-        return (
-            isinstance(username, dict)
-            and isinstance(password, dict)
-            and bool(username.get("configured"))
-            and bool(password.get("configured"))
-        )
+        return self._known_credentials_configured()
 
     def _plan_analysis_if_stale(
         self,
@@ -1244,8 +1323,8 @@ class WorkflowOrchestrator:
             return
         decision = self.policy_engine.evaluate_task(task, target)
         self.policy_engine.apply_decision_to_task(task, decision)
-        self.store.insert_policy_decision(decision)
         self.store.insert_task(task)
+        self.store.insert_policy_decision(decision)
         report.created_tasks.append(task)
         report.decisions.append(decision)
         self.store.insert_event(

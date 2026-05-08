@@ -23,8 +23,10 @@ from primordial.core.domain.enums import (
     EvidenceType,
     EventType,
     InterestStatus,
+    MethodologyPhase,
     MethodologyName,
     ProviderRoute,
+    RiskTier,
     ScopeProfile,
     TaskKind,
     TaskRunStatus,
@@ -43,6 +45,7 @@ from primordial.core.domain.models import (
     ScopeAsset,
     Session,
     Target,
+    Task,
     json_ready,
     utc_now,
 )
@@ -123,7 +126,7 @@ class PrimordialRuntime:
 
     def __init__(self, config: AppConfig) -> None:
         self.config = config
-        self.store = RuntimeStore(config.database_path)
+        self.store = RuntimeStore(config.database_url, schema=config.database_schema)
         self.credentials = CredentialStore(config.credentials_path)
         self.catalog = PrimitiveCatalog()
         self.operator_intents = OperatorIntentRegistry(config.catalog_dir / "intents")
@@ -417,6 +420,13 @@ class PrimordialRuntime:
         resumed_tasks = self.resume_tracker.resume_due_tasks(limit=200)
         return {"recovered_runs": recovered_runs, "resumed_tasks": resumed_tasks}
 
+    def approve_all_safe_tasks(self, *, limit: int = 200, run_tick: bool = False) -> dict[str, object]:
+        outcome = self.workflow.approve_all_safe_tasks(limit=limit)
+        if run_tick and outcome.get("approved_count"):
+            report = self.run_tick(max_executions=1)
+            outcome["tick_summary"] = report.summary
+        return outcome
+
     def execution_mode_payload(self) -> dict[str, object]:
         mode = str(self.store.get_setting(self.EXECUTION_MODE_SETTING, "tick")).strip().lower()
         if mode not in self.EXECUTION_MODES:
@@ -606,9 +616,61 @@ class PrimordialRuntime:
 
     def approve_task(self, task_id: str, approved: bool = True):
         task = self.workflow.approve_task(task_id, approved=approved)
-        if approved:
+        if approved and task is not None and not task.metadata.get("proposal_only"):
             self.run_tick(max_executions=1)
         return task
+
+    def create_ui_command_proposal(
+        self,
+        command: str,
+        payload: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        command_name = re.sub(r"[^a-z0-9_.:-]+", "-", str(command).strip().lower()).strip("-")
+        if not command_name:
+            raise ValueError("command is required")
+        body = dict(payload or {})
+        target_handle = str(body.get("target") or body.get("target_handle") or "").strip()
+        target = self.store.get_target_by_handle(target_handle) if target_handle else None
+        intent = self.active_operator_intent()
+        title = str(body.get("title") or command_name.replace("-", " ").replace("_", " ").title()).strip()
+        summary = str(
+            body.get("summary")
+            or f"Web console requested `{command_name}`. This is a proposal only and will not execute automatically."
+        )
+        task = Task(
+            target_id=target.id if target else None,
+            phase=MethodologyPhase.ANALYSIS,
+            kind=TaskKind.ANALYZE_EVIDENCE,
+            title=title,
+            summary=summary,
+            role=AgentRole.ORCHESTRATOR,
+            methodology=MethodologyName.WEB_APP_CORE,
+            metadata={
+                "ui_command": command_name,
+                "ui_payload": json_ready(body),
+                "proposal_only": True,
+                "operator_intent_id": intent.id,
+            },
+            status=TaskStatus.NEEDS_APPROVAL,
+            priority=10,
+            risk_tier=RiskTier.MODERATE,
+            requires_approval=True,
+        )
+        self.store.insert_task(task)
+        self.store.insert_event(
+            EventRecord(
+                type=EventType.TASK_NEEDS_APPROVAL,
+                summary=f"UI command proposal: {title}",
+                target_id=task.target_id,
+                task_id=task.id,
+                metadata={"ui_command": command_name, "operator_intent_id": intent.id},
+            )
+        )
+        return {
+            "proposal": task.as_payload(),
+            "target": target.as_payload() if target else None,
+            "operator_intent": intent.as_payload(),
+        }
 
     def register_target(
         self,
@@ -1195,9 +1257,9 @@ class PrimordialRuntime:
                 blockers.append(
                     {
                         "target": target.handle,
-                        "kind": "missing_lab_credentials",
+                        "kind": "missing_known_credentials",
                         "summary": (
-                            f"`{target.handle}` has SMB/WinRM-like services, but lab username/password are not configured."
+                            f"`{target.handle}` has SMB/WinRM-like services, but known username/password are not configured."
                         ),
                     }
                 )
@@ -1505,7 +1567,12 @@ class PrimordialRuntime:
         return {
             "status": "ok",
             "runtime_dir": str(self.config.runtime_dir),
-            "database_path": str(self.config.database_path),
+            "database": {
+                "driver": "postgres",
+                "url": self.config.redacted_database_url,
+                "schema": self.config.database_schema or "default",
+                "pgvector_required": True,
+            },
             "autonomy_mode": self.config.autonomy.mode.value,
             "operator_intent": self.active_operator_intent().id,
             "active_modules": self.modules.active_modules(),
@@ -1987,6 +2054,7 @@ class PrimordialRuntime:
         providers: list[str] | None = None,
         exhaustive: bool = False,
         max_context: int = 32768,
+        temperatures: list[float] | None = None,
         judge_model: str | None = None,
         csv_path: str | Path | None = None,
         json_out: str | Path | None = None,
@@ -2003,7 +2071,11 @@ class PrimordialRuntime:
                     normalized_providers.append(clean)
         normalized_providers = normalized_providers or ["ollama"]
         lmstudio = LMStudioClient() if "lmstudio" in normalized_providers else None
-        evaluator = ModelEvaluationService(self.ollama, lmstudio=lmstudio)
+        evaluator = ModelEvaluationService(
+            self.ollama,
+            lmstudio=lmstudio,
+            host_metrics_sampler=lambda: self.system_metrics_payload(force_refresh=True),
+        )
         summary = evaluator.evaluate(
             models=models,
             limit=limit,
@@ -2012,6 +2084,7 @@ class PrimordialRuntime:
             providers=normalized_providers,
             exhaustive=exhaustive,
             max_context=max_context,
+            temperatures=temperatures,
             judge_model=judge_model,
         )
         artifacts = evaluator.write_artifacts(
@@ -2029,6 +2102,7 @@ class PrimordialRuntime:
                 "providers": normalized_providers,
                 "max_context": max_context,
                 "exhaustive": exhaustive,
+                "temperatures": temperatures or [0.0, 0.1],
                 "judge_model": judge_model or "",
             },
         )
@@ -2040,6 +2114,8 @@ class PrimordialRuntime:
                 metadata={
                     "models": payload["models"],
                     "recommendations": payload["recommendations"],
+                    "role_suggestions": payload.get("role_suggestions", []),
+                    "model_identification": payload.get("model_identification", {}),
                     "processor": selected_processor,
                     "providers": normalized_providers,
                     "artifacts": artifacts,
@@ -2345,7 +2421,7 @@ class PrimordialRuntime:
         )
         return self.credentials_payload()
 
-    def set_lab_credentials(
+    def set_known_credentials(
         self,
         *,
         username: str | None = None,
@@ -2357,15 +2433,24 @@ class PrimordialRuntime:
             "password": password or "",
             "domain": domain or "",
         }
-        outcome = self.credentials.update_service("lab", values)
+        outcome = self.credentials.update_service("known", values)
         self.store.insert_event(
             EventRecord(
                 type=EventType.CREDENTIAL_UPDATED,
-                summary="Lab credentials updated",
-                metadata={"service": "lab", "changed": outcome["changed"]},
+                summary="Known credentials updated",
+                metadata={"service": "known", "changed": outcome["changed"]},
             )
         )
         return self.credentials_payload()
+
+    def set_lab_credentials(
+        self,
+        *,
+        username: str | None = None,
+        password: str | None = None,
+        domain: str | None = None,
+    ) -> dict[str, object]:
+        return self.set_known_credentials(username=username, password=password, domain=domain)
 
     def set_caido_credentials(
         self,
@@ -2391,13 +2476,17 @@ class PrimordialRuntime:
         return self.credentials_payload()
 
     def clear_credentials(self, service: str) -> dict[str, object]:
-        if service not in {"notion", "discord", "lab", "caido"}:
-            raise ValueError("service must be one of: notion, discord, lab, caido")
+        if service not in {"notion", "discord", "known", "lab", "caido"}:
+            raise ValueError("service must be one of: notion, discord, known, lab, caido")
         removed = self.credentials.clear_service(service)
+        if service == "lab":
+            removed = self.credentials.clear_service("known") or removed
+        elif service == "known":
+            removed = self.credentials.clear_service("lab") or removed
         self.store.insert_event(
             EventRecord(
                 type=EventType.CREDENTIAL_CLEARED,
-                summary=f"{service.title()} credentials cleared",
+                summary=f"{('known' if service == 'lab' else service).title()} credentials cleared",
                 metadata={"service": service, "removed": removed},
             )
         )
@@ -2471,7 +2560,7 @@ class PrimordialRuntime:
         if not target:
             return (
                 "**Target IP**\n"
-                "- No target is selected. Ask with a target handle, for example `--target pirate.htb`, "
+                "- No target is selected. Ask with a registered target handle, for example `--target <handle>`, "
                 "or select a target in the GUI/web app."
             )
         assets = self.store.list_scope_assets(target.id)
@@ -2908,7 +2997,7 @@ class PrimordialRuntime:
         if not self._has_any_capability(capabilities, "winrm", "smb-session", "flag-collection", "credential-use"):
             blockers.append("No credentialed WinRM/SMB flag-collection primitive is registered.")
         elif not lab_credentials_configured and not flag_hits:
-            blockers.append("Lab username/password are not configured, so credentialed SMB/WinRM verification cannot run.")
+            blockers.append("Known username/password are not configured, so credentialed SMB/WinRM verification cannot run.")
         if potential_paths and not self._poc_adaptation_available(capabilities):
             blockers.append(
                 "Retained public PoC candidates exist, but no gated PoC applicability/adaptation primitive is registered."
@@ -2916,8 +3005,8 @@ class PrimordialRuntime:
         return blockers
 
     def _lab_credentials_configured(self) -> bool:
-        username = self.credentials.get("lab", "username")
-        password = self.credentials.get("lab", "password")
+        username = self.credentials.get("known", "username")
+        password = self.credentials.get("known", "password")
         return bool(username and password)
 
     def _deterministic_next_actions(
@@ -2976,7 +3065,7 @@ class PrimordialRuntime:
         elif has_lpe_candidate:
             actions.append((0.54, "Defer local privilege-escalation candidate until user shell or credentialed access exists. Prerequisite: foothold not yet evidenced."))
         if self._has_any_capability(capabilities, "credentialed-access-check", "smb-session", "winrm") and not lab_credentials_configured:
-            actions.append((0.72, "Configure lab credentials before credentialed SMB/WinRM verification. Prerequisite: operator-provided username/password."))
+            actions.append((0.72, "Configure known credentials before credentialed SMB/WinRM verification. Prerequisite: operator-provided username/password."))
 
         return [f"{text} Confidence: {score:.2f}." for score, text in sorted(actions, reverse=True)[:5]]
 

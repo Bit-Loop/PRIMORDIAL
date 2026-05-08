@@ -215,12 +215,20 @@ class PrimitiveExecutor:
                     reason="active intent does not allow public PoC applicability validation",
                 )
         elif task.kind == TaskKind.KERBEROS_ATTACK_CHECK:
-            if not policy.kerberos_policy.asrep_roast_check_allowed:
+            requested = self._requested_kerberos_checks(task)
+            if "asrep_roast" in requested and not policy.kerberos_policy.asrep_roast_check_allowed:
                 return self._blocked_by_intent_result(
                     task,
-                    capability_category="kerberos_attack_check",
-                    required_intent="ad_lab or htb_lab",
-                    reason="active intent does not allow AS-REP/Kerberos attack-path checks",
+                    capability_category="asrep_roast_check",
+                    required_intent="ad_lab in-house AD attack path or htb_lab",
+                    reason="active intent does not allow AS-REP roast checks",
+                )
+            if "kerberoast" in requested and not policy.kerberos_policy.kerberoast_check_allowed:
+                return self._blocked_by_intent_result(
+                    task,
+                    capability_category="kerberoast_check",
+                    required_intent="ad_lab in-house AD attack path or htb_lab",
+                    reason="active intent does not allow Kerberoast candidate checks",
                 )
         elif task.kind == TaskKind.CREDENTIALED_ACCESS_CHECK:
             if not policy.credential_policy.credential_validation_allowed:
@@ -231,6 +239,23 @@ class PrimitiveExecutor:
                     reason="active intent does not allow credential validation",
                 )
         return None
+
+    def _requested_kerberos_checks(self, task: Task) -> set[str]:
+        raw = task.metadata.get("kerberos_checks")
+        if isinstance(raw, str):
+            requested = {raw.strip().lower()}
+        elif isinstance(raw, list):
+            requested = {str(item).strip().lower() for item in raw}
+        else:
+            requested = {"asrep_roast", "kerberoast"}
+        aliases = {
+            "asrep": "asrep_roast",
+            "asrep_roast_check": "asrep_roast",
+            "kerberoast_check": "kerberoast",
+            "spn_candidate_review": "kerberoast",
+        }
+        normalized = {aliases.get(item, item) for item in requested if item}
+        return normalized.intersection({"asrep_roast", "kerberoast"}) or {"asrep_roast", "kerberoast"}
 
     def resolve_primitives(self, task: Task) -> list[PrimitiveManifest]:
         selected: dict[str, PrimitiveManifest] = {}
@@ -382,6 +407,34 @@ class PrimitiveExecutor:
                     metadata={"origin_task": task.id, "class": "auth", "paths": sorted(auth_surfaces)},
                 )
             )
+        interesting_paths = sorted(
+            path for path in discovered_paths if any(keyword in path.lower() for keyword in AUTH_KEYWORDS)
+        )
+        if successful_probes:
+            statuses = sorted({int(probe["status_code"]) for probe in successful_probes})
+            severity = FindingSeverity.MEDIUM if auth_surfaces or interesting_paths else FindingSeverity.LOW
+            result.findings.append(
+                Finding(
+                    target_id=target.id,
+                    title="Reachable HTTP surface observed",
+                    summary=(
+                        f"Recon reached {len(successful_probes)} HTTP endpoint(s) for {target.handle}. "
+                        f"Observed status code(s): {', '.join(str(status) for status in statuses)}."
+                    ),
+                    severity=severity,
+                    evidence_refs=[item.id for item in result.evidence],
+                    confidence=0.78 if severity == FindingSeverity.MEDIUM else 0.72,
+                    verification_status=VerificationStatus.VERIFIED,
+                    metadata={
+                        "source": task.kind.value,
+                        "auto_generated": True,
+                        "reachable_endpoints": len(successful_probes),
+                        "status_codes": statuses,
+                        "auth_surfaces": sorted(auth_surfaces),
+                        "interesting_paths": interesting_paths[: self.config.max_evidence_items],
+                    },
+                )
+            )
         result.handoffs.append(
             TaskHandoff(
                 task_id=task.id,
@@ -490,6 +543,30 @@ class PrimitiveExecutor:
                     status=InterestStatus.OPEN,
                     confidence=0.78,
                     metadata={"origin_task": task.id, "class": "service_inventory", "services": high_signal_services},
+                )
+            )
+        if open_services:
+            ports = sorted({int(service.get("port", 0)) for service in open_services if service.get("port")})
+            severity = FindingSeverity.LOW if high_signal_services else FindingSeverity.INFO
+            result.findings.append(
+                Finding(
+                    target_id=target.id,
+                    title="Open TCP services observed",
+                    summary=(
+                        f"Service discovery observed {len(open_services)} open TCP service(s) "
+                        f"across {len(hosts)} host candidate(s)."
+                    ),
+                    severity=severity,
+                    evidence_refs=[evidence.id],
+                    confidence=0.82,
+                    verification_status=VerificationStatus.VERIFIED,
+                    metadata={
+                        "source": task.kind.value,
+                        "auto_generated": True,
+                        "ports": ports,
+                        "open_service_count": len(open_services),
+                        "high_signal_services": high_signal_services,
+                    },
                 )
             )
 
@@ -900,13 +977,23 @@ class PrimitiveExecutor:
         users = self._discovered_kerberos_users(target.id)
         spn_candidates = self._discovered_spn_candidates(target.id)
         domain = self._kerberos_domain(target.id, target.handle)
-        if not host or not users:
+        requested_checks = self._requested_kerberos_checks(task)
+        if not host:
             result.success = False
-            result.error = "Kerberos attack checks require a host and discovered user principals"
+            result.error = "Kerberos attack checks require a host"
+            return result
+        if "asrep_roast" in requested_checks and not users:
+            result.success = False
+            result.error = "AS-REP roast checks require discovered user principals"
+            return result
+        if "kerberoast" in requested_checks and not spn_candidates:
+            result.success = False
+            result.error = "Kerberoast checks require discovered SPN candidates"
             return result
 
-        command_results = self._run_kerberos_attack_check_commands(task, target.id, host, domain, users)
+        command_results = self._run_kerberos_attack_check_commands(task, target.id, host, domain, users, requested_checks)
         asrep_hashes = self._parse_asrep_hashes(command_results)
+        retained_spn_candidates = spn_candidates if "kerberoast" in requested_checks else []
         artifact = self._write_artifact(
             task,
             target.id,
@@ -916,7 +1003,8 @@ class PrimitiveExecutor:
                 "host": host,
                 "domain": domain,
                 "user_count": len(users),
-                "spn_candidates": spn_candidates,
+                "requested_checks": sorted(requested_checks),
+                "spn_candidates": retained_spn_candidates,
                 "asrep_hashes": asrep_hashes,
                 "command_results": command_results,
                 "guardrails": {"cracks_hashes": False, "executes_pocs": False, "bounded_user_count": len(users)},
@@ -928,19 +1016,20 @@ class PrimitiveExecutor:
             task_id=task.id,
             type=EvidenceType.TOOL_OUTPUT,
             title=f"Kerberos attack-path check: {target.handle}",
-            summary=self._summarize_kerberos_attack_check(asrep_hashes, spn_candidates, command_results),
+            summary=self._summarize_kerberos_attack_check(asrep_hashes, retained_spn_candidates, command_results),
             source_ref=artifact.id,
-            verification_status=VerificationStatus.PARTIAL if asrep_hashes or spn_candidates else VerificationStatus.REJECTED,
-            confidence=0.78 if asrep_hashes or spn_candidates else 0.62,
+            verification_status=VerificationStatus.PARTIAL if asrep_hashes or retained_spn_candidates else VerificationStatus.REJECTED,
+            confidence=0.78 if asrep_hashes or retained_spn_candidates else 0.62,
             freshness=0.9,
             artifact_path=artifact.path,
             metadata={
                 "kind": "kerberos_attack_check",
                 "host": host,
                 "domain": domain,
+                "requested_checks": sorted(requested_checks),
                 "user_count": len(users),
                 "asrep_hash_count": len(asrep_hashes),
-                "spn_candidates": spn_candidates,
+                "spn_candidates": retained_spn_candidates,
                 "cracks_hashes": False,
                 "executes_pocs": False,
             },
@@ -951,13 +1040,13 @@ class PrimitiveExecutor:
                 target_id=target.id,
                 task_id=task.id,
                 title="Kerberos attack-path check summary",
-                body=self._build_kerberos_attack_check_note(domain, users, asrep_hashes, spn_candidates, command_results),
+                body=self._build_kerberos_attack_check_note(domain, users, asrep_hashes, retained_spn_candidates, command_results),
                 confidence=0.76,
                 freshness=0.88,
                 metadata={"phase": task.phase.value, "asrep_hash_count": len(asrep_hashes)},
             )
         )
-        if asrep_hashes or spn_candidates:
+        if asrep_hashes or retained_spn_candidates:
             result.interests.append(
                 Interest(
                     target_id=target.id,
@@ -973,7 +1062,7 @@ class PrimitiveExecutor:
                         "origin_task": task.id,
                         "class": "kerberos_attack_check",
                         "asrep_hash_count": len(asrep_hashes),
-                        "spn_candidate_count": len(spn_candidates),
+                        "spn_candidate_count": len(retained_spn_candidates),
                     },
                 )
             )
@@ -983,7 +1072,7 @@ class PrimitiveExecutor:
                 summary=f"Kerberos attack checks completed with {len(asrep_hashes)} AS-REP hash candidate(s)",
                 target_id=target.id,
                 task_id=task.id,
-                metadata={"asrep_hash_count": len(asrep_hashes), "spn_candidate_count": len(spn_candidates)},
+                metadata={"asrep_hash_count": len(asrep_hashes), "spn_candidate_count": len(retained_spn_candidates)},
             )
         )
         return result
@@ -999,12 +1088,12 @@ class PrimitiveExecutor:
             result.error = "target not found"
             return result
 
-        username = self.credentials.get("lab", "username")
-        password = self.credentials.get("lab", "password")
-        domain = self.credentials.get("lab", "domain")
+        username = self.credentials.get("known", "username")
+        password = self.credentials.get("known", "password")
+        domain = self.credentials.get("known", "domain")
         if not username or not password:
             result.success = False
-            result.error = "lab username and password are required for credentialed access checks"
+            result.error = "known username and password are required for credentialed access checks"
             return result
 
         assets = self._target_scope_assets(target)
@@ -1036,7 +1125,7 @@ class PrimitiveExecutor:
                 "command_results": command_results,
                 "guardrails": {
                     "password_redacted": True,
-                    "uses_configured_lab_credentials": True,
+                    "uses_configured_known_credentials": True,
                     "winrm_password_arg_tools_require_env_opt_in": True,
                 },
             },
@@ -1061,6 +1150,7 @@ class PrimitiveExecutor:
                 "domain": domain,
                 "auth_results": auth_results,
                 "flag_hits": flag_hits,
+                "credential_namespace": "known",
             },
         )
         result.evidence.append(evidence)
@@ -1080,7 +1170,7 @@ class PrimitiveExecutor:
                 Interest(
                     target_id=target.id,
                     title="Credentialed foothold available",
-                    summary="Configured lab credentials authenticated successfully. Post-foothold verification and gated LPE review are now eligible.",
+                    summary="Configured known credentials authenticated successfully. Post-foothold verification and gated LPE review are now eligible.",
                     evidence_refs=[evidence.id],
                     status=InterestStatus.VERIFIED,
                     confidence=0.84,
@@ -1167,25 +1257,51 @@ class PrimitiveExecutor:
                 metadata={"phase": task.phase.value, "match_count": len(research["matches"])},
             )
         )
-        ai_review = self._run_ai_review(
-            task,
-            target_id=target.id,
-            title="AI exploit research triage",
-            snapshot=(
-                f"{self._build_ai_target_snapshot(target.id)}\n\n"
-                f"Search queries: {json.dumps(queries, sort_keys=True)}\n"
-                f"Retained matches: {json.dumps(research['matches'][:8], sort_keys=True)}\n"
-                f"Suppressed matches: {json.dumps(research['suppressed_matches'][:8], sort_keys=True)}"
-            ),
-            instruction=(
-                "Triage retained public exploit references against known target evidence. Identify which "
-                "queries should be refined, which candidates are blocked by missing exact versions or foothold, "
-                "and which safe primitive-backed validations should run next. Do not write exploit code and do "
-                "not imply any PoC executed."
-            ),
-        )
-        self._apply_ai_review(result, task, ai_review)
+        if self._ai_review_requested(task):
+            ai_review = self._run_ai_review(
+                task,
+                target_id=target.id,
+                title="AI exploit research triage",
+                snapshot=(
+                    f"{self._build_ai_target_snapshot(target.id)}\n\n"
+                    f"Search queries: {json.dumps(queries, sort_keys=True)}\n"
+                    f"Retained matches: {json.dumps(research['matches'][:8], sort_keys=True)}\n"
+                    f"Suppressed matches: {json.dumps(research['suppressed_matches'][:8], sort_keys=True)}"
+                ),
+                instruction=(
+                    "Triage retained public exploit references against known target evidence. Identify which "
+                    "queries should be refined, which candidates are blocked by missing exact versions or foothold, "
+                    "and which safe primitive-backed validations should run next. Do not write exploit code and do "
+                    "not imply any PoC executed."
+                ),
+            )
+            self._apply_ai_review(result, task, ai_review)
+        else:
+            evidence.metadata["ai_review_skipped"] = True
+            evidence.metadata["ai_review_skip_reason"] = "operator-triggered AI review was not requested"
         if research["matches"]:
+            result.findings.append(
+                Finding(
+                    target_id=target.id,
+                    title="Public exploit references require manual triage",
+                    summary=(
+                        f"Searchsploit returned {len(research['matches'])} retained non-DoS candidate reference(s). "
+                        "These are unverified research leads only; no PoC was executed."
+                    ),
+                    severity=FindingSeverity.MEDIUM,
+                    evidence_refs=[evidence.id],
+                    confidence=0.62,
+                    verification_status=VerificationStatus.PARTIAL,
+                    metadata={
+                        "source": task.kind.value,
+                        "auto_generated": True,
+                        "match_count": len(research["matches"]),
+                        "suppressed_match_count": len(research["suppressed_matches"]),
+                        "executes_pocs": False,
+                        "requires_manual_review": True,
+                    },
+                )
+            )
             summary = self._build_exploit_research_notification(target.handle, research)
             result.interests.append(
                 Interest(
@@ -1321,23 +1437,27 @@ class PrimitiveExecutor:
                 metadata={"phase": task.phase.value, "candidate_count": len(classified), "ready_count": ready_count},
             )
         )
-        ai_review = self._run_ai_review(
-            task,
-            target_id=target.id,
-            title="AI PoC applicability review",
-            snapshot=(
-                f"{self._build_ai_target_snapshot(target.id)}\n\n"
-                f"Service facts: {json.dumps(service_facts, sort_keys=True)}\n"
-                f"Classified candidates: {json.dumps(classified[:10], sort_keys=True)}"
-            ),
-            instruction=(
-                "Review the deterministic PoC applicability classifications. Call out false positives, missing "
-                "version evidence, foothold prerequisites, safer alternate validations, and exact stop conditions. "
-                "This is a read-only review: do not execute PoCs, do not generate exploit code, and do not mark a "
-                "finding verified."
-            ),
-        )
-        self._apply_ai_review(result, task, ai_review)
+        if self._ai_review_requested(task):
+            ai_review = self._run_ai_review(
+                task,
+                target_id=target.id,
+                title="AI PoC applicability review",
+                snapshot=(
+                    f"{self._build_ai_target_snapshot(target.id)}\n\n"
+                    f"Service facts: {json.dumps(service_facts, sort_keys=True)}\n"
+                    f"Classified candidates: {json.dumps(classified[:10], sort_keys=True)}"
+                ),
+                instruction=(
+                    "Review the deterministic PoC applicability classifications. Call out false positives, missing "
+                    "version evidence, foothold prerequisites, safer alternate validations, and exact stop conditions. "
+                    "This is a read-only review: do not execute PoCs, do not generate exploit code, and do not mark a "
+                    "finding verified."
+                ),
+            )
+            self._apply_ai_review(result, task, ai_review)
+        else:
+            evidence_record.metadata["ai_review_skipped"] = True
+            evidence_record.metadata["ai_review_skip_reason"] = "operator-triggered AI review was not requested"
         if ready_count:
             result.interests.append(
                 Interest(
@@ -1694,6 +1814,13 @@ class PrimitiveExecutor:
         task.metadata["ai_review_attempted"] = True
         task.metadata["ai_model"] = ai_review.get("metadata", {}).get("model")
         task.metadata["ai_processor"] = ai_review.get("metadata", {}).get("processor")
+
+    def _ai_review_requested(self, task: Task) -> bool:
+        return bool(
+            task.metadata.get("operator_triggered_ai_review")
+            or task.metadata.get("allow_ai_review")
+            or task.metadata.get("run_ai_review")
+        )
 
     def _run_ai_review(
         self,
@@ -2419,9 +2546,9 @@ class PrimitiveExecutor:
         if not discovered:
             return f"Bounded web content discovery checked {len(bases)} base URL(s) with {word_count} words and found no interesting paths."
         n = self.config.max_evidence_items
-        sample = ", ".join(f"{item['path']}({item['status_code']})" for item in discovered[:n])
+        path_summary = ", ".join(f"{item['path']}({item['status_code']})" for item in discovered[:n])
         suffix = "" if len(discovered) <= n else f" and {len(discovered) - n} more"
-        return f"Bounded web content discovery found {len(discovered)} interesting path(s): {sample}{suffix}."
+        return f"Bounded web content discovery found {len(discovered)} interesting path(s): {path_summary}{suffix}."
 
     def _build_content_discovery_note(
         self,
@@ -3667,10 +3794,26 @@ class PrimitiveExecutor:
         host: str,
         domain: str,
         users: list[dict[str, object]],
+        requested_checks: set[str],
     ) -> list[dict[str, object]]:
+        command_results: list[dict[str, object]] = []
+        if "kerberoast" in requested_checks:
+            command_results.append(
+                {
+                    "tool": "kerberoast-spn-candidate-review",
+                    "argv": ["spn-candidate-review"],
+                    "executed": False,
+                    "returncode": None,
+                    "stdout": "SPN candidates retained from prior discovery; no TGS request or hash cracking was performed.",
+                    "stderr": "",
+                    "timeout": False,
+                }
+            )
+        if "asrep_roast" not in requested_checks:
+            return command_results
         tool = shutil.which("impacket-GetNPUsers") or shutil.which("GetNPUsers.py")
         if not tool:
-            return [
+            command_results.append(
                 {
                     "tool": "GetNPUsers.py",
                     "argv": ["GetNPUsers.py"],
@@ -3680,11 +3823,12 @@ class PrimitiveExecutor:
                     "stderr": "tool not found",
                     "timeout": False,
                 }
-            ]
+            )
+            return command_results
         usernames = [str(user.get("username", "")).strip() for user in users if str(user.get("username", "")).strip()]
         usernames = [name for name in usernames if not name.endswith("$")][:80]
         user_file = self._write_task_text_file(task, target_id, "kerberos-users", "\n".join(usernames) + "\n")
-        return [
+        command_results.append(
             self._run_host_command(
                 tool="GetNPUsers.py",
                 argv=[
@@ -3698,7 +3842,8 @@ class PrimitiveExecutor:
                 ],
                 timeout_seconds=90,
             )
-        ]
+        )
+        return command_results
 
     def _write_task_text_file(self, task: Task, target_id: str, prefix: str, content: str) -> str:
         task_dir = self.config.artifacts_dir / (task.id or "task")
@@ -3848,7 +3993,7 @@ class PrimitiveExecutor:
 
         Operators can override via target.metadata["flag_paths"]: a list of
         {"share": "C$", "path": "Users\\...\\flag.txt", "name": "flag.txt"} dicts.
-        Falls back to standard HTB user.txt / root.txt paths.
+        Falls back to common in-house lab user.txt / root.txt paths.
         """
         target = self.store.get_target(target_id)
         custom = target.metadata.get("flag_paths") if target else None
@@ -3916,10 +4061,10 @@ class PrimitiveExecutor:
         flag_hits: list[dict[str, object]],
     ) -> str:
         valid = [item["protocol"] for item in auth_results if item.get("valid")]
-        return (
-            f"Credentialed access checks validated {', '.join(valid) if valid else 'no'} protocol access "
-            f"and observed {len(flag_hits)} flag file candidate(s)."
-        )
+        summary = f"Credentialed access checks validated {', '.join(valid) if valid else 'no'} protocol access."
+        if flag_hits:
+            summary += f" Observed {len(flag_hits)} lab flag file candidate(s)."
+        return summary
 
     def _build_credentialed_access_note(
         self,
@@ -3935,8 +4080,9 @@ class PrimitiveExecutor:
             f"Username: {username}",
             f"Domain: {domain or 'not configured'}",
             f"Auth checks: {len(auth_results)}",
-            f"Flag file candidates observed: {len(flag_hits)}",
         ]
+        if flag_hits:
+            lines.append(f"Lab flag file candidates observed: {len(flag_hits)}")
         for item in auth_results:
             lines.append(f"- {item['protocol']}: valid={item['valid']} tool={item['tool']}")
         for item in flag_hits:

@@ -20,19 +20,19 @@ Core rules:
 Useful starting filters:
 
 ```httpql
-req.host.eq:"pirate.htb"
+req.host.eq:"target.htb"
 ```
 
 ```httpql
-req.host.eq:"pirate.htb" AND resp.code.gte:400
+req.host.eq:"target.htb" AND resp.code.gte:400
 ```
 
 ```httpql
-req.host.eq:"pirate.htb" AND (req.path.cont:"login" OR req.path.cont:"admin" OR req.path.cont:"api")
+req.host.eq:"target.htb" AND (req.path.cont:"login" OR req.path.cont:"admin" OR req.path.cont:"api")
 ```
 
 ```httpql
-req.host.eq:"pirate.htb" AND (resp.raw.cont:"api_key" OR resp.raw.cont:"secret" OR resp.raw.cont:"token")
+req.host.eq:"target.htb" AND (resp.raw.cont:"api_key" OR resp.raw.cont:"secret" OR resp.raw.cont:"token")
 ```
 
 Escalation guidance:

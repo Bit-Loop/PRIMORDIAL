@@ -2,7 +2,7 @@
 
 Target: ``
 Profile: `hack_the_box`
-Generated: 2026-05-07T19:44:39.512762+00:00
+Generated: 2026-05-08T17:13:04.744768+00:00
 
 ## AI Agent Guidance
 

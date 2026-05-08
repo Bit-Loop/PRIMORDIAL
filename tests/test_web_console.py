@@ -356,6 +356,59 @@ class WebConsoleTests(unittest.TestCase):
         self.assertTrue(any(item["summary"] == "Repeated trace" and item["count"] == 3 for item in children))
         self.assertTrue(all(pin["kind"] != "target" or "pirate.htb" in pin["label"] for pin in payload["geo"]["pins"]))
 
+    def test_ui_command_endpoint_creates_proposal_only_approval(self) -> None:
+        response = self.app.dispatch(
+            "POST",
+            "/api/ui/commands",
+            json.dumps({"command": "geo-probe-pin", "target": "pirate.htb", "title": "Probe selected geo pin"}).encode("utf-8"),
+        )
+        payload = json.loads(response.body)
+        proposal = payload["result"]["proposal"]
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(proposal["status"], "needs_approval")
+        self.assertTrue(proposal["requires_approval"])
+        self.assertTrue(proposal["metadata"]["proposal_only"])
+        self.assertEqual(proposal["metadata"]["ui_command"], "geo-probe-pin")
+
+        approve_response = self.app.dispatch(
+            "POST",
+            "/api/actions/approve",
+            json.dumps({"task_id": proposal["id"]}).encode("utf-8"),
+        )
+        approve = json.loads(approve_response.body)
+        stored = self.runtime.store.get_task(proposal["id"])
+
+        self.assertEqual(approve_response.status, 200)
+        self.assertEqual(approve["result"]["status"], "succeeded")
+        self.assertIsNotNone(stored)
+        assert stored is not None
+        self.assertTrue(stored.metadata["proposal_resolved"])
+        self.assertTrue(stored.metadata["proposal_approved"])
+
+    def test_generated_web_bundle_has_no_fixture_switch_or_payload(self) -> None:
+        generated = Path("primordial/core/web/frontend/src/generated-gui.jsx").read_text(encoding="utf-8")
+        static_assets = Path("primordial/core/web/static/assets")
+        bundle_text = "\n".join(path.read_text(encoding="utf-8") for path in static_assets.glob("*.js"))
+        forbidden = [
+            "PD_" + "DE" + "MO_DATA",
+            "de" + "mo=1",
+            ">DE" + "MO<",
+            "window.PD_" + "DE" + "MO_DATA",
+            "dom_pirate",
+            "14:02:11",
+            "fake live sparklines",
+            "https://cdn.jsdelivr.net/npm/world-atlas",
+            "target.local",
+            "example.htb",
+            "mock-pirate",
+        ]
+
+        for text in (generated, bundle_text):
+            for token in forbidden:
+                self.assertNotIn(token, text)
+        self.assertNotIn("dangerouslySetInnerHTML", generated)
+
     def test_target_registration_endpoint_updates_scope(self) -> None:
         response = self.app.dispatch(
             "POST",
@@ -699,7 +752,7 @@ class WebConsoleTests(unittest.TestCase):
         self.assertIn("**Potential Paths**", answer)
         self.assertIn("retained 1 non-DoS public exploit reference", answer)
         self.assertIn("Run gated public PoC applicability validation", answer)
-        self.assertIn("Lab username/password are not configured", answer)
+        self.assertIn("Known username/password are not configured", answer)
         self.assertNotIn("Gated exploit-synthesis/adaptation primitive is missing", answer)
         self.assertNotIn("Add a bounded web content discovery primitive", answer)
         self.assertNotIn("No verified findings are stored for this target.", answer)

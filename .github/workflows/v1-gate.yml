@@ -1,0 +1,51 @@
+name: V1 Gate
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  v1-gate:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: primordial
+          POSTGRES_PASSWORD: primordial
+          POSTGRES_DB: primordial
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U primordial -d primordial"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      PRIMORDIAL_DATABASE_URL: postgresql://primordial:primordial@localhost:5432/primordial
+      PRIMORDIAL_TEST_DATABASE_URL: postgresql://primordial:primordial@localhost:5432/primordial
+      PRIMORDIAL_RUNTIME_DIR: ${{ github.workspace }}/runtime-ci
+      PRIMORDIAL_GATE_PORT: "18081"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install Python package
+        run: python3 -m pip install -e .
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Enable pgvector
+        run: |
+          python3 - <<'PY'
+          import os
+          import psycopg
+          with psycopg.connect(os.environ["PRIMORDIAL_DATABASE_URL"]) as connection:
+              connection.execute("CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public")
+          PY
+      - name: Run V1 gate
+        run: bash scripts/v1-gate.sh

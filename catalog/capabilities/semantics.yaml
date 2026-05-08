@@ -24,9 +24,35 @@ capabilities:
     required_intent_permissions:
       - public_poc_research
       - searchsploit_allowed
+  - id: asrep_roast_check
+    category: ad_attack_path
+    description: Check discovered Kerberos principals for AS-REP roast applicability without cracking hashes.
+    approved_tools:
+      - GetNPUsers.py
+      - impacket-GetNPUsers
+    safe_substitutions: []
+    required_intent_permissions:
+      - kerberos_policy.asrep_roast_check_allowed
+  - id: kerberoast_spn_candidate_review
+    category: ad_attack_path
+    description: Retain and review SPN-backed Kerberoast candidates without requesting TGS material or cracking hashes.
+    approved_tools: []
+    safe_substitutions: []
+    required_intent_permissions:
+      - kerberos_policy.kerberoast_check_allowed
+  - id: known_credential_validation
+    category: credential_validation
+    description: Validate operator-provided known credentials against in-scope remote-admin surfaces only.
+    approved_tools:
+      - smbclient
+      - netexec
+    safe_substitutions:
+      - smbclient
+    required_intent_permissions:
+      - credential_policy.credential_validation_allowed
   - id: lab_flag_collection
     category: lab
-    description: Collect lab challenge flag files after credential validation.
+    description: Collect explicitly authorized lab challenge flag files after credential validation.
     approved_tools:
       - smbclient
     safe_substitutions: []

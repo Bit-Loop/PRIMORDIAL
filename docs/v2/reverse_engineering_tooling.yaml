@@ -1,0 +1,389 @@
+version: 1
+status: v2_preparation_only
+loaded_by_v1: false
+description: >
+  Reverse engineering and binary exploitation tooling taxonomy for a future
+  Primordial V2 feature. This manifest is intentionally not consumed by V1
+  runtime code.
+
+global_controls:
+  execution_default: read_only
+  command_policy: argv_only_shell_false
+  network_default: disabled
+  artifact_policy: hash_large_outputs_do_not_inline
+  approval_required_for:
+    - active_debug_attach
+    - flash_read
+    - flash_write
+    - fuse_or_lock_bit_change
+    - voltage_fault_injection
+    - invasive_hardware_work
+    - payload_execution
+  blocked_baseline:
+    - weaponized_exploit_payload_generation
+    - reverse_shell_generation
+    - credential_theft
+    - brute_force_or_spraying
+    - hash_cracking
+    - third_party_access_control_bypass
+    - unbounded_hardware_stimulation
+
+domains:
+  binary_exploitation:
+    purpose: Crash triage, mitigations review, harnessing, exploitability-precondition analysis.
+    default_intent: binary_exploitability_assessment
+    required_subjects:
+      - binary
+      - harness
+      - crash_input
+    toolchains:
+      - id: debuggers
+        tools:
+          - name: gdb
+            role: Native debug and crash triage.
+            output_artifacts: [backtrace, register_snapshot, memory_map]
+            risk: dynamic_local_execution
+          - name: lldb
+            role: Native debug for LLVM/macOS/iOS-adjacent targets.
+            output_artifacts: [backtrace, register_snapshot, memory_map]
+            risk: dynamic_local_execution
+          - name: pwndbg
+            role: GDB exploitation-oriented inspection extension.
+            output_artifacts: [heap_state, vmmap, registers]
+            risk: dynamic_local_execution
+          - name: gef
+            role: GDB exploitation-oriented inspection extension.
+            output_artifacts: [heap_state, vmmap, registers]
+            risk: dynamic_local_execution
+      - id: harness_and_fuzzing
+        tools:
+          - name: aflplusplus
+            role: Coverage-guided fuzzing for local harnesses and owned targets.
+            source: https://aflplus.plus/
+            output_artifacts: [queue_corpus, crash_corpus, coverage_summary]
+            risk: dynamic_local_execution
+          - name: libfuzzer
+            role: In-process coverage-guided fuzzing for instrumented code.
+            output_artifacts: [crash_input, sanitizer_log]
+            risk: dynamic_local_execution
+          - name: honggfuzz
+            role: Coverage-guided fuzzing with sanitizer and hardware-counter support.
+            output_artifacts: [crash_input, coverage_summary]
+            risk: dynamic_local_execution
+      - id: exploitability_analysis
+        tools:
+          - name: checksec
+            role: Binary mitigation inventory.
+            output_artifacts: [mitigation_profile]
+            risk: static_read_only
+          - name: ropper
+            role: Gadget inventory for mitigation and exploitability assessment.
+            output_artifacts: [gadget_index]
+            risk: static_read_only
+          - name: ROPgadget
+            role: Gadget inventory for exploitability assessment.
+            output_artifacts: [gadget_index]
+            risk: static_read_only
+
+  software_reverse_engineering:
+    purpose: Static and dynamic understanding of compiled software and protocols.
+    default_intent: reverse_engineering_observe
+    required_subjects:
+      - binary
+      - library
+      - debug_symbols_optional
+    toolchains:
+      - id: disassembly_and_decompilation
+        tools:
+          - name: ghidra
+            role: Multi-platform software reverse engineering framework.
+            source: https://github.com/NationalSecurityAgency/ghidra
+            output_artifacts: [project_metadata, decompile_summary, callgraph, function_index]
+            risk: static_read_only
+          - name: rizin
+            role: Scriptable reverse engineering framework.
+            output_artifacts: [analysis_json, symbols, xrefs]
+            risk: static_read_only
+          - name: radare2
+            role: Scriptable disassembly and binary analysis.
+            output_artifacts: [analysis_json, symbols, xrefs]
+            risk: static_read_only
+          - name: binary_ninja
+            role: Commercial reverse engineering platform with API-driven analysis.
+            output_artifacts: [analysis_database, function_index]
+            risk: static_read_only
+          - name: ida_pro
+            role: Commercial disassembler and decompiler for specialist workflows.
+            output_artifacts: [database_metadata, function_index]
+            risk: static_read_only
+      - id: binary_libraries
+        tools:
+          - name: capstone
+            role: Disassembly library for automated analysis.
+            output_artifacts: [instruction_stream]
+            risk: static_read_only
+          - name: keystone
+            role: Assembly library for local harness and patch modeling.
+            output_artifacts: [assembled_bytes]
+            risk: controlled_generation
+          - name: unicorn
+            role: CPU emulation for isolated snippets and firmware routines.
+            output_artifacts: [emulation_trace]
+            risk: dynamic_local_execution
+          - name: angr
+            role: Multi-architecture binary analysis and symbolic execution.
+            source: https://docs.angr.io/en/latest/
+            output_artifacts: [cfg, symbolic_trace, path_constraints]
+            risk: dynamic_local_execution
+      - id: dynamic_instrumentation
+        tools:
+          - name: frida
+            role: Dynamic instrumentation of owned local processes or test devices.
+            output_artifacts: [hook_trace, api_call_log]
+            risk: dynamic_local_execution
+          - name: qemu_user
+            role: Cross-architecture user-mode execution for local binaries.
+            output_artifacts: [execution_log]
+            risk: dynamic_local_execution
+          - name: qemu_system
+            role: System emulation for owned firmware and OS images.
+            output_artifacts: [boot_log, trace_log]
+            risk: dynamic_local_execution
+
+  embedded_firmware_reverse_engineering:
+    purpose: Firmware unpacking, filesystem recovery, service inventory, and rehosting.
+    default_intent: firmware_unpacking
+    required_subjects:
+      - firmware_image
+      - provenance
+    toolchains:
+      - id: firmware_unpacking
+        tools:
+          - name: binwalk
+            role: Signature scan, entropy review, and extraction coordinator.
+            output_artifacts: [signature_scan, entropy_profile, extraction_tree]
+            risk: static_read_only
+          - name: unblob
+            role: Robust firmware extraction and recursive unpacking.
+            output_artifacts: [extraction_tree, extraction_report]
+            risk: static_read_only
+          - name: sasquatch
+            role: SquashFS extraction for vendor firmware variants.
+            output_artifacts: [filesystem_tree]
+            risk: static_read_only
+          - name: jefferson
+            role: JFFS2 filesystem extraction.
+            output_artifacts: [filesystem_tree]
+            risk: static_read_only
+          - name: ubi_reader
+            role: UBI and UBIFS extraction.
+            output_artifacts: [filesystem_tree, volume_map]
+            risk: static_read_only
+      - id: firmware_analysis
+        tools:
+          - name: file
+            role: File format classification.
+            output_artifacts: [file_type_inventory]
+            risk: static_read_only
+          - name: readelf
+            role: ELF metadata and dependency extraction.
+            output_artifacts: [elf_metadata]
+            risk: static_read_only
+          - name: strings
+            role: String extraction with secret-indicator classification.
+            output_artifacts: [string_index]
+            risk: secrets_possible
+          - name: yara
+            role: Pattern matching for owned firmware corpora.
+            output_artifacts: [rule_match_report]
+            risk: static_read_only
+      - id: rehosting_and_emulation
+        tools:
+          - name: renode
+            role: Embedded system simulation and multi-node virtual board testing.
+            source: https://renode.io/about/
+            output_artifacts: [simulation_script, simulation_log]
+            risk: dynamic_local_execution
+          - name: qemu_system
+            role: Firmware and OS image emulation where board support exists.
+            output_artifacts: [boot_log, device_trace]
+            risk: dynamic_local_execution
+          - name: avatar2
+            role: Orchestrated hybrid emulation and hardware-in-the-loop research.
+            output_artifacts: [target_map, trace_log]
+            risk: active_hardware_possible
+      - id: flashing_and_memory_tools
+        tools:
+          - name: flashrom
+            role: SPI flash identification and read/write when explicitly approved.
+            output_artifacts: [flash_id, flash_dump]
+            risk: hardware_active
+          - name: esptool
+            role: Espressif bootloader interaction for authorized devices.
+            output_artifacts: [chip_id, flash_dump]
+            risk: hardware_active
+          - name: avrdude
+            role: AVR programming and memory read/write for owned devices.
+            output_artifacts: [device_signature, memory_dump]
+            risk: hardware_active
+          - name: dfu-util
+            role: USB DFU transfer for owned devices.
+            output_artifacts: [dfu_inventory, transfer_log]
+            risk: hardware_active
+
+  hardware_reverse_engineering:
+    purpose: Board inventory, interface discovery, signal capture, and controlled debug access.
+    default_intent: hardware_probe_readonly
+    required_subjects:
+      - board
+      - authorization
+      - voltage_plan
+    toolchains:
+      - id: observation_and_measurement
+        tools:
+          - name: multimeter
+            role: Voltage, continuity, resistance, and current measurements.
+            output_artifacts: [measurement_log]
+            risk: hardware_readonly
+          - name: oscilloscope
+            role: Analog signal, clock, reset, and power integrity observation.
+            output_artifacts: [waveform_capture, measurement_log]
+            risk: hardware_readonly
+          - name: logic_analyzer
+            role: Digital bus capture and timing review.
+            output_artifacts: [logic_capture, decoder_report]
+            risk: hardware_readonly
+          - name: sigrok_pulseview
+            role: Open signal analysis suite and GUI for logic analyzers and scopes.
+            source: https://sigrok.org/wiki/Supported_hardware
+            output_artifacts: [sr_capture, decoder_report]
+            risk: hardware_readonly
+          - name: saleae_logic
+            role: Commercial logic capture and protocol decoding.
+            output_artifacts: [logic_capture, decoder_report]
+            risk: hardware_readonly
+      - id: debug_and_boundary_scan
+        tools:
+          - name: openocd
+            role: JTAG/SWD debug, in-system programming, and boundary scan with explicit approval.
+            source: https://openocd.org/doc/html/About.html
+            output_artifacts: [tap_scan, target_id, memory_read]
+            risk: hardware_active
+          - name: pyocd
+            role: Arm Cortex-M debugging, programming, and exploration.
+            source: https://pyocd.io/
+            output_artifacts: [target_id, memory_read, swv_trace]
+            risk: hardware_active
+          - name: jlink_gdb_server
+            role: SEGGER probe-backed debug server for supported devices.
+            output_artifacts: [target_id, debug_log]
+            risk: hardware_active
+          - name: urjtag
+            role: Boundary scan and JTAG chain interaction.
+            output_artifacts: [chain_scan, idcodes]
+            risk: hardware_active
+      - id: interface_bridges
+        tools:
+          - name: glasgow
+            role: Multi-protocol digital interface exploration.
+            output_artifacts: [interface_log, bus_capture]
+            risk: hardware_active
+          - name: bus_pirate
+            role: Low-speed serial bus exploration with explicit voltage plan.
+            output_artifacts: [bus_probe_log]
+            risk: hardware_active
+          - name: tigard
+            role: Hardware security interface bridge for UART/JTAG/SWD/SPI/I2C.
+            output_artifacts: [interface_log]
+            risk: hardware_active
+          - name: jtagulator
+            role: JTAG/UART pin discovery on owned hardware.
+            output_artifacts: [pin_discovery_report]
+            risk: hardware_active
+      - id: fault_and_side_channel_research
+        tools:
+          - name: chipwhisperer
+            role: Controlled side-channel and fault-injection research on owned hardware.
+            output_artifacts: [trace_set, glitch_campaign_log]
+            risk: hardware_destructive
+          - name: power_analyzer
+            role: Power trace capture and profiling.
+            output_artifacts: [power_trace]
+            risk: hardware_readonly
+
+  fpga_reverse_engineering:
+    purpose: FPGA family identification, bitstream custody, netlist analysis, simulation, and IO behavior modeling.
+    default_intent: fpga_netlist_analysis
+    required_subjects:
+      - fpga_device
+      - bitstream_or_capture
+      - authorization
+    toolchains:
+      - id: open_fpga_toolchains
+        tools:
+          - name: yosys
+            role: RTL synthesis, netlist transformations, and structural analysis.
+            source: https://yosyshq.readthedocs.io/projects/yosys/
+            output_artifacts: [rtlil, netlist_json, synthesis_log]
+            risk: static_read_only
+          - name: nextpnr
+            role: FPGA place-and-route for supported open families.
+            output_artifacts: [pnr_report, timing_report]
+            risk: local_generation
+          - name: verilator
+            role: HDL simulation and linting.
+            output_artifacts: [simulation_log, lint_report]
+            risk: dynamic_local_execution
+          - name: iverilog
+            role: Verilog simulation for test benches.
+            output_artifacts: [simulation_log]
+            risk: dynamic_local_execution
+          - name: gtkwave
+            role: Waveform inspection.
+            output_artifacts: [waveform_view_state]
+            risk: static_read_only
+      - id: bitstream_and_family_specific
+        tools:
+          - name: project_xray
+            role: Xilinx 7-series bitstream documentation and analysis workflows.
+            output_artifacts: [bitstream_database_refs, feature_map]
+            risk: static_read_only
+          - name: project_trellis
+            role: Lattice ECP5 bitstream documentation and analysis workflows.
+            output_artifacts: [bitstream_database_refs, feature_map]
+            risk: static_read_only
+          - name: icestorm
+            role: Lattice iCE40 bitstream and flow support.
+            output_artifacts: [asc_bitstream, netlist]
+            risk: static_read_only
+          - name: openfpgaloader
+            role: Program or read supported FPGA boards when explicitly approved.
+            output_artifacts: [programming_log, device_id]
+            risk: hardware_active
+      - id: netlist_and_layout_review
+        tools:
+          - name: netlistsvg
+            role: Netlist visualization for small modules.
+            output_artifacts: [netlist_diagram]
+            risk: static_read_only
+          - name: klayout
+            role: Layout/GDS inspection where lawful layout artifacts exist.
+            output_artifacts: [layout_markups]
+            risk: static_read_only
+
+evidence_types:
+  - id: binary_identity
+    required_fields: [sha256, format, architecture, endian, bitness]
+  - id: mitigation_profile
+    required_fields: [nx, pie, relro, canary, cfi, sandbox]
+  - id: crash_record
+    required_fields: [input_sha256, signal, fault_address, backtrace, reproducible]
+  - id: firmware_bom
+    required_fields: [image_sha256, filesystems, services, architecture, extraction_tree_ref]
+  - id: hardware_observation
+    required_fields: [device_ref, instrument, probe_settings, measurement, confidence]
+  - id: bus_capture
+    required_fields: [interface, voltage, sample_rate, decoder, capture_ref]
+  - id: fpga_profile
+    required_fields: [family, package, bitstream_ref, encryption_status, toolchain_support]
+

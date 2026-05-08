@@ -16,7 +16,7 @@ Autonomy is staged behind deterministic policy, durable workflow state, evidence
 ## What Is Implemented
 
 - Python package and CLI entrypoint (`cli.py`)
-- Durable local store using SQLite (`runtime/primordial.db`)
+- Durable Postgres store using `psycopg` v3 and required `pgvector`
 - Control-plane domain models: targets, tasks, evidence, notes, interests, findings, memory, policy, and traces
 - Methodology-aware task planner with phase/exit conditions and dead-end detection
 - Autonomy-aware policy engine with structured approval metadata
@@ -29,27 +29,62 @@ Autonomy is staged behind deterministic policy, durable workflow state, evidence
 - Operator Q&A via `ask` with per-session chat log
 - Textual TUI and plain terminal fallback
 - HTML5 web console for remote control and audit
-- Local Tk GUI launcher
 - Notion sync, Discord delivery, and Caido adapters
 
 ## Quick Start
 
 ```bash
+export PRIMORDIAL_DATABASE_URL='postgresql://primordial:primordial@localhost:5432/primordial'
 python3 cli.py show
 python3 cli.py scope
 python3 cli.py tick
 python3 cli.py run-loop --cycles 3
 python3 cli.py compact
 python3 cli.py process-queues
-python3 cli.py add-target pirate.htb --profile hack_the_box --asset pirate.htb --asset 10.129.47.117
+python3 cli.py add-target target.htb --profile hack_the_box --asset target.htb --asset 10.10.10.10
 python3 cli.py approve <task_id>
-python3 cli.py ask "status and next step" --target pirate.htb
+python3 cli.py ask "status and next step" --target target.htb
 python3 cli.py tui
 python3 cli.py web --port 1337
 python3 cli.py models warm --keep-alive 8h
 ```
 
 If `textual` is not installed, the `tui` command falls back to a plain terminal dashboard.
+
+## Postgres Storage
+
+Primordial requires Postgres and `pgvector`; SQLite runtime storage is no longer supported and there is no fallback importer. Initialize a database before starting the runtime:
+
+```bash
+createuser --pwprompt primordial        # skip if the role already exists
+createdb -O primordial primordial      # skip if the database already exists
+export PRIMORDIAL_DATABASE_URL='postgresql://primordial:<password>@localhost:5432/primordial'
+psql "$PRIMORDIAL_DATABASE_URL" -c 'CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;'
+```
+
+The runtime creates its schema on startup and fails fast if `CREATE EXTENSION vector` is unavailable. Runtime outputs still live under `runtime/`, but that directory is ignored and should not be committed.
+
+For local development, the bundled bootstrap creates `.venv`, installs Python and frontend dependencies, starts a local Postgres cluster under `runtime/postgres`, enables pgvector, and writes `runtime/primordial.env`:
+
+```bash
+scripts/bootstrap-v1.sh
+source runtime/primordial.env
+```
+
+Stop that local cluster with:
+
+```bash
+scripts/stop-bootstrap-postgres.sh
+```
+
+Use the non-mutating doctor command to check a prepared environment:
+
+```bash
+python3 cli.py doctor
+python3 cli.py doctor --json
+```
+
+`doctor` verifies DB reachability, `pgvector`, schema version, runtime directory writability, and that no `runtime/` files are tracked. It does not create schema, run model inference, validate credentials, run benchmarks, or execute security tooling.
 
 ## Autonomy Modes
 
@@ -126,7 +161,15 @@ python3 -m unittest tests.test_runtime_integration -v
 python3 -m unittest tests.test_web_console -v
 ```
 
-Tests create temporary runtime directories and do not touch the live `runtime/primordial.db`.
+Tests require Postgres with `pgvector`. Set `PRIMORDIAL_TEST_DATABASE_URL` to an existing test database, or let the test bootstrap start a temporary local cluster when `initdb`, `pg_ctl`, and `pgvector` are installed. Tests do not touch live runtime output.
+
+For the full V1 hardening gate, use:
+
+```bash
+scripts/v1-gate.sh
+```
+
+The gate runs the Python suite, frontend build, live web smoke checks, and `doctor`. CI runs the same gate against a Postgres service with pgvector.
 
 ## Layout
 
@@ -139,7 +182,7 @@ primordial/core/
   providers/       route selection and hot-path scheduling
   recovery/        crash journal and recovery helpers
   primitives/      manifest catalog and capability lookup
-  storage/         schema and durable runtime store (SQLite)
+  storage/         Postgres schema and durable runtime store
   validation/      input and output validation helpers
   web/             HTML5 remote controller and audit console
   skills.py        skill surface registry
@@ -157,7 +200,6 @@ primordial/gui/        local Tk GUI launcher
 primordial/ui/         Textual TUI shell and terminal fallback
 
 manifests/         primitive manifests (capability tags, risk tiers, schemas)
-scopes/            sample scope input files
 tests/             test suite (CI-ready)
 docs/              contributor documentation
 ```

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
 from pathlib import Path
 import os
+from urllib.parse import urlsplit, urlunsplit
 
 from primordial.core.domain.enums import AutonomyMode
 from primordial.core.domain.constants import PROFILE_DEFAULT_TASK_ALLOWLIST
@@ -63,7 +65,8 @@ class AutonomySettings:
 class AppConfig:
     project_root: Path
     runtime_dir: Path
-    database_path: Path
+    database_url: str
+    database_schema: str | None
     artifacts_dir: Path
     chat_logs_dir: Path
     checkpoints_dir: Path
@@ -89,9 +92,18 @@ class AppConfig:
     def from_env(cls, project_root: Path | None = None) -> "AppConfig":
         root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
         runtime_dir = Path(os.getenv("PRIMORDIAL_RUNTIME_DIR", root / "runtime")).resolve()
-        database_path = Path(
-            os.getenv("PRIMORDIAL_DB_PATH", runtime_dir / "primordial.db")
-        ).resolve()
+        database_url = os.getenv("PRIMORDIAL_DATABASE_URL", "").strip()
+        database_schema = None
+        if not database_url:
+            database_url = os.getenv("PRIMORDIAL_TEST_DATABASE_URL", "").strip()
+            if database_url:
+                digest = hashlib.sha1(str(root).encode("utf-8")).hexdigest()[:12]
+                database_schema = f"primordial_test_{digest}"
+        if not database_url:
+            raise RuntimeError(
+                "PRIMORDIAL_DATABASE_URL is required. "
+                "Primordial no longer supports SQLite runtime storage."
+            )
         artifacts_dir = Path(
             os.getenv("PRIMORDIAL_ARTIFACTS_DIR", runtime_dir / "artifacts")
         ).resolve()
@@ -145,7 +157,8 @@ class AppConfig:
         return cls(
             project_root=root,
             runtime_dir=runtime_dir,
-            database_path=database_path,
+            database_url=database_url,
+            database_schema=database_schema,
             artifacts_dir=artifacts_dir,
             chat_logs_dir=chat_logs_dir,
             checkpoints_dir=checkpoints_dir,
@@ -176,6 +189,22 @@ class AppConfig:
         self.skills_dir.mkdir(parents=True, exist_ok=True)
         self.secrets_dir.mkdir(parents=True, exist_ok=True)
         self.secrets_dir.chmod(0o700)
+
+    @property
+    def redacted_database_url(self) -> str:
+        return redact_database_url(self.database_url)
+
+
+def redact_database_url(database_url: str) -> str:
+    parsed = urlsplit(database_url)
+    if not parsed.netloc:
+        return database_url
+    host_part = parsed.hostname or ""
+    if parsed.port:
+        host_part = f"{host_part}:{parsed.port}"
+    if parsed.username:
+        host_part = f"{parsed.username}:***@{host_part}"
+    return urlunsplit((parsed.scheme, host_part, parsed.path, parsed.query, parsed.fragment))
 
 
 def _env_bool(name: str, default: bool) -> bool:

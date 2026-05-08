@@ -72,6 +72,23 @@ class CredentialStoreTests(unittest.TestCase):
             self.assertTrue(status["services"]["caido"]["api_token"]["configured"])
             self.assertNotIn("caido-secret-token", json.dumps(status))
 
+    def test_known_credentials_are_canonical_and_lab_is_compat_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "secrets" / "credentials.json"
+            store = CredentialStore(path)
+            store.initialize()
+
+            store.update_service("lab", {"username": "legacy-user", "password": "legacy-pass"})
+            status = store.status()
+            self.assertEqual(store.get("known", "username"), "legacy-user")
+            self.assertTrue(status["services"]["known"]["username"]["configured"])
+            self.assertIn("alias:lab", status["services"]["known"]["username"]["source"])
+
+            store.update_service("known", {"username": "known-user", "password": "known-pass", "domain": "EXAMPLE"})
+            self.assertEqual(store.get("known", "username"), "known-user")
+            self.assertEqual(store.get("lab", "username"), "known-user")
+            self.assertEqual(store.get("known", "domain"), "EXAMPLE")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -147,6 +147,29 @@ class OllamaClient:
         result = self.list_model_infos()
         return OllamaModelListResult(ok=result.ok, models=[item.name for item in result.models], error=result.error)
 
+    def running_models(self) -> dict[str, object]:
+        req = request.Request(
+            f"{self.base_url}/api/ps",
+            method="GET",
+            headers={"Accept": "application/json"},
+        )
+        try:
+            with request.urlopen(req, timeout=10) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except error.URLError as exc:
+            return {"ok": False, "base_url": self.base_url, "models": [], "error": str(exc)}
+        except json.JSONDecodeError:
+            return {"ok": False, "base_url": self.base_url, "models": [], "error": "Ollama returned invalid JSON"}
+        if not isinstance(data, dict):
+            return {"ok": False, "base_url": self.base_url, "models": [], "error": "Ollama returned a non-object JSON payload"}
+        models = data.get("models", [])
+        return {
+            "ok": True,
+            "base_url": self.base_url,
+            "models": models if isinstance(models, list) else [],
+            "error": None,
+        }
+
     def list_model_infos(self) -> OllamaModelInfoListResult:
         req = request.Request(
             f"{self.base_url}/api/tags",

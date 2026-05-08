@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-import html
 import json
 from pathlib import Path
 from threading import RLock
@@ -250,6 +249,17 @@ class PrimordialWebApp:
                 "stop-work",
                 self.runtime.stop_active_work,
             )
+        if method == "POST" and path == "/api/ui/commands":
+            payload = self._parse_json_body(body)
+            command = str(payload.get("command", "")).strip()
+            if not command:
+                return self._json_response({"error": "command is required"}, status=400)
+            with self._lock:
+                try:
+                    outcome = self.runtime.create_ui_command_proposal(command, payload)
+                except ValueError as exc:
+                    return self._json_response({"error": str(exc)}, status=400)
+                return self._action_response("ui-command-proposal", outcome)
         if method == "POST" and path == "/api/execution-mode":
             payload = self._parse_json_body(body)
             mode = str(payload.get("mode", "")).strip()
@@ -339,6 +349,15 @@ class PrimordialWebApp:
                     webhook_url=self._optional_string(payload, "webhook_url"),
                 )
                 return self._action_response("set-discord-credentials", {"credentials": credentials})
+        if method == "POST" and path == "/api/credentials/known":
+            payload = self._parse_json_body(body)
+            with self._lock:
+                credentials = self.runtime.set_known_credentials(
+                    username=self._optional_string(payload, "username"),
+                    password=self._optional_string(payload, "password"),
+                    domain=self._optional_string(payload, "domain"),
+                )
+                return self._action_response("set-known-credentials", {"credentials": credentials})
         if method == "POST" and path == "/api/credentials/lab":
             payload = self._parse_json_body(body)
             with self._lock:
@@ -491,6 +510,14 @@ class PrimordialWebApp:
             payload["web_actions"] = []
         return payload
 
+    def continuous_tick_once(self) -> dict[str, Any]:
+        with self._lock:
+            mode = self.runtime.execution_mode_payload()
+            if mode.get("mode") != "continuous":
+                return {"ran": False, "interval_seconds": mode.get("interval_seconds", 30)}
+            report = self.runtime.run_tick(max_executions=1)
+            return {"ran": True, "interval_seconds": mode.get("interval_seconds", 30), "summary": report.summary}
+
     def _action_response(self, action: str, result: dict[str, Any]) -> WebResponse:
         return self._json_response(
             {
@@ -634,7 +661,7 @@ class PrimordialWebApp:
         records = self.runtime.records_payload(limit=100, target_id=selected_target_id)
         task_items = self._tasks_view(dashboard, work_status, targets)
         if selected_target:
-            task_items = [item for item in task_items if item.get("target") in {selected_target, "*", ""}]
+            task_items = [item for item in task_items if item.get("target") == selected_target]
         approval_items = self._approvals_view(work_status, task_items)
         event_items = self._events_view(audit)
         notes = self._notes_view(targets, findings_context, credentials, audit)
@@ -709,6 +736,7 @@ class PrimordialWebApp:
                     "processQueues": "/api/actions/process-queues",
                     "warmModels": "/api/actions/warm-models",
                     "clearModels": "/api/actions/clear-models",
+                    "uiCommands": "/api/ui/commands",
                 },
             },
         }
@@ -881,7 +909,7 @@ class PrimordialWebApp:
                 {
                     "t": self._time_label(item.get("created_at")),
                     "lvl": self._event_level(str(item.get("type", ""))),
-                    "msg": html.escape(str(item.get("summary") or item.get("type") or "event")),
+                    "msg": str(item.get("summary") or item.get("type") or "event"),
                 }
             )
         for item in audit.get("recent_runtime_events", []) if isinstance(audit.get("recent_runtime_events", []), list) else []:
@@ -891,7 +919,7 @@ class PrimordialWebApp:
                 {
                     "t": self._time_label(item.get("created_at")),
                     "lvl": "info",
-                    "msg": html.escape(str(item.get("signal") or "runtime event")),
+                    "msg": str(item.get("signal") or "runtime event"),
                 }
             )
         return events[:80]
@@ -979,7 +1007,7 @@ class PrimordialWebApp:
             task_id = str(trace.get("task_id") or "")
             task = tasks_by_id.get(task_id, {})
             target = str(metadata.get("target") or task.get("target") or "*")
-            if selected_target and target not in {selected_target, "*", ""}:
+            if selected_target and target != selected_target:
                 continue
             kind = str(metadata.get("task_type") or metadata.get("summary_key") or metadata.get("stage") or trace.get("role") or "trace")
             status = self._trace_status_for_gui(str(trace.get("status") or "pass"))
@@ -1028,7 +1056,7 @@ class PrimordialWebApp:
                     "count": 1,
                 }
                 for index, item in enumerate(tasks[:16])
-                if not selected_target or item.get("target") in {selected_target, "*", ""}
+                if not selected_target or item.get("target") == selected_target
             ]
         active = [item for item in children if item.get("status") == "run"]
         idle_reason = "No active run for selected target." if selected_target else "No active run exists."
@@ -1267,28 +1295,31 @@ class PrimordialWebApp:
                 "id": "g_self",
                 "kind": "self",
                 "label": "operator",
-                "city": "local",
-                "country": "local",
-                "lat": 37.7749,
-                "lon": -122.4194,
+                "city": "local runtime",
+                "country": "control-plane",
+                "lat": 0.0,
+                "lon": 0.0,
                 "asn": "local",
                 "org": "Primordial",
                 "status": "live",
+                "geolocated": False,
             }
         ]
         for index, row in enumerate(self._scope_view(targets)):
+            lat, lon = self._synthetic_map_coordinate(index)
             pins.append(
                 {
                     "id": f"g_target_{index}",
                     "kind": "target",
                     "label": row["handle"] if not row["ip"] else f"{row['handle']} ({row['ip']})",
-                    "city": "scope",
-                    "country": row["profile"] or "scope",
-                    "lat": 51.5074 + index * 0.02,
-                    "lon": -0.1278 - index * 0.02,
+                    "city": "unresolved",
+                    "country": "scope",
+                    "lat": lat,
+                    "lon": lon,
                     "asn": "scope",
-                    "org": row["profile"] or "target",
+                    "org": row["profile"] or "scoped target",
                     "status": row["status"],
+                    "geolocated": False,
                 }
             )
         if caido_status.get("configured"):
@@ -1298,12 +1329,13 @@ class PrimordialWebApp:
                     "kind": "tool",
                     "label": "caido",
                     "city": "localhost",
-                    "country": "local",
-                    "lat": 37.7649,
-                    "lon": -122.4094,
+                    "country": "control-plane",
+                    "lat": 0.08,
+                    "lon": -0.08,
                     "asn": "local",
                     "org": "Caido",
                     "status": "live" if caido_status.get("ok") else "idle",
+                    "geolocated": False,
                 }
             )
         if models.get("ollama", {}).get("ok"):
@@ -1313,12 +1345,13 @@ class PrimordialWebApp:
                     "kind": "tool",
                     "label": "ollama",
                     "city": "localhost",
-                    "country": "local",
-                    "lat": 37.7549,
-                    "lon": -122.3994,
+                    "country": "control-plane",
+                    "lat": -0.08,
+                    "lon": 0.08,
                     "asn": "local",
                     "org": "Ollama",
                     "status": "live",
+                    "geolocated": False,
                 }
             )
         return {
@@ -1326,6 +1359,24 @@ class PrimordialWebApp:
             "traces": [{"from": "g_self", "to": pin["id"], "kind": "ok", "label": "scope"} for pin in pins if pin["id"] != "g_self"],
             "asns": [{"num": "local", "org": "Local runtime", "country": "local", "refs": len(pins), "role": "operator"}],
         }
+
+    def _synthetic_map_coordinate(self, index: int) -> tuple[float, float]:
+        offsets = [
+            (0.12, 0.0),
+            (0.0, 0.12),
+            (-0.12, 0.0),
+            (0.0, -0.12),
+            (0.12, 0.12),
+            (-0.12, 0.12),
+            (-0.12, -0.12),
+            (0.12, -0.12),
+        ]
+        lat, lon = offsets[index % len(offsets)]
+        ring = index // len(offsets)
+        if ring:
+            lat += min(1.0, ring * 0.08)
+            lon -= min(1.0, ring * 0.08)
+        return lat, lon
 
     def _approval_chat_view(self, approvals: list[dict[str, Any]]) -> list[dict[str, str]]:
         if not approvals:

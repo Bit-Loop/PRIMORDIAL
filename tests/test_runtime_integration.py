@@ -228,9 +228,56 @@ class RuntimeIntegrationTests(unittest.TestCase):
 
             self.assertEqual(len(report.completed_runs), 1)
             self.assertGreaterEqual(len(runtime.store.list_evidence(limit=100)), 1)
+            findings = runtime.store.list_findings(limit=100)
+            self.assertGreaterEqual(len(findings), 1)
+            self.assertEqual(findings[0].metadata.get("source"), TaskKind.RECON_SCAN.value)
             artifacts = runtime.store.list_artifacts(limit=100)
             self.assertGreaterEqual(len(artifacts), 1)
             self.assertTrue(Path(artifacts[0].path).exists())
+            runtime.shutdown()
+
+    def test_approve_all_safe_rechecks_policy_before_unblocking_tasks(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = AppConfig.from_env(project_root=root)
+            config.manifests_dir = MANIFESTS_DIR
+            config.ensure_directories()
+            scope_path = write_scope_file(
+                root,
+                targets=[
+                    {
+                        "handle": "pirate.htb",
+                        "display_name": "Pirate Fixture",
+                        "in_scope": True,
+                        "assets": [{"asset": "http://pirate.htb/", "asset_type": "webapp"}],
+                    }
+                ],
+            )
+            runtime = PrimordialRuntime(config)
+            runtime.initialize()
+            runtime.import_scope(scope_path, ScopeProfile.HACK_THE_BOX)
+            target = runtime.store.list_targets()[0]
+            task = Task(
+                target_id=target.id,
+                phase=MethodologyPhase.ANALYSIS,
+                kind=TaskKind.ANALYZE_EVIDENCE,
+                title="Analyze accumulated evidence",
+                summary="Safe analysis task from an older approval state",
+                role=AgentRole.ANALYSIS_WORKER,
+                risk_tier=RiskTier.MODERATE,
+                status=TaskStatus.NEEDS_APPROVAL,
+                requires_approval=True,
+            )
+            runtime.store.insert_task(task)
+
+            outcome = runtime.approve_all_safe_tasks()
+            approved = runtime.store.get_task(task.id)
+
+            self.assertEqual(outcome["approved_count"], 1)
+            self.assertEqual(outcome["skipped_count"], 0)
+            self.assertIsNotNone(approved)
+            self.assertEqual(approved.status, TaskStatus.PENDING)
+            self.assertFalse(approved.requires_approval)
             runtime.shutdown()
 
     def test_remove_target_cascades_records_and_runtime_files(self) -> None:

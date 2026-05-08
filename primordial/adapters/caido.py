@@ -107,7 +107,7 @@ class CaidoIntegrationService:
             "graphql_url": connection.graphql_url if connection else "",
             "api_token_configured": bool(connection.api_token) if connection else False,
             "httpql_reference": {
-                "host_filter_example": 'req.host.eq:"pirate.htb"',
+                "host_filter_example": 'req.host.eq:"target.htb"',
                 "status_filter_example": "resp.code.gte:400",
                 "token_hunt_example": 'resp.raw.cont:"api_key" OR resp.raw.cont:"secret" OR resp.raw.cont:"token"',
             },

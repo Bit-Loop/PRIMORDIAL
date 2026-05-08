@@ -10,7 +10,9 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from primordial.app.runtime import PrimordialRuntime
+from primordial.core.doctor import dumps_doctor_json, format_doctor_report, run_doctor
 from primordial.core.domain.enums import MethodologyName, ScopeProfile
+from primordial.core.startup import StartupPreflightError, run_startup_preflight
 from primordial.core.web import serve_web_console
 from primordial.ui.textual_app import launch_tui, render_dashboard_text, render_scope_text
 
@@ -21,6 +23,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     tick = subparsers.add_parser("tick", help="Run one orchestration tick.")
     tick.add_argument("--max-executions", type=int, default=3)
+
+    repair = subparsers.add_parser("repair", help="Recover stale execution state without running tools by default.")
+    repair.add_argument("--tick", action="store_true", help="Run one orchestration tick after repair.")
+    repair.add_argument("--max-executions", type=int, default=1)
 
     run_loop = subparsers.add_parser("run-loop", help="Run repeated orchestration ticks.")
     run_loop.add_argument("--cycles", type=int, default=3)
@@ -38,6 +44,8 @@ def build_parser() -> argparse.ArgumentParser:
     web = subparsers.add_parser("web", help="Launch the HTML5 web control console.")
     web.add_argument("--host", default="127.0.0.1")
     web.add_argument("--port", type=int, default=1337)
+    doctor = subparsers.add_parser("doctor", help="Check V1 Postgres, pgvector, schema, and runtime health.")
+    doctor.add_argument("--json", action="store_true")
 
     models = subparsers.add_parser("models", help="Manage local model residency and benchmarking.")
     models_subparsers = models.add_subparsers(dest="models_command")
@@ -53,7 +61,7 @@ def build_parser() -> argparse.ArgumentParser:
     models_set.add_argument("--json", action="store_true")
     models_eval = models_subparsers.add_parser(
         "evaluate",
-        help="Benchmark installed/local models on safe Primordial code and mock PoC-adaptation tasks.",
+        help="Benchmark installed/local models on safe Primordial code and synthetic PoC-adaptation tasks.",
     )
     models_eval.add_argument("--model", action="append", default=[], help="Model to evaluate. Repeat to compare multiple models.")
     models_eval.add_argument("--limit", type=int, help="Limit auto-selected installed models.")
@@ -64,6 +72,12 @@ def build_parser() -> argparse.ArgumentParser:
     models_eval.add_argument("--csv", type=Path, help="Optional CSV artifact path.")
     models_eval.add_argument("--json-out", type=Path, help="Optional detailed JSON artifact path.")
     models_eval.add_argument("--max-context", type=int, default=32768)
+    models_eval.add_argument(
+        "--temperature",
+        type=float,
+        action="append",
+        help="Temperature to evaluate. Repeat to override the default 0.0 and 0.1 sweep.",
+    )
     models_eval.add_argument("--judge-model", help="Optional supplemental local judge model name.")
     models_eval.add_argument("--json", action="store_true")
 
@@ -92,7 +106,7 @@ def build_parser() -> argparse.ArgumentParser:
     ask.add_argument("--target", help="Target handle or target ID to focus the answer.")
     ask.add_argument("--json", action="store_true")
 
-    credentials = subparsers.add_parser("credentials", help="Manage local Notion, Discord, Caido, and lab credentials.")
+    credentials = subparsers.add_parser("credentials", help="Manage local Notion, Discord, Caido, and known credentials.")
     credentials_subparsers = credentials.add_subparsers(dest="credentials_command")
     credentials_status = credentials_subparsers.add_parser("status", help="Show redacted credential status.")
     credentials_status.add_argument("--json", action="store_true")
@@ -102,7 +116,11 @@ def build_parser() -> argparse.ArgumentParser:
     credentials_notion.add_argument("--version", default="2022-06-28")
     credentials_discord = credentials_subparsers.add_parser("set-discord", help="Set Discord webhook credentials.")
     credentials_discord.add_argument("--webhook-url")
-    credentials_lab = credentials_subparsers.add_parser("set-lab", help="Set HTB/lab credentials for credentialed verification.")
+    credentials_known = credentials_subparsers.add_parser("set-known", help="Set known credentials for credentialed verification.")
+    credentials_known.add_argument("--username")
+    credentials_known.add_argument("--password")
+    credentials_known.add_argument("--domain")
+    credentials_lab = credentials_subparsers.add_parser("set-lab", help="Compatibility alias for set-known.")
     credentials_lab.add_argument("--username")
     credentials_lab.add_argument("--password")
     credentials_lab.add_argument("--domain")
@@ -110,7 +128,7 @@ def build_parser() -> argparse.ArgumentParser:
     credentials_caido.add_argument("--graphql-url")
     credentials_caido.add_argument("--api-token")
     credentials_clear = credentials_subparsers.add_parser("clear", help="Clear credentials for a service.")
-    credentials_clear.add_argument("service", choices=["notion", "discord", "lab", "caido"])
+    credentials_clear.add_argument("service", choices=["notion", "discord", "known", "lab", "caido"])
 
     add_target = subparsers.add_parser("add-target", help="Add or update a single target and its scope assets.")
     add_target.add_argument("handle")
@@ -151,8 +169,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     start_session.add_argument("--title", default="Primordial Session")
 
-    approve = subparsers.add_parser("approve", help="Approve a pending task.")
-    approve.add_argument("task_id")
+    approve = subparsers.add_parser("approve", help="Approve pending tasks.")
+    approve.add_argument("task_id", nargs="?")
+    approve.add_argument("--all-safe", action="store_true", help="Approve queued NEEDS_APPROVAL tasks that current policy now allows.")
+    approve.add_argument("--tick", action="store_true", help="Run one orchestration tick after --all-safe approves tasks.")
+    approve.add_argument("--limit", type=int, default=200)
 
     deny = subparsers.add_parser("deny", help="Deny a pending task.")
     deny.add_argument("task_id")
@@ -163,13 +184,33 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    runtime = PrimordialRuntime.from_env()
-    runtime.initialize()
+    if args.command == "doctor":
+        payload = run_doctor()
+        if args.json:
+            print(dumps_doctor_json(payload))
+        else:
+            print(format_doctor_report(payload))
+        return 0 if payload.get("ok") else 2
+    try:
+        run_startup_preflight()
+        runtime = PrimordialRuntime.from_env()
+        runtime.initialize()
+    except StartupPreflightError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     try:
         command = args.command or "show"
         if command == "tick":
             report = runtime.run_tick(max_executions=args.max_executions)
             print(report.summary)
+            print(render_dashboard_text(runtime))
+            return 0
+        if command == "repair":
+            outcome = runtime.repair_execution_state()
+            if args.tick:
+                report = runtime.run_tick(max_executions=args.max_executions)
+                outcome["tick_summary"] = report.summary
+            print(json.dumps(outcome, indent=2, sort_keys=True))
             print(render_dashboard_text(runtime))
             return 0
         if command == "run-loop":
@@ -224,6 +265,7 @@ def main(argv: list[str] | None = None) -> int:
                     csv_path=args.csv,
                     json_out=args.json_out,
                     max_context=args.max_context,
+                    temperatures=args.temperature,
                     judge_model=args.judge_model,
                 )
                 if args.json:
@@ -263,11 +305,11 @@ def main(argv: list[str] | None = None) -> int:
                 runtime.set_discord_credentials(webhook_url=webhook_url)
                 print(_format_credentials_status(runtime.credentials_payload()))
                 return 0
-            if credentials_command == "set-lab":
-                username = args.username if args.username is not None else input("Lab username: ").strip()
-                password = args.password if args.password is not None else getpass.getpass("Lab password: ").strip()
-                domain = args.domain if args.domain is not None else input("Lab domain (optional): ").strip()
-                runtime.set_lab_credentials(username=username, password=password, domain=domain)
+            if credentials_command in {"set-known", "set-lab"}:
+                username = args.username if args.username is not None else input("Known username: ").strip()
+                password = args.password if args.password is not None else getpass.getpass("Known password: ").strip()
+                domain = args.domain if args.domain is not None else input("Known domain (optional): ").strip()
+                runtime.set_known_credentials(username=username, password=password, domain=domain)
                 print(_format_credentials_status(runtime.credentials_payload()))
                 return 0
             if credentials_command == "set-caido":
@@ -370,6 +412,13 @@ def main(argv: list[str] | None = None) -> int:
             print(render_scope_text(runtime, as_json=args.json))
             return 0
         if command == "approve":
+            if args.all_safe:
+                outcome = runtime.approve_all_safe_tasks(limit=args.limit, run_tick=args.tick)
+                print(json.dumps(outcome, indent=2, sort_keys=True))
+                print(render_dashboard_text(runtime))
+                return 0
+            if not args.task_id:
+                parser.error("approve requires task_id unless --all-safe is used")
             runtime.approve_task(args.task_id, approved=True)
             print(render_dashboard_text(runtime))
             return 0
@@ -472,6 +521,11 @@ def _format_model_evaluation(payload: dict[str, object]) -> str:
     providers = payload.get("providers", [])
     if isinstance(providers, list) and providers:
         lines.append(f"providers={','.join(str(item) for item in providers)}")
+    eval_config = payload.get("eval_config", {})
+    if isinstance(eval_config, dict) and eval_config.get("temperatures"):
+        temperatures = eval_config.get("temperatures", [])
+        if isinstance(temperatures, list):
+            lines.append(f"temperatures={','.join(str(item) for item in temperatures)}")
     artifacts = payload.get("artifacts", {})
     if isinstance(artifacts, dict) and artifacts:
         if artifacts.get("csv_path"):
@@ -484,6 +538,31 @@ def _format_model_evaluation(payload: dict[str, object]) -> str:
         for role in ("local_fast", "local_deep", "local_code", "local_compact"):
             if role in recommendations:
                 lines.append(f"  {role}: {recommendations[role]}")
+    suggestions = payload.get("role_suggestions", [])
+    if isinstance(suggestions, list) and suggestions:
+        lines.append("role suggestions:")
+        for role in ("local_fast", "local_deep", "local_code", "local_compact"):
+            role_items = [
+                item
+                for item in suggestions
+                if isinstance(item, dict)
+                and item.get("role") == role
+                and item.get("status") in {"recommended", "candidate"}
+            ]
+            for item in sorted(role_items, key=lambda entry: (entry.get("rank") or 99, str(entry.get("model") or "")))[:2]:
+                confidence = item.get("confidence")
+                status = item.get("status")
+                model = item.get("recommendation_id") or item.get("model")
+                lines.append(f"  {role}: {model} rank={item.get('rank')} confidence={confidence} status={status}")
+                reasons = item.get("reasons", [])
+                warnings = item.get("warnings", [])
+                detail = []
+                if isinstance(reasons, list) and reasons:
+                    detail.append("; ".join(str(reason) for reason in reasons[:2]))
+                if isinstance(warnings, list) and warnings:
+                    detail.append("warnings: " + "; ".join(str(warning) for warning in warnings[:2]))
+                if detail:
+                    lines.append(f"    {' | '.join(detail)}")
     aggregate_rows = payload.get("aggregate_rows", [])
     if isinstance(aggregate_rows, list) and aggregate_rows:
         lines.append("models:")
@@ -499,6 +578,9 @@ def _format_model_evaluation(payload: dict[str, object]) -> str:
                 f"score={score} latency={latency or '-'}s tok/s={speed or '-'} "
                 f"ctx={row.get('best_context_length') or '-'}"
             )
+            tags = row.get("identified_tags")
+            if tags:
+                lines.append(f"    tags: {tags}")
             notes = row.get("notes")
             if notes:
                 lines.append(f"    notes: {notes}")
@@ -512,9 +594,10 @@ def _format_model_evaluation(payload: dict[str, object]) -> str:
         elapsed_text = f" elapsed={elapsed:.2f}s" if isinstance(elapsed, (int, float)) else ""
         provider = item.get("provider") or "ollama"
         context = f" ctx={item.get('context_length')}" if item.get("context_length") else ""
+        temperature = f" temp={item.get('temperature')}" if item.get("temperature") is not None else ""
         lines.append(
             f"  {status} {provider} {item.get('model')} {item.get('case_id')} "
-            f"score={item.get('score')}{elapsed_text}{context}"
+            f"score={item.get('score')}{elapsed_text}{context}{temperature}"
         )
         reasons = item.get("reasons", [])
         if isinstance(reasons, list) and reasons:

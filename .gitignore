@@ -40,6 +40,7 @@ share/python-wheels/
 # Frontend dependencies and generated build input
 node_modules/
 primordial/core/web/frontend/src/generated-new-gui.jsx
+primordial/core/web/frontend/src/generated-gui.jsx
 MANIFEST
 
 # Virtual environments

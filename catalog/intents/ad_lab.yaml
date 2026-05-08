@@ -1,6 +1,6 @@
 id: ad_lab
-label: AD Lab
-description: AD discovery with selected Kerberos checks under policy.
+label: In-House AD Attack Path
+description: Authorized in-house AD attack-path checks. The ad_lab id is compatibility-only; it does not enable HTB behavior or lab flag collection.
 policy:
   public_poc_research: false
   searchsploit_allowed: false

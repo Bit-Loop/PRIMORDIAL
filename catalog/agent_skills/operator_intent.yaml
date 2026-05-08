@@ -1,5 +1,5 @@
 id: operator_intent_control
-description: Keep chat guidance separate from active operator intent and honor intent-gated task policy.
+description: Keep chat guidance separate from active operator intent, honor intent-gated task policy, and treat ad_lab as in-house AD attack-path compatibility only.
 allowed_intents:
   - recon_only
   - web_triage

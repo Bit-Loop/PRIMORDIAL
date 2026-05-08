@@ -1,0 +1,61 @@
+{
+  "body": "**Target IP Updated**\n- Target: `pirate.htb`\n- Active operator-confirmed IP: `10.129.244.95`\n- Configured IP scope assets: `10.129.47.117`, `10.129.244.95`\n- Prior evidence that references older IPs is historical until recon/service discovery reruns for this active IP.",
+  "created_at": "2026-05-08T00:44:14.600556-05:00",
+  "id": "opmsg_dc3f9ef69e8f",
+  "metadata": {
+    "mode": "operator_state_reducer",
+    "ok": true,
+    "route_model": "deepseek-r1:8b"
+  },
+  "model": "deterministic-state",
+  "role": "assistant",
+  "target": {
+    "created_at": "2026-05-08T00:44:03.418688-05:00",
+    "display_name": "Pirate Fixture",
+    "handle": "pirate.htb",
+    "id": "target_10ab54e532e3",
+    "in_scope": true,
+    "metadata": {
+      "active_ip": "10.129.244.95",
+      "active_ip_generation": 1,
+      "active_ip_source": "operator_chat",
+      "methodology_state": {
+        "blockers": [
+          "Active IP changed to 10.129.244.95, but fresh current-generation service discovery has not completed."
+        ],
+        "candidate_actions": [],
+        "completion": "waiting_on_existing_tasks",
+        "fingerprint": "{\"blockers\": [\"Active IP changed to 10.129.244.95, but fresh current-generation service discovery has not completed.\"], \"candidate_actions\": [], \"completion\": \"waiting_on_existing_tasks\", \"no_progress_reason\": null, \"phase\": \"recon\", \"subphase\": \"recon_scan\"}",
+        "metadata": {
+          "active_ip_generation": "1",
+          "ai_proposal_admission": {
+            "accepted": [],
+            "rejected": []
+          },
+          "current_generation_evidence_count": 0,
+          "verified_interest_count": 0,
+          "waiting_task_count": 7
+        },
+        "next_unblock_action": "Active IP changed to 10.129.244.95, but fresh current-generation service discovery has not completed.",
+        "no_progress_reason": null,
+        "phase": "recon",
+        "planner_version": 2,
+        "retry_budget": {
+          "analyze_evidence": 2,
+          "poc_applicability_validation": 1,
+          "recon_scan": 2,
+          "service_discovery": 1,
+          "verify_agent_behavior": 1
+        },
+        "subphase": "recon_scan",
+        "transition_reason": "Existing pending task is already covering the next methodology step.",
+        "updated_at": "2026-05-08T06:20:09.879417+00:00"
+      },
+      "operator_confirmed_ip": "10.129.244.95",
+      "operator_confirmed_ip_at": "2026-05-08T05:44:14.573387+00:00",
+      "stale_evidence_before": "2026-05-08T05:44:14.573394+00:00"
+    },
+    "profile": "hack_the_box",
+    "updated_at": "2026-05-08T01:20:11.587355-05:00"
+  }
+}

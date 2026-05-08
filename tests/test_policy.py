@@ -145,7 +145,7 @@ class PolicyEngineTests(unittest.TestCase):
             phase=MethodologyPhase.EXPLOITATION,
             kind=TaskKind.CREDENTIALED_ACCESS_CHECK,
             title="Verify credentialed access",
-            summary="Use lab credentials.",
+            summary="Use known credentials.",
             role=AgentRole.EXPLOITATION_WORKER,
             risk_tier=RiskTier.HIGH,
         )

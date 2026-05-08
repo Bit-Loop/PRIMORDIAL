@@ -17,11 +17,15 @@ class CredentialField:
 
 
 class CredentialStore:
+    KNOWN_CREDENTIAL_KEYS = {"username", "password", "domain"}
     FIELDS = (
         CredentialField("notion", "api_key", "NOTION_API_KEY"),
         CredentialField("notion", "parent_page_id", "NOTION_PARENT_PAGE_ID"),
         CredentialField("notion", "version", "NOTION_VERSION"),
         CredentialField("discord", "webhook_url", "DISCORD_WEBHOOK_URL"),
+        CredentialField("known", "username", "PRIMORDIAL_KNOWN_USERNAME"),
+        CredentialField("known", "password", "PRIMORDIAL_KNOWN_PASSWORD"),
+        CredentialField("known", "domain", "PRIMORDIAL_KNOWN_DOMAIN"),
         CredentialField("lab", "username", "PRIMORDIAL_LAB_USERNAME"),
         CredentialField("lab", "password", "PRIMORDIAL_LAB_PASSWORD"),
         CredentialField("lab", "domain", "PRIMORDIAL_LAB_DOMAIN"),
@@ -46,13 +50,16 @@ class CredentialStore:
 
     def get(self, service: str, key: str) -> str:
         field = self._field(service, key)
-        if field.env_name:
-            env_value = os.getenv(field.env_name, "").strip()
-            if env_value:
-                return env_value
         payload = self._read()
-        value = payload.get("services", {}).get(service, {}).get(key, {}).get("value", "")
-        return str(value).strip()
+        alias = self._known_credentials_alias_field(field)
+        fields = [field]
+        if alias is not None:
+            fields = [alias, field] if field.service == "lab" else [field, alias]
+        for candidate in fields:
+            value = self._field_value(payload, candidate)
+            if value:
+                return value
+        return ""
 
     def update_service(self, service: str, values: dict[str, str]) -> dict[str, object]:
         payload = self._read()
@@ -87,20 +94,15 @@ class CredentialStore:
 
     def status(self) -> dict[str, object]:
         payload = self._read()
-        services = payload.get("services", {})
         result: dict[str, object] = {"path": str(self.path), "services": {}}
         for field in self.FIELDS:
             service_status = result["services"].setdefault(field.service, {})  # type: ignore[union-attr]
-            env_value = os.getenv(field.env_name or "", "").strip() if field.env_name else ""
-            stored_entry = services.get(field.service, {}).get(field.key, {})
-            stored_value = str(stored_entry.get("value", "")).strip() if isinstance(stored_entry, dict) else ""
-            value = env_value or stored_value
-            source = "environment" if env_value else "local_store" if stored_value else "missing"
+            source, value, stored_entry = self._field_status_value(payload, field)
             service_status[field.key] = {
                 "configured": bool(value),
                 "source": source,
                 "hint": self._redact(value),
-                "updated_at": stored_entry.get("updated_at") if isinstance(stored_entry, dict) and stored_value else None,
+                "updated_at": stored_entry.get("updated_at") if isinstance(stored_entry, dict) and value else None,
             }
         return result
 
@@ -109,6 +111,53 @@ class CredentialStore:
             if field.service == service and field.key == key:
                 return field
         raise ValueError(f"unsupported credential field: {service}.{key}")
+
+    def _field_value(self, payload: dict[str, Any], field: CredentialField) -> str:
+        if field.env_name:
+            env_value = os.getenv(field.env_name, "").strip()
+            if env_value:
+                return env_value
+        services = payload.get("services", {})
+        stored_entry = services.get(field.service, {}).get(field.key, {}) if isinstance(services, dict) else {}
+        stored_value = str(stored_entry.get("value", "")).strip() if isinstance(stored_entry, dict) else ""
+        return stored_value
+
+    def _field_status_value(self, payload: dict[str, Any], field: CredentialField) -> tuple[str, str, dict[str, Any]]:
+        source, value, stored_entry = self._direct_field_status_value(payload, field)
+        if value:
+            return source, value, stored_entry
+        alias = self._known_credentials_alias_field(field)
+        if alias is None:
+            return source, value, stored_entry
+        alias_source, alias_value, alias_entry = self._direct_field_status_value(payload, alias)
+        if not alias_value:
+            return source, value, stored_entry
+        return f"{alias_source}_alias:{alias.service}", alias_value, alias_entry
+
+    def _direct_field_status_value(
+        self,
+        payload: dict[str, Any],
+        field: CredentialField,
+    ) -> tuple[str, str, dict[str, Any]]:
+        services = payload.get("services", {})
+        stored_entry = services.get(field.service, {}).get(field.key, {}) if isinstance(services, dict) else {}
+        if field.env_name:
+            env_value = os.getenv(field.env_name, "").strip()
+            if env_value:
+                return "environment", env_value, stored_entry if isinstance(stored_entry, dict) else {}
+        stored_value = str(stored_entry.get("value", "")).strip() if isinstance(stored_entry, dict) else ""
+        if stored_value:
+            return "local_store", stored_value, stored_entry
+        return "missing", "", stored_entry if isinstance(stored_entry, dict) else {}
+
+    def _known_credentials_alias_field(self, field: CredentialField) -> CredentialField | None:
+        if field.key not in self.KNOWN_CREDENTIAL_KEYS:
+            return None
+        if field.service == "known":
+            return self._field("lab", field.key)
+        if field.service == "lab":
+            return self._field("known", field.key)
+        return None
 
     def _read(self) -> dict[str, Any]:
         if not self.path.exists():

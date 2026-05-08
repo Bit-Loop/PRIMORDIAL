@@ -61,9 +61,11 @@ def json_ready(value: Any) -> Any:
     return value
 
 
-def parse_datetime(value: str | None) -> datetime:
+def parse_datetime(value: str | datetime | None) -> datetime:
     if not value:
         return utc_now()
+    if isinstance(value, datetime):
+        return value
     return datetime.fromisoformat(value)
 
 
