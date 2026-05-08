@@ -38,6 +38,11 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
   const [interval, setInterval] = useStateD(D.runtime.executionMode?.interval_seconds || 30);
   const [tuning, setTuning] = useStateD(D.runtime.runtimeTuning || {});
   const [credentialDraft, setCredentialDraft] = useStateD({});
+  const [modelDraft, setModelDraft] = useStateD({});
+  const [processorDraft, setProcessorDraft] = useStateD({});
+  const [targetDraft, setTargetDraft] = useStateD({});
+  const [scopeImport, setScopeImport] = useStateD('{\n  "targets": []\n}');
+  const [selfTest, setSelfTest] = useStateD(D.selfTest || null);
 
   useEffectD(() => {
     setAutonomy(D.runtime.autonomy);
@@ -78,6 +83,40 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
 
   const intentOptions = D.runtime.operatorIntent?.intents || [];
   const updateTuning = (key, value) => setTuning(t => ({ ...t, [key]: Number(value) || 0 }));
+  const modelRoles = D.modelPayload?.roles || [];
+  const availableModels = D.modelPayload?.available_models || [];
+  const roleMetric = (role) => D.modelPayload?.role_metrics?.[role] || modelRoles.find(r => r.role === role)?.metrics || {};
+  const saveModels = () => API.post?.('/api/models', { roles: modelDraft, processors: processorDraft });
+  const resetModels = () => { setModelDraft({}); setProcessorDraft({}); };
+  const saveTarget = () => {
+    const assets = String(targetDraft.assets || '').split(/\n|,/).map(v => v.trim()).filter(Boolean);
+    return API.post?.('/api/targets', {
+      handle: targetDraft.handle,
+      display_name: targetDraft.display_name,
+      profile: targetDraft.profile || 'hack_the_box',
+      active_ip: targetDraft.active_ip,
+      in_scope: targetDraft.in_scope !== false,
+      assets,
+    });
+  };
+  const editTarget = (row) => setTargetDraft({
+    handle: row.handle,
+    display_name: row.handle,
+    profile: row.profile,
+    active_ip: row.ip,
+    in_scope: row.status === 'active',
+    assets: (D.scopePayload?.targets || []).find(item => item.target?.handle === row.handle)?.assets?.map(a => a.asset).join('\n') || '',
+  });
+  const importScope = () => {
+    let parsed = {};
+    try { parsed = JSON.parse(scopeImport || '{}'); } catch (err) { return Promise.reject(err); }
+    return API.post?.('/api/scope/import', { profile: parsed.profile || 'hack_the_box', source: 'ops-panel', scope: parsed });
+  };
+  const runSelfTest = async () => {
+    const payload = await API.request?.('/api/self-test');
+    setSelfTest(payload);
+    return payload;
+  };
   const setCredentialValue = (service, key, value) => {
     setCredentialDraft(d => ({ ...d, [service]: { ...(d[service] || {}), [key]: value } }));
   };
@@ -176,7 +215,7 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
             className="fill"
           >
             <div className="tabs" style={{ marginBottom: 10 }}>
-              {['controls', 'models', 'integrations', 'credentials'].map(t => (
+              {['controls', 'models', 'targets', 'scope', 'self test', 'integrations', 'credentials'].map(t => (
                 <button key={t} className={`tab ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)}>{t}</button>
               ))}
             </div>
@@ -232,21 +271,91 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
               </div>
             )}
             {tab === 'models' && (
-              <table className="t">
-                <thead><tr><th>Route</th><th>Model</th><th>Status</th><th>Hot</th><th>Ctx</th><th>Action</th></tr></thead>
-                <tbody>
-                  {D.models.map(m => (
-                    <tr key={m.route}>
-                      <td><span className="strong">{m.route}</span></td>
-                      <td>{m.model}</td>
-                      <td>{m.loaded ? <Pill tone="green">LOADED</Pill> : <Pill tone="gray">COLD</Pill>}</td>
-                      <td>{m.hot ? <Dot tone="cyan" /> : <Dot tone="gray" />}</td>
-                      <td className="dim">{m.ctx ? m.ctx.toLocaleString() : '—'}</td>
-                      <td><button className="btn ghost sm" onClick={() => API.action?.('warm-models', { keep_alive: '8h' })}>WARM</button></td>
+              <div className="col gap-8">
+                <table className="t">
+                  <thead><tr><th>Role</th><th>Model</th><th>Processor</th><th>Score</th><th>Pass</th><th>Failures</th><th>Latency</th></tr></thead>
+                  <tbody>
+                    {modelRoles.map(r => {
+                      const m = roleMetric(r.role);
+                      return (
+                        <tr key={r.role}>
+                          <td><span className="strong">{r.label || r.role}</span><div className="dim mono">{r.role}</div></td>
+                          <td>
+                            <select className="input" value={modelDraft[r.role] || r.selected_model || r.default_model || ''} onChange={e => setModelDraft(d => ({ ...d, [r.role]: e.target.value }))}>
+                              {[r.selected_model, r.default_model, ...availableModels].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).map(model => <option key={model} value={model}>{model}</option>)}
+                            </select>
+                          </td>
+                          <td>
+                            <select className="input" value={processorDraft[r.role] || r.processor || r.default_processor || 'gpu'} onChange={e => setProcessorDraft(d => ({ ...d, [r.role]: e.target.value }))}>
+                              <option value="gpu">gpu</option><option value="cpu">cpu</option>
+                            </select>
+                          </td>
+                          <td>{m.aggregate_score != null ? Number(m.aggregate_score).toFixed(3) : '—'}</td>
+                          <td>{m.pass_rate != null ? `${Math.round(Number(m.pass_rate) * 100)}%` : '—'}</td>
+                          <td className="dim">{m.hallucination_count || 0} halluc. · {m.unsafe_compliance_failures || 0} unsafe</td>
+                          <td className="dim">{m.avg_latency_sec ? `${Number(m.avg_latency_sec).toFixed(1)}s` : '—'}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                <div className="row gap-6">
+                  <button className="btn primary sm" onClick={saveModels}>SAVE ROLES</button>
+                  <button className="btn ghost sm" onClick={resetModels}>RESET DRAFT</button>
+                  <button className="btn ghost sm" onClick={() => API.action?.('warm-models', { keep_alive: '8h' })}>WARM</button>
+                  <button className="btn ghost sm" onClick={() => API.action?.('clear-models')}>CLEAR</button>
+                </div>
+              </div>
+            )}
+            {tab === 'targets' && (
+              <div className="grid" style={{ gridTemplateColumns: 'minmax(0, 1.4fr) minmax(280px, 0.8fr)', gap: 10 }}>
+                <table className="t">
+                  <thead><tr><th>Target</th><th>Profile</th><th>IP</th><th>Assets</th><th>Records</th><th></th></tr></thead>
+                  <tbody>{D.scope.map(row => (
+                    <tr key={row.handle}>
+                      <td><span className="strong">{row.handle}</span><div className="dim mono">{row.status}</div></td>
+                      <td>{row.profile}</td><td>{row.ip || '—'}</td><td>{row.assets}</td>
+                      <td className="dim">{row.evidence} ev · {row.findings} fnd</td>
+                      <td className="row gap-4"><button className="btn ghost sm" onClick={() => editTarget(row)}>EDIT</button><button className="btn danger sm" onClick={() => API.delete?.(`/api/targets/${encodeURIComponent(row.handle)}?profile=${encodeURIComponent(row.profile)}`)}>DELETE</button></td>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  ))}</tbody>
+                </table>
+                <div className="col gap-8" style={{ padding: 10, border: '1px solid var(--line)', borderRadius: 4, background: 'var(--bg-deep)' }}>
+                  <Field label="handle"><input className="input" value={targetDraft.handle || ''} onChange={e => setTargetDraft(d => ({ ...d, handle: e.target.value }))} /></Field>
+                  <Field label="display name"><input className="input" value={targetDraft.display_name || ''} onChange={e => setTargetDraft(d => ({ ...d, display_name: e.target.value }))} /></Field>
+                  <Field label="profile"><input className="input" value={targetDraft.profile || 'hack_the_box'} onChange={e => setTargetDraft(d => ({ ...d, profile: e.target.value }))} /></Field>
+                  <Field label="active ip"><input className="input" value={targetDraft.active_ip || ''} onChange={e => setTargetDraft(d => ({ ...d, active_ip: e.target.value }))} /></Field>
+                  <Field label="assets"><textarea className="input" rows="4" value={targetDraft.assets || ''} onChange={e => setTargetDraft(d => ({ ...d, assets: e.target.value }))} /></Field>
+                  <label className="row gap-6 mono" style={{ fontSize: 11 }}><input type="checkbox" checked={targetDraft.in_scope !== false} onChange={e => setTargetDraft(d => ({ ...d, in_scope: e.target.checked }))} /> in scope</label>
+                  <button className="btn primary sm" onClick={saveTarget}>SAVE TARGET</button>
+                </div>
+              </div>
+            )}
+            {tab === 'scope' && (
+              <div className="grid" style={{ gridTemplateColumns: '260px minmax(0, 1fr)', gap: 10 }}>
+                <div className="grid" style={{ gap: 8 }}>
+                  {Object.entries(D.scopePayload?.totals || {}).map(([k, v]) => <div key={k} className="kpi"><span className="kpi-k">{k}</span><span className="kpi-v">{v}</span></div>)}
+                  {(D.scopeProfiles?.profiles || []).map(p => <div key={p.id} className="row gap-6 mono" style={{ fontSize: 10.5, padding: '6px 0', borderBottom: '1px dashed var(--line)' }}><Pill tone={p.builtin ? 'cyan' : 'green'}>{p.id}</Pill><span className="dim">{p.base_profile}</span></div>)}
+                </div>
+                <div className="col gap-8">
+                  <textarea className="input mono" rows="10" value={scopeImport} onChange={e => setScopeImport(e.target.value)} />
+                  <button className="btn primary sm" onClick={importScope}>IMPORT JSON</button>
+                </div>
+              </div>
+            )}
+            {tab === 'self test' && (
+              <div className="col gap-8">
+                <div className="row gap-8" style={{ alignItems: 'center' }}>
+                  <Pill tone={selfTest?.status === 'pass' ? 'green' : selfTest?.status === 'fail' ? 'red' : 'yellow'}>{(selfTest?.status || 'not run').toUpperCase()}</Pill>
+                  <button className="btn primary sm" onClick={runSelfTest}>RUN SELF TEST</button>
+                </div>
+                <table className="t">
+                  <thead><tr><th>Status</th><th>Check</th><th>Details</th></tr></thead>
+                  <tbody>{(selfTest?.checks || []).map(ch => (
+                    <tr key={ch.id}><td><StatusPill status={ch.status === 'pass' ? 'done' : ch.status === 'fail' ? 'failed' : 'queued'} /></td><td className="strong">{ch.label}</td><td className="dim mono">{JSON.stringify(ch.details || {}).slice(0, 180)}</td></tr>
+                  ))}</tbody>
+                </table>
+              </div>
             )}
             {tab === 'integrations' && (
               <div className="grid" style={{ gridTemplateColumns: 'repeat(2, 1fr)', gap: 10 }}>
@@ -340,6 +449,8 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
               <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: 8, paddingTop: 4, borderTop: '1px dashed var(--line)' }}>
                 <div><div className="kpi-k">net in</div><div className="mono strong">{D.runtime.netIn}</div></div>
                 <div><div className="kpi-k">net out</div><div className="mono strong">{D.runtime.netOut}</div></div>
+                <div><div className="kpi-k">gpu memory</div><div className="mono strong">{D.runtime.gpuMemory?.used_label || 'unavailable'}</div></div>
+                <div><div className="kpi-k">gpu free</div><div className="mono strong">{D.runtime.gpuMemory?.free_label || 'unavailable'}</div></div>
               </div>
             </div>
           </Panel>

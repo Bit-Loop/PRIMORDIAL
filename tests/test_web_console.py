@@ -8,8 +8,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from primordial.config import AppConfig
-from primordial.core.domain.enums import EvidenceType, InterestStatus, ScopeProfile, VerificationStatus
-from primordial.core.domain.models import EvidenceRecord, Interest
+from primordial.core.domain.enums import AgentRole, EvidenceType, InterestStatus, ScopeProfile, VerificationStatus
+from primordial.core.domain.models import AgentTrace, EvidenceRecord, Interest
 from primordial.core.providers.ollama import OllamaModelListResult, OllamaPreloadResult, OllamaResponse
 from primordial.core.web.app import PrimordialWebApp
 from primordial.runtime import PrimordialRuntime
@@ -307,6 +307,54 @@ class WebConsoleTests(unittest.TestCase):
         self.assertNotIn("acme.bug", {item["handle"] for item in payload["scope"]})
         self.assertNotIn("driftnet.io", {item["handle"] for item in payload["scope"]})
         self.assertNotIn("tomcat:s3cret_2024", response.body.decode("utf-8"))
+        self.assertIn("gpuMemory", payload["runtime"])
+        self.assertIn("role_metrics", payload["modelPayload"])
+
+    def test_self_test_is_deterministic_and_does_not_call_generation(self) -> None:
+        with patch.object(self.runtime.ollama, "is_reachable", return_value=False), patch.object(
+            self.runtime.ollama,
+            "list_models",
+            return_value=OllamaModelListResult(ok=True, models=["gemma4:e4b"]),
+        ), patch.object(self.runtime.ollama, "generate") as generate:
+            response = self.app.dispatch("GET", "/api/self-test")
+
+        payload = json.loads(response.body)
+
+        self.assertEqual(response.status, 200)
+        self.assertIn(payload["status"], {"pass", "warn"})
+        self.assertIn("checks", payload)
+        self.assertIn("model_listing", {item["id"] for item in payload["checks"]})
+        generate.assert_not_called()
+
+    def test_control_plane_groups_repeated_traces_and_filters_target_views(self) -> None:
+        target = self.runtime.store.get_target_by_handle("pirate.htb")
+        self.assertIsNotNone(target)
+        assert target is not None
+        self.runtime.register_target(
+            handle="alpha.htb",
+            profile=ScopeProfile.HACK_THE_BOX,
+            assets=["alpha.htb"],
+            emit_event=False,
+        )
+        for _ in range(3):
+            self.runtime.store.insert_trace(
+                AgentTrace(
+                    task_id=None,
+                    role=AgentRole.ANALYSIS_WORKER,
+                    status="completed",
+                    summary="Repeated trace",
+                    metadata={"target": "pirate.htb", "task_type": "analysis.repeat", "model": "fixture"},
+                )
+            )
+
+        response = self.app.dispatch("GET", "/api/control-plane?target=pirate.htb")
+        payload = json.loads(response.body)
+        children = payload["traces"][0]["children"]
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual({item["handle"] for item in payload["scope"]}, {"pirate.htb"})
+        self.assertTrue(any(item["summary"] == "Repeated trace" and item["count"] == 3 for item in children))
+        self.assertTrue(all(pin["kind"] != "target" or "pirate.htb" in pin["label"] for pin in payload["geo"]["pins"]))
 
     def test_target_registration_endpoint_updates_scope(self) -> None:
         response = self.app.dispatch(

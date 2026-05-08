@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 import os
 from urllib import error, request
@@ -27,6 +27,23 @@ class OllamaPreloadResult:
 class OllamaModelListResult:
     ok: bool
     models: list[str]
+    error: str | None = None
+
+
+@dataclass(slots=True)
+class OllamaModelInfo:
+    name: str
+    architecture: str | None = None
+    quantization: str | None = None
+    params: str | None = None
+    size: int | None = None
+    raw: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class OllamaModelInfoListResult:
+    ok: bool
+    models: list[OllamaModelInfo]
     error: str | None = None
 
 
@@ -127,6 +144,10 @@ class OllamaClient:
             return OllamaPreloadResult(model=model, ok=False, error=str(exc))
 
     def list_models(self) -> OllamaModelListResult:
+        result = self.list_model_infos()
+        return OllamaModelListResult(ok=result.ok, models=[item.name for item in result.models], error=result.error)
+
+    def list_model_infos(self) -> OllamaModelInfoListResult:
         req = request.Request(
             f"{self.base_url}/api/tags",
             method="GET",
@@ -136,19 +157,30 @@ class OllamaClient:
             with request.urlopen(req, timeout=10) as response:
                 data = json.loads(response.read().decode("utf-8"))
         except error.URLError as exc:
-            return OllamaModelListResult(ok=False, models=[], error=f"Ollama is not reachable at {self.base_url}: {exc}")
+            return OllamaModelInfoListResult(ok=False, models=[], error=f"Ollama is not reachable at {self.base_url}: {exc}")
         except json.JSONDecodeError as exc:
-            return OllamaModelListResult(ok=False, models=[], error="Ollama returned invalid JSON")
+            return OllamaModelInfoListResult(ok=False, models=[], error="Ollama returned invalid JSON")
         if not isinstance(data, dict):
-            return OllamaModelListResult(ok=False, models=[], error="Ollama returned a non-object JSON payload")
-        models = []
+            return OllamaModelInfoListResult(ok=False, models=[], error="Ollama returned a non-object JSON payload")
+        models: list[OllamaModelInfo] = []
         for item in data.get("models", []):
             if isinstance(item, dict) and item.get("name"):
                 name = str(item["name"])
                 if name.endswith(":cloud"):
                     continue
-                models.append(name)
-        return OllamaModelListResult(ok=True, models=sorted(set(models)))
+                details = item.get("details") if isinstance(item.get("details"), dict) else {}
+                models.append(
+                    OllamaModelInfo(
+                        name=name,
+                        architecture=self._optional_str(details.get("family") or details.get("families")),
+                        quantization=self._optional_str(details.get("quantization_level")),
+                        params=self._optional_str(details.get("parameter_size")),
+                        size=self._optional_int(item.get("size")),
+                        raw=dict(item),
+                    )
+                )
+        deduped = {item.name: item for item in models}
+        return OllamaModelInfoListResult(ok=True, models=[deduped[name] for name in sorted(deduped)])
 
     def is_reachable(self, *, timeout_seconds: float = 0.25) -> bool:
         req = request.Request(
@@ -180,3 +212,20 @@ class OllamaClient:
         if not isinstance(data, dict):
             raise RuntimeError("Ollama returned a non-object JSON payload")
         return data
+
+    def _optional_str(self, value: object) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    def _optional_int(self, value: object) -> int | None:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        if isinstance(value, str) and value.strip().isdigit():
+            return int(value.strip())
+        return None

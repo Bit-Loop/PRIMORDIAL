@@ -56,6 +56,7 @@ from primordial.core.orchestration.verifier import BehaviorVerifier
 from primordial.core.orchestration.workflow import WorkflowOrchestrator
 from primordial.core.primitives.catalog import PrimitiveCatalog
 from primordial.core.providers.router import ProviderRouter
+from primordial.core.providers.lmstudio import LMStudioClient
 from primordial.core.providers.ollama import OllamaClient
 from primordial.core.providers.model_eval import ModelEvaluationService
 from primordial.core.recovery.crash_journal import CrashJournal
@@ -145,6 +146,7 @@ class PrimordialRuntime:
         self.worker_broker = WorkerBroker(self.event_bus)
         self._metrics_lock = RLock()
         self._cpu_sample: tuple[int, int] | None = None
+        self._network_sample: tuple[int, int, float] | None = None
         self._system_metrics_cache: dict[str, object] | None = None
         self._system_metrics_cache_at = 0.0
         self._register_modules()
@@ -554,6 +556,7 @@ class PrimordialRuntime:
                 "updated_at": utc_now().isoformat(),
                 "cpu": self._read_cpu_metrics(),
                 "gpu": self._read_gpu_metrics(),
+                "network": self._read_network_metrics(now),
             }
             self._system_metrics_cache = payload
             self._system_metrics_cache_at = now
@@ -1899,6 +1902,7 @@ class PrimordialRuntime:
         installed = self.ollama.list_models()
         selected = self._current_model_roles()
         processors = self._current_model_role_processors()
+        role_metrics = self.store.latest_model_eval_role_metrics()
         available_models = list(installed.models)
         for model in selected.values():
             if model and model not in available_models:
@@ -1917,6 +1921,7 @@ class PrimordialRuntime:
                     "num_gpu": self._processor_num_gpu(processors[role]),
                     "default_processor": config["processor"],
                     "processor_options": ["gpu", "cpu"],
+                    "metrics": role_metrics.get(role),
                 }
             )
         return {
@@ -1927,6 +1932,8 @@ class PrimordialRuntime:
             },
             "available_models": available_models,
             "roles": roles,
+            "role_metrics": role_metrics,
+            "eval_history": self.store.list_model_eval_history(limit=10),
         }
 
     def update_model_roles(
@@ -1977,18 +1984,55 @@ class PrimordialRuntime:
         limit: int | None = None,
         include_outputs: bool = False,
         processor: str = "cpu",
+        providers: list[str] | None = None,
+        exhaustive: bool = False,
+        max_context: int = 32768,
+        judge_model: str | None = None,
+        csv_path: str | Path | None = None,
+        json_out: str | Path | None = None,
     ) -> dict[str, object]:
         selected_processor = str(processor).strip().lower()
         if selected_processor not in {"cpu", "gpu"}:
             raise ValueError("processor must be cpu or gpu")
-        evaluator = ModelEvaluationService(self.ollama)
+        provider_names = providers or ["ollama"]
+        normalized_providers = []
+        for item in provider_names:
+            for provider in str(item).split(","):
+                clean = provider.strip().lower()
+                if clean in {"ollama", "lmstudio"} and clean not in normalized_providers:
+                    normalized_providers.append(clean)
+        normalized_providers = normalized_providers or ["ollama"]
+        lmstudio = LMStudioClient() if "lmstudio" in normalized_providers else None
+        evaluator = ModelEvaluationService(self.ollama, lmstudio=lmstudio)
         summary = evaluator.evaluate(
             models=models,
             limit=limit,
             include_outputs=include_outputs,
             num_gpu=self._processor_num_gpu(selected_processor),
+            providers=normalized_providers,
+            exhaustive=exhaustive,
+            max_context=max_context,
+            judge_model=judge_model,
+        )
+        artifacts = evaluator.write_artifacts(
+            summary,
+            output_dir=self.config.artifacts_dir / "model_eval",
+            csv_path=Path(csv_path) if csv_path else None,
+            json_path=Path(json_out) if json_out else None,
         )
         payload = summary.as_payload()
+        run_id = self.store.insert_model_eval_ledger(
+            summary=payload,
+            artifacts=artifacts,
+            metadata={
+                "processor": selected_processor,
+                "providers": normalized_providers,
+                "max_context": max_context,
+                "exhaustive": exhaustive,
+                "judge_model": judge_model or "",
+            },
+        )
+        payload["ledger_run_id"] = run_id
         self.store.insert_event(
             EventRecord(
                 type=EventType.BOOTSTRAP,
@@ -1997,10 +2041,37 @@ class PrimordialRuntime:
                     "models": payload["models"],
                     "recommendations": payload["recommendations"],
                     "processor": selected_processor,
+                    "providers": normalized_providers,
+                    "artifacts": artifacts,
                 },
             )
         )
         return payload
+
+    def self_test_payload(self) -> dict[str, object]:
+        checks = [
+            self._self_test_database(),
+            self._self_test_runtime_dirs(),
+            self._self_test_scope(),
+            self._self_test_metrics(),
+            self._self_test_model_listing(),
+            self._self_test_credentials_redacted(),
+            self._self_test_core_payloads(),
+            self._self_test_execution_repair(),
+        ]
+        failed = [item for item in checks if item["status"] == "fail"]
+        warnings = [item for item in checks if item["status"] == "warn"]
+        status = "fail" if failed else "warn" if warnings else "pass"
+        return {
+            "status": status,
+            "generated_at": utc_now().isoformat(),
+            "checks": checks,
+            "summary": {
+                "pass": sum(1 for item in checks if item["status"] == "pass"),
+                "warn": len(warnings),
+                "fail": len(failed),
+            },
+        }
 
     def warm_model_routes(self, *, keep_alive: str = "8h") -> dict[str, object]:
         route_models = {
@@ -3235,6 +3306,128 @@ class PrimordialRuntime:
             value = default
         return max(minimum, value)
 
+    def _self_test_database(self) -> dict[str, object]:
+        try:
+            with self.store.connect() as connection:
+                row = connection.execute("SELECT 1 AS ok").fetchone()
+            ok = bool(row and int(row["ok"]) == 1)
+            return {"id": "db", "label": "Database reachable", "status": "pass" if ok else "fail", "details": {}}
+        except Exception as exc:  # noqa: BLE001 - self-test reports all failures as data
+            return {"id": "db", "label": "Database reachable", "status": "fail", "details": {"error": str(exc)}}
+
+    def _self_test_runtime_dirs(self) -> dict[str, object]:
+        dirs = [
+            self.config.runtime_dir,
+            self.config.artifacts_dir,
+            self.config.checkpoints_dir,
+            self.config.chat_logs_dir,
+            self.config.findings_dir,
+        ]
+        results = []
+        for directory in dirs:
+            try:
+                directory.mkdir(parents=True, exist_ok=True)
+                probe = directory / ".primordial_self_test"
+                probe.write_text("ok\n", encoding="utf-8")
+                probe.unlink(missing_ok=True)
+                results.append({"path": str(directory), "writable": True})
+            except OSError as exc:
+                results.append({"path": str(directory), "writable": False, "error": str(exc)})
+        status = "pass" if all(item["writable"] for item in results) else "fail"
+        return {"id": "runtime_dirs", "label": "Runtime directories writable", "status": status, "details": {"dirs": results}}
+
+    def _self_test_scope(self) -> dict[str, object]:
+        scope = self.scope_payload()
+        totals = scope.get("totals", {}) if isinstance(scope.get("totals"), dict) else {}
+        target_count = int(totals.get("targets", 0) or 0)
+        status = "pass" if target_count else "warn"
+        return {"id": "scope", "label": "Target scope present", "status": status, "details": totals}
+
+    def _self_test_metrics(self) -> dict[str, object]:
+        metrics = self.system_metrics_payload(force_refresh=True)
+        cpu = metrics.get("cpu", {}) if isinstance(metrics.get("cpu"), dict) else {}
+        network = metrics.get("network", {}) if isinstance(metrics.get("network"), dict) else {}
+        ok = bool(cpu.get("available")) and bool(network.get("available"))
+        return {
+            "id": "metrics",
+            "label": "Host metrics available",
+            "status": "pass" if ok else "warn",
+            "details": {
+                "cpu": bool(cpu.get("available")),
+                "memory": cpu.get("memory"),
+                "network": network,
+                "gpu": metrics.get("gpu", {}),
+            },
+        }
+
+    def _self_test_model_listing(self) -> dict[str, object]:
+        details: dict[str, object] = {}
+        if self.ollama.is_reachable(timeout_seconds=0.5):
+            ollama = self.ollama.list_models()
+            details["ollama"] = {
+                "ok": ollama.ok,
+                "count": len(ollama.models),
+                "base_url": self.ollama.base_url,
+                "error": ollama.error,
+            }
+        else:
+            details["ollama"] = {
+                "ok": False,
+                "count": 0,
+                "base_url": self.ollama.base_url,
+                "error": "Ollama tags endpoint is not reachable",
+            }
+        lmstudio = LMStudioClient(timeout_seconds=1).list_models()
+        details["lmstudio"] = {
+            "ok": lmstudio.ok,
+            "count": len(lmstudio.models),
+            "error": lmstudio.error,
+        }
+        ollama_details = details.get("ollama", {}) if isinstance(details.get("ollama"), dict) else {}
+        status = "pass" if bool(ollama_details.get("ok")) or lmstudio.ok else "warn"
+        return {"id": "model_listing", "label": "Model provider listing reachable", "status": status, "details": details}
+
+    def _self_test_credentials_redacted(self) -> dict[str, object]:
+        payload = self.credentials_payload()
+        serialized = json.dumps(payload, sort_keys=True)
+        leaked = [token for token in ("api_key", "password", "token", "webhook") if f"secret_{token}" in serialized]
+        return {
+            "id": "credentials",
+            "label": "Credentials redacted",
+            "status": "fail" if leaked else "pass",
+            "details": {"services": list((payload.get("services", {}) if isinstance(payload.get("services"), dict) else {}).keys())},
+        }
+
+    def _self_test_core_payloads(self) -> dict[str, object]:
+        checks: dict[str, bool] = {}
+        try:
+            checks["health"] = self.health_payload().get("status") == "ok"
+            checks["scope"] = "targets" in self.scope_payload()
+            checks["work_status"] = "summary" in self.work_status_payload()
+            checks["models"] = "roles" in self.models_payload()
+        except Exception as exc:  # noqa: BLE001 - self-test reports payload failures
+            return {"id": "core_payloads", "label": "Core web payloads healthy", "status": "fail", "details": {"error": str(exc), "checks": checks}}
+        return {
+            "id": "core_payloads",
+            "label": "Core web payloads healthy",
+            "status": "pass" if all(checks.values()) else "fail",
+            "details": checks,
+        }
+
+    def _self_test_execution_repair(self) -> dict[str, object]:
+        try:
+            repaired = self.repair_execution_state()
+            running = len(self.store.list_running_task_runs())
+            status = "pass" if running == 0 else "warn"
+            return {
+                "id": "execution_repair",
+                "label": "Stale/running task repair status",
+                "status": status,
+                "details": {"repair": repaired, "running_runs": running},
+            }
+        except Exception as exc:  # noqa: BLE001 - self-test reports repair failure
+            return {"id": "execution_repair", "label": "Stale/running task repair status", "status": "fail", "details": {"error": str(exc)}}
+
     def _read_cpu_metrics(self) -> dict[str, object]:
         cpu_count = max(1, os.cpu_count() or 1)
         load_1 = load_5 = load_15 = 0.0
@@ -3287,6 +3480,13 @@ class PrimordialRuntime:
         memory_percent = None
         if memory_total_mb and memory_available_mb is not None:
             memory_percent = max(0.0, min(100.0, 100.0 * (1.0 - (memory_available_mb / memory_total_mb))))
+        memory = {
+            "percent": round(memory_percent, 1) if memory_percent is not None else 0.0,
+            "used_mb": round(memory_total_mb - memory_available_mb, 1) if memory_total_mb is not None and memory_available_mb is not None else None,
+            "available_mb": round(memory_available_mb, 1) if memory_available_mb is not None else None,
+            "free_mb": round(memory_free_mb, 1) if memory_free_mb is not None else None,
+            "total_mb": round(memory_total_mb, 1) if memory_total_mb is not None else None,
+        }
         return {
             "available": True,
             "percent": round(percent, 1),
@@ -3294,11 +3494,64 @@ class PrimordialRuntime:
             "load_5": round(load_5, 2),
             "load_15": round(load_15, 2),
             "cpu_count": cpu_count,
+            "memory": memory,
             "memory_available_mb": round(memory_available_mb, 1) if memory_available_mb is not None else None,
             "memory_free_mb": round(memory_free_mb, 1) if memory_free_mb is not None else None,
             "memory_total_mb": round(memory_total_mb, 1) if memory_total_mb is not None else None,
             "memory_percent": round(memory_percent, 1) if memory_percent is not None else None,
         }
+
+    def _read_network_metrics(self, now: float) -> dict[str, object]:
+        try:
+            rx_total = 0
+            tx_total = 0
+            with Path("/proc/net/dev").open("r", encoding="utf-8") as handle:
+                for line in handle.readlines()[2:]:
+                    name, _, counters = line.partition(":")
+                    iface = name.strip()
+                    if not iface or iface == "lo":
+                        continue
+                    fields = counters.split()
+                    if len(fields) < 16:
+                        continue
+                    rx_total += int(fields[0])
+                    tx_total += int(fields[8])
+        except (OSError, ValueError):
+            return {
+                "available": False,
+                "rx_bytes_per_sec": 0.0,
+                "tx_bytes_per_sec": 0.0,
+                "rx_label": "0 B/s",
+                "tx_label": "0 B/s",
+            }
+        previous = self._network_sample
+        self._network_sample = (rx_total, tx_total, now)
+        rx_rate = tx_rate = 0.0
+        if previous is not None:
+            elapsed = max(0.001, now - previous[2])
+            rx_rate = max(0.0, (rx_total - previous[0]) / elapsed)
+            tx_rate = max(0.0, (tx_total - previous[1]) / elapsed)
+        return {
+            "available": True,
+            "rx_bytes": rx_total,
+            "tx_bytes": tx_total,
+            "rx_bytes_per_sec": round(rx_rate, 2),
+            "tx_bytes_per_sec": round(tx_rate, 2),
+            "rx_label": self._bytes_per_second_label(rx_rate),
+            "tx_label": self._bytes_per_second_label(tx_rate),
+        }
+
+    def _bytes_per_second_label(self, value: float) -> str:
+        units = ("B/s", "KB/s", "MB/s", "GB/s")
+        current = float(value)
+        unit = units[0]
+        for unit in units:
+            if current < 1024.0 or unit == units[-1]:
+                break
+            current /= 1024.0
+        if unit == "B/s":
+            return f"{int(current)} {unit}"
+        return f"{current:.1f} {unit}"
 
     def _read_gpu_metrics(self) -> dict[str, object]:
         nvidia_smi = shutil.which("nvidia-smi")

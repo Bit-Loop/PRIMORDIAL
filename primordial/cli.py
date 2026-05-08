@@ -39,7 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
     web.add_argument("--host", default="127.0.0.1")
     web.add_argument("--port", type=int, default=1337)
 
-    models = subparsers.add_parser("models", help="Manage local Ollama model residency.")
+    models = subparsers.add_parser("models", help="Manage local model residency and benchmarking.")
     models_subparsers = models.add_subparsers(dest="models_command")
     models_warm = models_subparsers.add_parser("warm", help="Preload configured local model routes into Ollama.")
     models_warm.add_argument("--keep-alive", default="8h")
@@ -59,6 +59,12 @@ def build_parser() -> argparse.ArgumentParser:
     models_eval.add_argument("--limit", type=int, help="Limit auto-selected installed models.")
     models_eval.add_argument("--processor", choices=["gpu", "cpu"], default="cpu")
     models_eval.add_argument("--include-outputs", action="store_true")
+    models_eval.add_argument("--providers", default="ollama", help="Comma-separated providers: ollama,lmstudio.")
+    models_eval.add_argument("--exhaustive", action="store_true", help="Sweep supported context lengths up to --max-context.")
+    models_eval.add_argument("--csv", type=Path, help="Optional CSV artifact path.")
+    models_eval.add_argument("--json-out", type=Path, help="Optional detailed JSON artifact path.")
+    models_eval.add_argument("--max-context", type=int, default=32768)
+    models_eval.add_argument("--judge-model", help="Optional supplemental local judge model name.")
     models_eval.add_argument("--json", action="store_true")
 
     caido = subparsers.add_parser("caido", help="Inspect Caido integration status.")
@@ -213,6 +219,12 @@ def main(argv: list[str] | None = None) -> int:
                     limit=args.limit,
                     include_outputs=args.include_outputs,
                     processor=args.processor,
+                    providers=args.providers.split(","),
+                    exhaustive=args.exhaustive,
+                    csv_path=args.csv,
+                    json_out=args.json_out,
+                    max_context=args.max_context,
+                    judge_model=args.judge_model,
                 )
                 if args.json:
                     print(json.dumps(payload, indent=2, sort_keys=True))
@@ -457,21 +469,52 @@ def _format_models_status(payload: dict[str, object]) -> str:
 
 def _format_model_evaluation(payload: dict[str, object]) -> str:
     lines = ["Model evaluation:"]
+    providers = payload.get("providers", [])
+    if isinstance(providers, list) and providers:
+        lines.append(f"providers={','.join(str(item) for item in providers)}")
+    artifacts = payload.get("artifacts", {})
+    if isinstance(artifacts, dict) and artifacts:
+        if artifacts.get("csv_path"):
+            lines.append(f"csv={artifacts.get('csv_path')}")
+        if artifacts.get("json_path"):
+            lines.append(f"json={artifacts.get('json_path')}")
     recommendations = payload.get("recommendations", {})
     if isinstance(recommendations, dict) and recommendations:
         lines.append("recommendations:")
-        for category, model in sorted(recommendations.items()):
-            lines.append(f"  {category}: {model}")
+        for role in ("local_fast", "local_deep", "local_code", "local_compact"):
+            if role in recommendations:
+                lines.append(f"  {role}: {recommendations[role]}")
+    aggregate_rows = payload.get("aggregate_rows", [])
+    if isinstance(aggregate_rows, list) and aggregate_rows:
+        lines.append("models:")
+        for row in aggregate_rows:
+            if not isinstance(row, dict):
+                continue
+            score = row.get("aggregate_score")
+            latency = row.get("avg_latency_sec")
+            speed = row.get("avg_tokens_sec")
+            role = row.get("role_recommendation") or "-"
+            lines.append(
+                f"  {row.get('provider')} {row.get('model')} roles={role} "
+                f"score={score} latency={latency or '-'}s tok/s={speed or '-'} "
+                f"ctx={row.get('best_context_length') or '-'}"
+            )
+            notes = row.get("notes")
+            if notes:
+                lines.append(f"    notes: {notes}")
+        return "\n".join(lines)
     lines.append("results:")
     for item in payload.get("results", []):
-        if not isinstance(item, dict):
+        if not isinstance(item, dict) or item.get("stage") not in {None, "eval"}:
             continue
         status = "PASS" if item.get("passed") else "FAIL"
         elapsed = item.get("elapsed_seconds")
         elapsed_text = f" elapsed={elapsed:.2f}s" if isinstance(elapsed, (int, float)) else ""
+        provider = item.get("provider") or "ollama"
+        context = f" ctx={item.get('context_length')}" if item.get("context_length") else ""
         lines.append(
-            f"  {status} {item.get('model')} {item.get('case_id')} "
-            f"score={item.get('score')}{elapsed_text}"
+            f"  {status} {provider} {item.get('model')} {item.get('case_id')} "
+            f"score={item.get('score')}{elapsed_text}{context}"
         )
         reasons = item.get("reasons", [])
         if isinstance(reasons, list) and reasons:

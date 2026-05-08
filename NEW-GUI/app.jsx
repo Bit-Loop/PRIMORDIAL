@@ -16,6 +16,7 @@ const EMPTY_PD_DATA = {
     autonomy: 'assisted', intent: 'recon_only', health: 'LOADING', uptime: 'live',
     cpu: 0, gpu: 0, mem: 0, diskWrites: 0, netIn: '0 B/s', netOut: '0 B/s',
     activeTasks: 0, queued: 0, approvals: 0,
+    gpuMemory: { percent: 0, used_label: 'unavailable', free_label: 'unavailable' },
     executionMode: { mode: 'tick', interval_seconds: 30, available_modes: ['tick', 'continuous'] },
     runtimeTuning: {
       gpu_ai_timeout_seconds: 120, cpu_ai_timeout_seconds: 300, stale_run_timeout_seconds: 3600,
@@ -25,14 +26,16 @@ const EMPTY_PD_DATA = {
     workStatus: { counts: { active: 0, queued: 0, waiting: 0 }, summary: 'Loading runtime state.' },
   },
   models: [],
-  modelPayload: { available_models: [], roles: [], ollama: {} },
+  modelPayload: { available_models: [], roles: [], role_metrics: {}, eval_history: [], ollama: {} },
   tasks: [],
   approvals: [],
   events: [],
   scope: [],
   scopePayload: { targets: [], totals: {} },
+  scopeProfiles: { profiles: [] },
   graph: { nodes: [], edges: [] },
   traces: [{ id: 'tr_root', kind: 'workflow.runtime', status: 'queued', time: 'live', summary: 'No trace data yet.', children: [] }],
+  traceMeta: { selectedTarget: '', targetOptions: [{ id: '', label: 'All targets' }], grouped: true, defaultLimit: 40 },
   geo: { pins: [], traces: [], asns: [] },
   plan: {
     methodology: { id: 'runtime', label: 'Runtime', description: '', phases: [] },
@@ -51,6 +54,7 @@ const EMPTY_PD_DATA = {
   inquiryChat: [],
   signals: [],
   credentials: { services: {} },
+  selfTest: null,
 };
 
 function mergePDData(payload) {
@@ -62,6 +66,7 @@ function mergePDData(payload) {
   next.runtime.workStatus = { ...EMPTY_PD_DATA.runtime.workStatus, ...(payload?.runtime?.workStatus || {}) };
   next.graph = { ...EMPTY_PD_DATA.graph, ...(payload?.graph || {}) };
   next.geo = { ...EMPTY_PD_DATA.geo, ...(payload?.geo || {}) };
+  next.traceMeta = { ...EMPTY_PD_DATA.traceMeta, ...(payload?.traceMeta || {}) };
   next.plan = { ...EMPTY_PD_DATA.plan, ...(payload?.plan || {}) };
   next.plan.methodology = { ...EMPTY_PD_DATA.plan.methodology, ...(payload?.plan?.methodology || {}) };
   next.plan.intent = { ...EMPTY_PD_DATA.plan.intent, ...(payload?.plan?.intent || {}) };

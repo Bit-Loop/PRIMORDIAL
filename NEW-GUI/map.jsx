@@ -97,7 +97,7 @@ function GraphSub() {
   const stageRef = useRefM(null);
   const [pan, setPan] = useStateM({ x: 0, y: 0 });
   const [zoom, setZoom] = useStateM(1);
-  const [sel, setSel] = useStateM('finding_1');
+  const [sel, setSel] = useStateM(D.graph.nodes[0]?.id || '');
   const [nodePositions, setNodePositions] = useStateM(() => {
     const o = {};
     D.graph.nodes.forEach(n => { o[n.id] = { x: n.x, y: n.y }; });
@@ -290,25 +290,7 @@ function GraphSub() {
               </div>
             </div>
 
-            <div>
-              <div className="upper" style={{ marginBottom: 6 }}>related findings</div>
-              <div className="col gap-4">
-                {[
-                  { sev: 'high', t: 'Tomcat default manager exposed', id: 'fnd_001' },
-                  { sev: 'med',  t: 'AS-REP roastable user discovered', id: 'fnd_002' },
-                ].map(f => (
-                  <div key={f.id} className="row gap-6" style={{ padding: '6px 8px', border: '1px solid var(--line)', borderRadius: 4, background: 'var(--bg-deep)', alignItems: 'center' }}>
-                    <Pill tone={f.sev === 'high' ? 'red' : 'yellow'}>{f.sev.toUpperCase()}</Pill>
-                    <span className="strong" style={{ flex: 1, fontSize: 11.5 }}>{f.t}</span>
-                    <span className="dim mono" style={{ fontSize: 10 }}>{f.id}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
             <div className="row gap-6">
-              <button className="btn primary sm">RUN PROBE</button>
-              <button className="btn sm">ADD INTEREST</button>
               <button className="btn ghost sm" style={{ marginLeft: 'auto' }}>EXPAND ↗</button>
             </div>
           </div>
@@ -321,7 +303,7 @@ function GraphSub() {
 /* =========================================================
    TRACES SUB-MODE — AI/event tree, pass/fail per task kind
    ========================================================= */
-function TraceRow({ row, depth = 0, isLast = false }) {
+function TraceRow({ row, depth = 0, isLast = false, selectedId = '', onSelect }) {
   const [open, setOpen] = useStateM(true);
   const hasChildren = row.children && row.children.length > 0;
   const sym = {
@@ -329,7 +311,7 @@ function TraceRow({ row, depth = 0, isLast = false }) {
   }[row.status] || '·';
   return (
     <>
-      <div className={`trace-row ${row.status} ${isLast ? 'last' : ''}`}>
+      <div className={`trace-row ${row.status} ${isLast ? 'last' : ''}`} onClick={() => onSelect?.(row)} style={{ cursor: 'pointer' }}>
         {depth > 0 && <span className="branch"></span>}
         <span className="marker">{sym}</span>
         <span className="kind" onClick={() => hasChildren && setOpen(o => !o)} style={{ cursor: hasChildren ? 'pointer' : 'default' }}>
@@ -338,6 +320,7 @@ function TraceRow({ row, depth = 0, isLast = false }) {
         <span className="summary">{row.summary}</span>
         <span className="meta">
           {row.task && <span style={{ color: 'var(--txt-mute)' }}>{row.task} · </span>}
+          {row.count > 1 && <span style={{ color: 'var(--yellow)' }}>{row.count}x · </span>}
           {row.route && <span style={{ color: 'var(--violet)' }}>{row.route}</span>}
           {row.time && row.time !== '—' && <span style={{ color: 'var(--txt-mute)' }}> · {row.time}</span>}
         </span>
@@ -345,7 +328,7 @@ function TraceRow({ row, depth = 0, isLast = false }) {
       {hasChildren && open && (
         <div className="trace-children">
           {row.children.map((c, i) => (
-            <TraceRow key={c.id} row={c} depth={depth + 1} isLast={i === row.children.length - 1} />
+            <TraceRow key={c.id} row={c} depth={depth + 1} isLast={i === row.children.length - 1} selectedId={selectedId} onSelect={onSelect} />
           ))}
         </div>
       )}
@@ -356,6 +339,9 @@ function TraceRow({ row, depth = 0, isLast = false }) {
 function TracesSub() {
   const D = window.PD_DATA;
   const [filter, setFilter] = useStateM({ pass: true, fail: true, partial: true, run: true, queued: true, gated: true });
+  const [showRepeats, setShowRepeats] = useStateM(false);
+  const [kindFilter, setKindFilter] = useStateM('');
+  const [selected, setSelected] = useStateM(null);
   const counts = useMemoM(() => {
     const c = { pass: 0, fail: 0, partial: 0, run: 0, queued: 0, gated: 0 };
     const walk = (n) => { c[n.status] = (c[n.status] || 0) + 1; (n.children || []).forEach(walk); };
@@ -364,6 +350,18 @@ function TracesSub() {
   }, [D.traces]);
 
   const tonesFor = { pass: 'green', fail: 'red', partial: 'yellow', run: 'cyan', queued: 'mute', gated: 'violet' };
+  const filteredTraces = useMemoM(() => {
+    const copyNode = (node) => {
+      const children = (node.children || []).map(copyNode).filter(Boolean);
+      const visible = filter[node.status] !== false
+        && (showRepeats || !node.repeated)
+        && (!kindFilter || String(node.kind || '').includes(kindFilter));
+      if (!visible && !children.length) return null;
+      return { ...node, children };
+    };
+    return D.traces.map(copyNode).filter(Boolean);
+  }, [D.traces, filter, showRepeats, kindFilter]);
+  const selectedTrace = selected || filteredTraces[0]?.children?.[0] || filteredTraces[0] || null;
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
@@ -379,6 +377,8 @@ function TracesSub() {
               <Dot tone={tonesFor[k]}/> {k} <span className="dim mono" style={{ marginLeft: 4 }}>{counts[k] || 0}</span>
             </button>
           ))}
+          <label className="row gap-4 mono" style={{ fontSize: 10.5 }}><input type="checkbox" checked={showRepeats} onChange={e => setShowRepeats(e.target.checked)} /> repeats</label>
+          <input className="input" style={{ width: 180 }} placeholder="task kind filter" value={kindFilter} onChange={e => setKindFilter(e.target.value)} />
           <div style={{ flex: 1 }}></div>
           <button className="btn ghost sm">EXPAND ALL</button>
           <button className="btn ghost sm">EXPORT JSONL</button>
@@ -390,8 +390,8 @@ function TracesSub() {
             <span className="dim mono" style={{ fontSize: 10.5 }}>orchestrator tick · 14:02:11 · live</span>
           </div>
           <div className="trace-tree">
-            {D.traces.map((t, i) => (
-              <TraceRow key={t.id} row={t} depth={0} isLast={i === D.traces.length - 1} />
+            {filteredTraces.map((t, i) => (
+              <TraceRow key={t.id} row={t} depth={0} isLast={i === filteredTraces.length - 1} selectedId={selectedTrace?.id || ''} onSelect={setSelected} />
             ))}
           </div>
         </div>
@@ -399,25 +399,20 @@ function TracesSub() {
         <div className="row gap-8" style={{ marginTop: 12 }}>
           <Panel title="VERIFIER FINDINGS" style={{ flex: 1 }}>
             <div className="col gap-6" style={{ padding: 10, fontFamily: 'var(--mono)', fontSize: 11 }}>
-              <div className="row gap-6"><Pill tone="yellow">LOOP</Pill><span className="strong">recon.kerberos_user_discovery</span><span className="dim" style={{ marginLeft: 'auto' }}>repeated 3× → cooled</span></div>
-              <div className="row gap-6"><Pill tone="yellow">LOOP</Pill><span className="strong">recon.dns_enumeration</span><span className="dim" style={{ marginLeft: 'auto' }}>repeated 2× → backed off</span></div>
-              <div className="row gap-6"><Pill tone="green">OK</Pill><span className="strong">workflow.tick.cadence</span><span className="dim" style={{ marginLeft: 'auto' }}>1.4s avg / 3.2s p95</span></div>
-              <div className="row gap-6"><Pill tone="red">FAIL</Pill><span className="strong">searchsploit.research</span><span className="dim" style={{ marginLeft: 'auto' }}>missing evidence terms</span></div>
+              {(D.runtime.workStatus?.blockers || []).slice(0, 4).map((b, i) => (
+                <div key={i} className="row gap-6"><Pill tone="yellow">BLOCK</Pill><span className="strong">{b.kind || 'runtime'}</span><span className="dim" style={{ marginLeft: 'auto' }}>{b.target || '*'}</span></div>
+              ))}
+              {!(D.runtime.workStatus?.blockers || []).length && <div className="dim">No verifier blockers in the current runtime payload.</div>}
             </div>
           </Panel>
           <Panel title="ROUTING DECISIONS" style={{ flex: 1 }}>
             <div className="col gap-4" style={{ padding: 10, fontFamily: 'var(--mono)', fontSize: 11 }}>
-              {[
-                { task: 't_8c4c', from: 'planner', to: 'local_fast', model: 'gemma3:12b', why: 'high-cadence content discovery, prompt < 8k' },
-                { task: 't_8c50', from: 'planner', to: 'local_code', model: 'qwen2.5-coder:14b', why: 'PoC source analysis, code reasoning' },
-                { task: 't_8c51', from: 'planner', to: 'local_deep', model: 'llama3.1:70b', why: 'kerberos protocol nuance, escalated' },
-                { task: 't_v01', from: 'verifier', to: 'local_compact', model: 'gemma3:4b', why: 'cheap behavior review' },
-              ].map(r => (
-                <div key={r.task} className="row gap-6" style={{ padding: '5px 0', borderBottom: '1px dashed var(--line)' }}>
-                  <span className="dim" style={{ width: 56 }}>{r.task}</span>
-                  <span style={{ color: 'var(--violet)' }}>{r.from}→{r.to}</span>
-                  <span className="strong" style={{ marginLeft: 6 }}>{r.model}</span>
-                  <span className="dim" style={{ marginLeft: 'auto', maxWidth: '50%', textAlign: 'right' }}>{r.why}</span>
+              {(D.tasks || []).slice(0, 8).map(r => (
+                <div key={r.id} className="row gap-6" style={{ padding: '5px 0', borderBottom: '1px dashed var(--line)' }}>
+                  <span className="dim" style={{ width: 72 }}>{r.id}</span>
+                  <span style={{ color: 'var(--violet)' }}>{r.route || 'route'}</span>
+                  <span className="strong" style={{ marginLeft: 6 }}>{r.model || 'model pending'}</span>
+                  <span className="dim" style={{ marginLeft: 'auto', maxWidth: '50%', textAlign: 'right' }}>{r.kind}</span>
                 </div>
               ))}
             </div>
@@ -433,45 +428,25 @@ function TracesSub() {
           <button className="tab">PROMPT</button>
         </div>
         <div className="panel-body" style={{ padding: 12, gap: 12, display: 'flex', flexDirection: 'column', fontSize: 11.5 }}>
-          <div>
-            <div className="upper" style={{ marginBottom: 4 }}>focus</div>
-            <div className="strong mono" style={{ fontSize: 13 }}>web.content_discovery</div>
-            <div className="dim mono" style={{ fontSize: 10.5 }}>t_8c4c · running · gemma3:12b · local_fast</div>
-            <div className="loadbar" style={{ marginTop: 8 }}></div>
-          </div>
-          <div className="kv">
-            <span className="k">target</span><span className="v">https://pirate.htb:8443</span>
-            <span className="k">wordlist</span><span className="v">raft-medium.txt (4096)</span>
-            <span className="k">progress</span><span className="v">312 / 4096 (7.6%)</span>
-            <span className="k">started</span><span className="v">14:01:48</span>
-            <span className="k">ttl budget</span><span className="v">10m / used 0m26s</span>
-            <span className="k">parent</span><span className="v">workflow.tick (tr_root)</span>
-            <span className="k">memory writes</span><span className="v">3 episodic · 0 semantic</span>
-          </div>
-
-          <div>
-            <div className="upper" style={{ marginBottom: 6 }}>recent emissions</div>
-            <div className="col gap-4 mono" style={{ fontSize: 10.5 }}>
-              {[
-                ['14:02:09', 'GET /admin/manager/html → 401'],
-                ['14:02:08', 'GET /admin/users → 200 (1.2k)'],
-                ['14:02:06', 'GET /admin → 302'],
-                ['14:02:04', 'GET /api/v1/health → 200'],
-                ['14:01:58', 'evidence ev_2241 attached'],
-              ].map(([t, m], i) => (
-                <div key={i} className="row gap-6">
-                  <span className="dim" style={{ width: 56 }}>{t}</span>
-                  <span className="strong" style={{ flex: 1 }}>{m}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="row gap-6">
-            <button className="btn primary sm">PIN</button>
-            <button className="btn sm">PAUSE</button>
-            <button className="btn ghost sm">CANCEL</button>
-          </div>
+          {selectedTrace ? (
+            <>
+              <div>
+                <div className="upper" style={{ marginBottom: 4 }}>focus</div>
+                <div className="strong mono" style={{ fontSize: 13 }}>{selectedTrace.kind}</div>
+                <div className="dim mono" style={{ fontSize: 10.5 }}>{selectedTrace.task || selectedTrace.id} · {selectedTrace.status} · {selectedTrace.model || selectedTrace.route || 'no route'}</div>
+                {selectedTrace.status === 'run' && <div className="loadbar" style={{ marginTop: 8 }}></div>}
+              </div>
+              <div className="kv">
+                <span className="k">target</span><span className="v">{selectedTrace.target || '*'}</span>
+                <span className="k">summary</span><span className="v">{selectedTrace.summary}</span>
+                <span className="k">count</span><span className="v">{selectedTrace.count || 1}</span>
+                <span className="k">first</span><span className="v">{selectedTrace.first_at || '—'}</span>
+                <span className="k">last</span><span className="v">{selectedTrace.last_at || selectedTrace.time || '—'}</span>
+              </div>
+            </>
+          ) : (
+            <div className="dim">Select a trace row to inspect details.</div>
+          )}
         </div>
       </aside>
     </div>
@@ -1251,6 +1226,7 @@ function FlowChartSub() {
   const running = branches.filter(b => b.status === 'run');
   const gated   = branches.filter(b => b.status === 'gated');
   const failed  = branches.filter(b => b.status === 'fail' || (b.children || []).some(c => c.status === 'fail'));
+  const activeBranch = running[0] || null;
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
@@ -1321,9 +1297,9 @@ function FlowChartSub() {
         <div className="panel-body" style={{ padding: 12, gap: 12, display: 'flex', flexDirection: 'column', fontSize: 11.5 }}>
           <div>
             <div className="upper" style={{ marginBottom: 4 }}>active branch</div>
-            <div className="strong mono" style={{ fontSize: 13 }}>web.content_discovery</div>
-            <div className="dim mono" style={{ fontSize: 10.5 }}>t_8c4c · running · gemma3:12b</div>
-            <div className="loadbar" style={{ marginTop: 8 }} />
+            <div className="strong mono" style={{ fontSize: 13 }}>{activeBranch ? activeBranch.kind : 'idle'}</div>
+            <div className="dim mono" style={{ fontSize: 10.5 }}>{activeBranch ? `${activeBranch.task || activeBranch.id} · running · ${activeBranch.model || activeBranch.route || 'route pending'}` : (root?.idle_reason || 'no unfinished task run confirms an active branch')}</div>
+            {activeBranch && <div className="loadbar" style={{ marginTop: 8 }} />}
           </div>
           <div className="kv">
             <span className="k">branches</span><span className="v">{branches.length} from root</span>
@@ -1335,10 +1311,10 @@ function FlowChartSub() {
           <div>
             <div className="upper" style={{ marginBottom: 6 }}>verifier findings</div>
             <div className="col gap-4" style={{ fontFamily: 'var(--mono)', fontSize: 11 }}>
-              <div className="row gap-6"><Pill tone="yellow">LOOP</Pill><span className="strong">dns_enumeration</span><span className="dim" style={{ marginLeft: 'auto' }}>cooled</span></div>
-              <div className="row gap-6"><Pill tone="yellow">LOOP</Pill><span className="strong">kerb_user_disco</span><span className="dim" style={{ marginLeft: 'auto' }}>backed off</span></div>
-              <div className="row gap-6"><Pill tone="green">OK</Pill><span className="strong">tick.cadence</span><span className="dim" style={{ marginLeft: 'auto' }}>1.4s avg</span></div>
-              <div className="row gap-6"><Pill tone="red">FAIL</Pill><span className="strong">searchsploit</span><span className="dim" style={{ marginLeft: 'auto' }}>missing terms</span></div>
+              {(D.runtime.workStatus?.blockers || []).slice(0, 4).map((b, i) => (
+                <div key={i} className="row gap-6"><Pill tone="yellow">BLOCK</Pill><span className="strong">{b.kind || 'runtime'}</span><span className="dim" style={{ marginLeft: 'auto' }}>{b.target || '*'}</span></div>
+              ))}
+              {!(D.runtime.workStatus?.blockers || []).length && <div className="dim">No verifier blockers in the current runtime payload.</div>}
             </div>
           </div>
           <div className="row gap-6">
@@ -1356,7 +1332,19 @@ function FlowChartSub() {
    ========================================================= */
 function TraceMode() {
   const [sub, setSub] = useStateM('tree');
-  const D = window.PD_DATA;
+  const [selectedTarget, setSelectedTarget] = useStateM(window.PD_DATA.traceMeta?.selectedTarget || '');
+  const [viewData, setViewData] = useStateM(window.PD_DATA);
+  const D = viewData;
+  const API = window.PD_API || {};
+
+  const changeTarget = async (target) => {
+    setSelectedTarget(target);
+    if (!API.request || API.demo) return;
+    const path = target ? `/api/control-plane?target=${encodeURIComponent(target)}` : '/api/control-plane';
+    const payload = await API.request(path);
+    window.PD_DATA = payload;
+    setViewData(payload);
+  };
 
   const stats = sub === 'tree'
     ? [
@@ -1397,6 +1385,9 @@ function TraceMode() {
           ◉ GEO <span className="badge">{D.geo.pins.length}</span>
         </button>
         <div style={{ flex: 1 }}></div>
+        <select className="input" style={{ width: 180 }} value={selectedTarget} onChange={e => changeTarget(e.target.value)}>
+          {(D.traceMeta?.targetOptions || [{ id: '', label: 'All targets' }]).map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+        </select>
         <span className="dim mono" style={{ fontSize: 10.5, paddingRight: 8 }}>
           {sub === 'tree'  && 'living flowchart · branches & merges · click to inspect'}
           {sub === 'graph' && 'drag nodes · scroll to zoom · subtle trace animation'}

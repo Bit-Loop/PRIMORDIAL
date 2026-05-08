@@ -49,8 +49,12 @@ class PrimordialWebApp:
         if method == "GET" and path == "/api/health":
             return self._json_response(self.runtime.health_payload())
         if method == "GET" and path == "/api/control-plane":
+            target = self._optional_query_string(query, "target")
             with self._lock:
-                return self._json_response(self._control_plane_payload())
+                return self._json_response(self._control_plane_payload(target=target))
+        if method == "GET" and path == "/api/self-test":
+            with self._lock:
+                return self._json_response(self.runtime.self_test_payload())
         if method == "GET" and path == "/api/operator-intent":
             with self._lock:
                 return self._json_response(self.runtime.operator_intent_payload())
@@ -176,6 +180,12 @@ class PrimordialWebApp:
             with self._lock:
                 return self._json_response(self.runtime.runtime_tuning_payload())
         if method == "GET" and path == "/api/scope":
+            with self._lock:
+                return self._json_response(self.runtime.scope_payload())
+        if method == "GET" and path == "/api/scope-profiles":
+            with self._lock:
+                return self._json_response(self.runtime.scope_profiles_payload())
+        if method == "GET" and path == "/api/targets":
             with self._lock:
                 return self._json_response(self.runtime.scope_payload())
         if method == "GET" and path == "/api/audit":
@@ -601,12 +611,12 @@ class PrimordialWebApp:
             return None
         return values[0].strip() or None
 
-    def _control_plane_payload(self) -> dict[str, Any]:
+    def _control_plane_payload(self, *, target: str | None = None) -> dict[str, Any]:
         dashboard = self.runtime.dashboard_payload()
         work_status = self.work_status_payload()
         scope = self.runtime.scope_payload()
+        scope_profiles = self.runtime.scope_profiles_payload()
         audit = self.runtime.audit_payload(limit=50)
-        records = self.runtime.records_payload(limit=100)
         credentials = self.runtime.credentials_payload()
         caido_status = self.runtime.caido_status_payload(check_health=False)
         models = self.runtime.models_payload()
@@ -617,17 +627,26 @@ class PrimordialWebApp:
         skills = self.runtime.skills_payload(include_body=False)
         metrics = dashboard.get("system_metrics", {})
         counts = dashboard.get("counts", {}) if isinstance(dashboard.get("counts"), dict) else {}
-        targets = [item for item in scope.get("targets", []) if self._target_handle(item)]
+        all_targets = [item for item in scope.get("targets", []) if self._target_handle(item)]
+        selected_target = self._selected_target_filter(target, all_targets)
+        targets = self._filter_scope_targets(all_targets, selected_target)
+        selected_target_id = self._target_id_for_handle(selected_target, all_targets)
+        records = self.runtime.records_payload(limit=100, target_id=selected_target_id)
         task_items = self._tasks_view(dashboard, work_status, targets)
+        if selected_target:
+            task_items = [item for item in task_items if item.get("target") in {selected_target, "*", ""}]
         approval_items = self._approvals_view(work_status, task_items)
         event_items = self._events_view(audit)
         notes = self._notes_view(targets, findings_context, credentials, audit)
         interests = self._interests_view(records, targets)
         graph = self._graph_view(targets, records)
-        traces = self._traces_view(audit, task_items)
+        traces = self._traces_view(audit, task_items, selected_target=selected_target)
         geo = self._geo_view(targets, caido_status, models)
         model_rows = self._models_view(models)
         plan = self._plan_view(intent, dashboard, skills, work_status, records)
+        network = metrics.get("network", {}) if isinstance(metrics.get("network"), dict) else {}
+        gpu_metrics = metrics.get("gpu", {}) if isinstance(metrics.get("gpu"), dict) else {}
+        gpu_memory = self._gpu_memory_payload(gpu_metrics)
 
         return {
             "mode": "real",
@@ -640,8 +659,9 @@ class PrimordialWebApp:
                 "gpu": self._metric_ratio(metrics, "gpu"),
                 "mem": self._memory_ratio(metrics),
                 "diskWrites": int(counts.get("events", 0) or 0),
-                "netIn": "0 B/s",
-                "netOut": "0 B/s",
+                "netIn": str(network.get("rx_label") or "0 B/s"),
+                "netOut": str(network.get("tx_label") or "0 B/s"),
+                "gpuMemory": gpu_memory,
                 "activeTasks": int(work_status.get("counts", {}).get("active", 0) or 0),
                 "queued": int(work_status.get("counts", {}).get("queued", 0) or 0),
                 "approvals": len(approval_items),
@@ -659,8 +679,16 @@ class PrimordialWebApp:
             "events": event_items,
             "scope": self._scope_view(targets),
             "scopePayload": scope,
+            "scopeProfiles": scope_profiles,
             "graph": graph,
             "traces": traces,
+            "traceMeta": {
+                "selectedTarget": selected_target or "",
+                "targetOptions": [{"id": "", "label": "All targets"}]
+                + [{"id": self._target_handle(item), "label": self._target_handle(item)} for item in all_targets],
+                "grouped": True,
+                "defaultLimit": 40,
+            },
             "geo": geo,
             "plan": plan,
             "notes": notes,
@@ -670,6 +698,7 @@ class PrimordialWebApp:
             "inquiryChat": self._operator_chat_view(),
             "signals": self._signals_view(audit),
             "credentials": credentials,
+            "selfTest": {"status": "not_run", "checks": [], "summary": {}},
             "api": {
                 "generatedAt": datetime.now(timezone.utc).isoformat(),
                 "endpoints": {
@@ -699,10 +728,60 @@ class PrimordialWebApp:
                 "ctx": int(role.get("context_window", 0) or 0),
                 "processor": str(role.get("processor", "")),
                 "available": payload.get("available_models", []),
+                "metrics": role.get("metrics"),
             }
             for role in roles
             if isinstance(role, dict)
         ]
+
+    def _selected_target_filter(self, target: str | None, targets: list[dict[str, Any]]) -> str | None:
+        selected = str(target or "").strip()
+        if not selected or selected == "*":
+            return None
+        handles = {self._target_handle(item) for item in targets}
+        return selected if selected in handles else None
+
+    def _filter_scope_targets(
+        self,
+        targets: list[dict[str, Any]],
+        selected_target: str | None,
+    ) -> list[dict[str, Any]]:
+        if not selected_target:
+            return targets
+        return [item for item in targets if self._target_handle(item) == selected_target]
+
+    def _target_id_for_handle(self, handle: str | None, targets: list[dict[str, Any]]) -> str | None:
+        if not handle:
+            return None
+        for item in targets:
+            target = item.get("target", {}) if isinstance(item.get("target"), dict) else {}
+            if str(target.get("handle") or "") == handle:
+                return str(target.get("id") or "") or None
+        return None
+
+    def _gpu_memory_payload(self, gpu: dict[str, Any]) -> dict[str, Any]:
+        used = gpu.get("memory_used_mb")
+        free = gpu.get("memory_free_mb")
+        total = gpu.get("memory_total_mb")
+        percent = gpu.get("memory_percent")
+        try:
+            percent_value = float(percent) if percent is not None else 0.0
+        except (TypeError, ValueError):
+            percent_value = 0.0
+        used_label = "unavailable"
+        free_label = "unavailable"
+        if isinstance(used, (int, float)) and isinstance(total, (int, float)):
+            used_label = f"{used:.0f} / {total:.0f} MB"
+        if isinstance(free, (int, float)):
+            free_label = f"{free:.0f} MB"
+        return {
+            "percent": max(0.0, min(100.0, percent_value)),
+            "used_mb": used,
+            "free_mb": free,
+            "total_mb": total,
+            "used_label": used_label,
+            "free_label": free_label,
+        }
 
     def _tasks_view(
         self,
@@ -883,22 +962,57 @@ class PrimordialWebApp:
             )
         return {"nodes": nodes, "edges": edges}
 
-    def _traces_view(self, audit: dict[str, Any], tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        children = [
-            {
-                "id": str(trace.get("id") or f"trace_{index}"),
-                "kind": str(trace.get("kind") or trace.get("summary") or "trace"),
-                "status": self._trace_status_for_gui(str(trace.get("status") or "pass")),
-                "time": self._time_label(trace.get("created_at") or trace.get("updated_at")),
-                "summary": str(trace.get("summary") or trace.get("prompt") or "Runtime trace"),
-                "task": str(trace.get("task_id") or ""),
-                "route": str(trace.get("provider_route") or ""),
-            }
-            for index, trace in enumerate(
-                audit.get("recent_traces", []) if isinstance(audit.get("recent_traces", []), list) else []
-            )
-            if isinstance(trace, dict)
-        ]
+    def _traces_view(
+        self,
+        audit: dict[str, Any],
+        tasks: list[dict[str, Any]],
+        *,
+        selected_target: str | None = None,
+    ) -> list[dict[str, Any]]:
+        tasks_by_id = {str(item.get("id") or ""): item for item in tasks}
+        grouped: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
+        recent = audit.get("recent_traces", []) if isinstance(audit.get("recent_traces", []), list) else []
+        for index, trace in enumerate(recent):
+            if not isinstance(trace, dict):
+                continue
+            metadata = trace.get("metadata", {}) if isinstance(trace.get("metadata"), dict) else {}
+            task_id = str(trace.get("task_id") or "")
+            task = tasks_by_id.get(task_id, {})
+            target = str(metadata.get("target") or task.get("target") or "*")
+            if selected_target and target not in {selected_target, "*", ""}:
+                continue
+            kind = str(metadata.get("task_type") or metadata.get("summary_key") or metadata.get("stage") or trace.get("role") or "trace")
+            status = self._trace_status_for_gui(str(trace.get("status") or "pass"))
+            summary = str(trace.get("summary") or metadata.get("summary") or "Runtime trace")
+            route = str(metadata.get("route") or metadata.get("provider_route") or task.get("route") or "")
+            model = str(metadata.get("model") or task.get("model") or "")
+            created_at = str(trace.get("created_at") or "")
+            key = (target, task_id, kind, summary, status)
+            if key not in grouped:
+                grouped[key] = {
+                    "id": str(trace.get("id") or f"trace_{index}"),
+                    "kind": kind,
+                    "status": status,
+                    "time": self._time_label(created_at),
+                    "summary": summary,
+                    "task": task_id,
+                    "target": target,
+                    "route": route,
+                    "model": model,
+                    "count": 1,
+                    "first_at": created_at,
+                    "last_at": created_at,
+                    "latest_status": status,
+                    "repeated": False,
+                }
+            else:
+                item = grouped[key]
+                item["count"] = int(item.get("count", 1) or 1) + 1
+                item["last_at"] = max(str(item.get("last_at") or ""), created_at)
+                item["time"] = self._time_label(item["last_at"])
+                item["latest_status"] = status
+                item["repeated"] = True
+        children = sorted(grouped.values(), key=lambda item: str(item.get("last_at") or ""), reverse=True)[:40]
         if not children:
             children = [
                 {
@@ -908,19 +1022,41 @@ class PrimordialWebApp:
                     "time": "live",
                     "summary": item.get("title", "Task"),
                     "task": item.get("id", ""),
+                    "target": item.get("target", "*"),
                     "route": item.get("route", ""),
+                    "model": item.get("model", ""),
+                    "count": 1,
                 }
                 for index, item in enumerate(tasks[:16])
+                if not selected_target or item.get("target") in {selected_target, "*", ""}
             ]
+        active = [item for item in children if item.get("status") == "run"]
+        idle_reason = "No active run for selected target." if selected_target else "No active run exists."
+        if not children:
+            children = [{
+                "id": "trace_empty",
+                "kind": "workflow.idle",
+                "status": "queued",
+                "time": "idle",
+                "summary": idle_reason,
+                "task": "",
+                "target": selected_target or "*",
+                "route": "",
+                "model": "",
+                "count": 1,
+            }]
         return [
             {
                 "id": "tr_root",
                 "kind": "workflow.runtime",
-                "status": "run" if any(item.get("status") == "run" for item in children) else "pass",
+                "status": "run" if active else "queued",
                 "time": datetime.now(timezone.utc).strftime("%H:%M:%S"),
-                "summary": "Live runtime trace view",
+                "summary": f"Active runtime trace: {len(active)} running" if active else f"Idle/stale: {idle_reason}",
                 "route": "",
                 "model": "",
+                "target": selected_target or "*",
+                "active": bool(active),
+                "idle_reason": None if active else idle_reason,
                 "children": children,
             }
         ]
@@ -1346,6 +1482,9 @@ class PrimordialWebApp:
                 percent = memory.get("percent")
                 if isinstance(percent, int | float):
                     return max(0.0, min(1.0, float(percent) / 100.0))
+            percent = cpu.get("memory_percent")
+            if isinstance(percent, int | float):
+                return max(0.0, min(1.0, float(percent) / 100.0))
         return 0.0
 
     def _task_status_for_gui(self, status: str) -> str:

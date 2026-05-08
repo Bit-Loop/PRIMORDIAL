@@ -334,7 +334,44 @@ CREATE TABLE IF NOT EXISTS remote_provider_costs (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS model_eval_runs (
+    id TEXT PRIMARY KEY,
+    providers_json TEXT NOT NULL,
+    models_json TEXT NOT NULL,
+    recommendations_json TEXT NOT NULL,
+    artifacts_json TEXT NOT NULL,
+    metadata_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS model_eval_role_metrics (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    aggregate_score REAL NOT NULL,
+    pass_rate REAL NOT NULL,
+    fail_rate REAL NOT NULL,
+    hallucination_count INTEGER NOT NULL,
+    hallucination_rate REAL NOT NULL,
+    over_refusal_rate REAL NOT NULL,
+    correct_refusal_rate REAL NOT NULL,
+    unsafe_compliance_failures INTEGER NOT NULL,
+    top_failure_modes_json TEXT NOT NULL,
+    avg_latency_sec REAL,
+    avg_tokens_sec REAL,
+    best_context_length INTEGER,
+    quantization TEXT,
+    params TEXT,
+    metadata_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(run_id) REFERENCES model_eval_runs(id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_remote_costs_created_at ON remote_provider_costs(created_at);
+CREATE INDEX IF NOT EXISTS idx_model_eval_role_created ON model_eval_role_metrics(role, created_at);
+CREATE INDEX IF NOT EXISTS idx_model_eval_run_created ON model_eval_runs(created_at);
 
 CREATE INDEX IF NOT EXISTS idx_tasks_target_status ON tasks(target_id, status);
 CREATE INDEX IF NOT EXISTS idx_task_runs_task_status ON task_runs(task_id, status);
