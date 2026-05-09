@@ -13,6 +13,7 @@ from primordial.config import AppConfig
 from primordial.cli import main as cli_main
 from primordial.core.providers.model_eval import ModelEvaluationService
 from primordial.core.providers.lmstudio import LMStudioClient, LMStudioModelInfo, LMStudioModelListResult, LMStudioResponse
+from primordial.core.providers.lmstudio_tuning import LMStudioPerformanceTuner
 from primordial.core.providers.ollama import OllamaModelInfo, OllamaModelInfoListResult, OllamaModelListResult, OllamaResponse
 from primordial.runtime import PrimordialRuntime
 
@@ -126,13 +127,33 @@ class FakeLMStudio:
         self.load_calls.append(kwargs)
         from primordial.core.providers.lmstudio import LMStudioLoadResult
 
-        return LMStudioLoadResult(model=str(kwargs["model"]), ok=True, elapsed_seconds=0.5)
+        return LMStudioLoadResult(
+            model=str(kwargs["model"]),
+            ok=True,
+            elapsed_seconds=0.5,
+            instance_id=f"{kwargs['model']}-instance",
+            load_config={
+                "context_length": kwargs.get("context_length"),
+                "eval_batch_size": kwargs.get("eval_batch_size"),
+                "flash_attention": kwargs.get("flash_attention"),
+                "offload_kv_cache_to_gpu": kwargs.get("offload_kv_cache_to_gpu"),
+                "num_experts": kwargs.get("num_experts"),
+            },
+        )
 
     def unload_model(self, **kwargs):
         self.unload_calls.append(str(kwargs["model"]))
         from primordial.core.providers.lmstudio import LMStudioLoadResult
 
-        return LMStudioLoadResult(model=str(kwargs["model"]), ok=True, elapsed_seconds=0.1)
+        return LMStudioLoadResult(
+            model=str(kwargs["model"]),
+            ok=True,
+            elapsed_seconds=0.1,
+            instance_id=kwargs.get("instance_id"),
+        )
+
+    def unload_loaded_models(self, **kwargs):
+        return []
 
 
 class FakeLMStudioLoadRaises(FakeLMStudio):
@@ -546,6 +567,9 @@ class ModelEvaluationTests(unittest.TestCase):
         self.assertTrue(any(item["role"] == "local_deep" for item in payload["role_suggestions"]))
         self.assertIn("suggested_roles", row)
         self.assertIn("role_confidence", row)
+        self.assertIn("role_findings", payload)
+        self.assertIn("role_fit_summary", row)
+        self.assertIn("local_deep", payload["role_findings"]["roles"])
 
     def test_lmstudio_client_handles_native_chat_auth_and_lifecycle(self) -> None:
         class Response:
@@ -613,6 +637,14 @@ class ModelEvaluationTests(unittest.TestCase):
         self.assertTrue(load.ok)
         self.assertTrue(unload.ok)
         self.assertTrue(all(item["auth"] == "Bearer secret-token" for item in requests_seen))
+        load_body = next(item["body"] for item in requests_seen if str(item["url"]).endswith("/api/v1/models/load"))
+        unload_body = next(item["body"] for item in requests_seen if str(item["url"]).endswith("/api/v1/models/unload"))
+        self.assertIn("offload_kv_cache_to_gpu", load_body)
+        self.assertIn("echo_load_config", load_body)
+        self.assertNotIn("contextLength", load_body)
+        self.assertNotIn("evalBatchSize", load_body)
+        self.assertNotIn("kvCacheOffload", load_body)
+        self.assertEqual(unload_body, {"instance_id": "text-model"})
 
     def test_lmstudio_client_retries_chat_without_system_role_when_template_rejects_it(self) -> None:
         class Response:
@@ -652,6 +684,192 @@ class ModelEvaluationTests(unittest.TestCase):
         self.assertEqual(len(requests_seen), 2)
         self.assertEqual(requests_seen[1]["body"]["messages"][0]["role"], "user")
         self.assertIn("system instruction", requests_seen[1]["body"]["messages"][0]["content"])
+
+    def test_lmstudio_client_preserves_reasoning_only_response(self) -> None:
+        class Response:
+            def __init__(self, payload: dict[str, object]) -> None:
+                self.payload = payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self) -> bytes:
+                return json.dumps(self.payload).encode("utf-8")
+
+        def fake_urlopen(req, timeout):
+            return Response(
+                {
+                    "model": "reasoning-model",
+                    "choices": [
+                        {
+                            "message": {"content": "", "reasoning_content": "private reasoning trace"},
+                            "finish_reason": "length",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 20},
+                }
+            )
+
+        client = LMStudioClient(base_url="http://lmstudio.test")
+        with patch("primordial.core.providers.lmstudio.request.urlopen", side_effect=fake_urlopen):
+            response = client.chat(model="reasoning-model", system="s", prompt="p")
+
+        self.assertEqual(response.text, "")
+        self.assertEqual(response.reasoning_content, "private reasoning trace")
+        self.assertEqual(response.finish_reason, "length")
+
+    def test_lmstudio_profile_applies_to_evaluation_load_config(self) -> None:
+        profile = {
+            "models": {
+                "lmstudio:lm-test": {
+                    "best_config": {
+                        "eval_batch_size": 1024,
+                        "flash_attention": False,
+                        "offload_kv_cache_to_gpu": False,
+                        "num_experts": 4,
+                    }
+                }
+            }
+        }
+        lmstudio = FakeLMStudio({"lm-test": broad_good_output()})
+        summary = ModelEvaluationService(lmstudio=lmstudio, lmstudio_profile=profile).evaluate(
+            providers=["lmstudio"],
+            models=["lm-test"],
+            context_sizes=[2048],
+            temperatures=[0.0],
+        )
+
+        self.assertEqual(lmstudio.load_calls[0]["context_length"], 2048)
+        self.assertEqual(lmstudio.load_calls[0]["eval_batch_size"], 1024)
+        self.assertFalse(lmstudio.load_calls[0]["flash_attention"])
+        self.assertFalse(lmstudio.load_calls[0]["offload_kv_cache_to_gpu"])
+        self.assertEqual(lmstudio.load_calls[0]["num_experts"], 4)
+        eval_results = [item for item in summary.results if item.stage == "eval"]
+        self.assertTrue(eval_results)
+        self.assertTrue(all(item.tuned_profile_applied for item in eval_results))
+        self.assertEqual(eval_results[0].load_config["eval_batch_size"], 1024)
+
+    def test_lmstudio_runtime_estimate_skips_slow_model_for_remote_offload(self) -> None:
+        profile = {
+            "models": {
+                "lmstudio:slow-model": {
+                    "tokens_per_second": 1.0,
+                    "load_time_seconds": 0.0,
+                    "best_config": {
+                        "eval_batch_size": 512,
+                        "flash_attention": True,
+                        "offload_kv_cache_to_gpu": True,
+                    },
+                }
+            }
+        }
+        lmstudio = FakeLMStudio({"slow-model": broad_good_output()})
+        summary = ModelEvaluationService(lmstudio=lmstudio, lmstudio_profile=profile).evaluate(
+            providers=["lmstudio"],
+            models=["slow-model"],
+            context_sizes=[4096],
+            temperatures=[0.0],
+            max_model_runtime_seconds=30,
+        )
+        payload = summary.as_payload()
+
+        self.assertEqual(lmstudio.load_calls, [])
+        self.assertEqual(lmstudio.chat_calls, [])
+        self.assertEqual(payload["results"][0]["stage"], "planning")
+        self.assertEqual(payload["results"][0]["error"], "skipped_estimated_timeout")
+        self.assertIn("claude", payload["results"][0]["offload_recommendation"]["targets"])
+        self.assertIn("gpt", payload["results"][0]["offload_recommendation"]["targets"])
+        estimate = payload["eval_config"]["runtime_estimates"]["lmstudio:slow-model"]
+        self.assertEqual(estimate["action"], "skip_remote_offload")
+        self.assertGreater(estimate["estimated_seconds"], estimate["max_runtime_seconds"])
+
+    def test_lmstudio_reasoning_only_eval_is_not_transport_failure(self) -> None:
+        class ReasoningOnlyLMStudio(FakeLMStudio):
+            def chat(self, **kwargs) -> LMStudioResponse:
+                self.chat_calls.append(kwargs)
+                return LMStudioResponse(
+                    model=str(kwargs["model"]),
+                    text="",
+                    reasoning_content="thinking without final content",
+                    finish_reason="length",
+                    elapsed_seconds=1.0,
+                    completion_tokens=20,
+                    tokens_per_second=20.0,
+                )
+
+        lmstudio = ReasoningOnlyLMStudio({"lm-test": ""})
+        summary = ModelEvaluationService(lmstudio=lmstudio).evaluate(
+            providers=["lmstudio"],
+            models=["lm-test"],
+            context_sizes=[2048],
+            temperatures=[0.0],
+        )
+
+        eval_results = [item for item in summary.results if item.stage == "eval"]
+        self.assertTrue(eval_results)
+        self.assertTrue(any("reasoning-only response" in " ".join(item.reasons) for item in eval_results))
+        self.assertFalse(any(item.error and "generation failed" in item.error for item in eval_results))
+
+    def test_lmstudio_tuner_selects_best_config_and_writes_profile(self) -> None:
+        class SpeedyLMStudio(FakeLMStudio):
+            def chat(self, **kwargs) -> LMStudioResponse:
+                self.chat_calls.append(kwargs)
+                last_load = self.load_calls[-1]
+                speed = float(last_load["eval_batch_size"]) / 16.0
+                if last_load["offload_kv_cache_to_gpu"]:
+                    speed += 10.0
+                if not last_load["flash_attention"]:
+                    speed -= 20.0
+                return LMStudioResponse(
+                    model=str(kwargs["model"]),
+                    text='{"summary":"ok"}',
+                    elapsed_seconds=1.0,
+                    prompt_tokens=20,
+                    completion_tokens=32,
+                    tokens_per_second=speed,
+                    ttft_seconds=0.1,
+                )
+
+        client = SpeedyLMStudio({"speed-model": '{"summary":"ok"}'})
+        metrics = lambda: {
+            "cpu": {"memory_available_mb": 16000},
+            "gpu": {"available": True, "memory_free_mb": 512},
+        }
+        tuner = LMStudioPerformanceTuner(client, host_metrics_sampler=metrics)
+
+        payload = tuner.tune(models=["speed-model"], context_length=1024, max_tokens=32, timeout_seconds=1)
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertIn("role_findings", payload)
+        self.assertEqual(payload["benchmark_head"]["max_model_runtime_seconds"], 1800)
+        self.assertEqual(payload["role_findings"]["roles"]["local_fast"]["recommended_model"], "speed-model")
+        best_config = payload["models"]["speed-model"]["best_config"]
+        self.assertEqual(best_config["eval_batch_size"], 1024)
+        self.assertTrue(best_config["flash_attention"])
+        self.assertTrue(best_config["offload_kv_cache_to_gpu"])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            artifacts = tuner.write_artifacts(
+                payload,
+                output_dir=Path(temp_dir) / "details",
+                profile_path=Path(temp_dir) / "profile.json",
+            )
+            self.assertTrue(Path(artifacts["json_path"]).exists())
+            self.assertTrue(Path(artifacts["profile_path"]).exists())
+
+    def test_lmstudio_tuner_aborts_before_load_when_cpu_reserve_is_low(self) -> None:
+        client = FakeLMStudio({"speed-model": '{"summary":"ok"}'})
+        tuner = LMStudioPerformanceTuner(
+            client,
+            host_metrics_sampler=lambda: {"cpu": {"memory_available_mb": 1024}, "gpu": {"available": True}},
+        )
+
+        payload = tuner.tune(models=["speed-model"], cpu_reserve_mb=4096)
+
+        self.assertEqual(payload["status"], "aborted")
+        self.assertEqual(client.load_calls, [])
 
     def test_cli_evaluate_passes_new_benchmark_flags_without_live_providers(self) -> None:
         class FakeRuntime:
@@ -731,10 +949,16 @@ class ModelEvaluationTests(unittest.TestCase):
                     "--exhaustive",
                     "--max-context",
                     "4096",
+                    "--context-size",
+                    "1024",
                     "--temperature",
                     "0.0",
                     "--temperature",
                     "0.1",
+                    "--lmstudio-profile",
+                    "/tmp/lmstudio-profile.json",
+                    "--max-model-minutes",
+                    "45",
                     "--csv",
                     "/tmp/eval.csv",
                     "--json-out",
@@ -746,10 +970,85 @@ class ModelEvaluationTests(unittest.TestCase):
         self.assertEqual(FakeRuntime.last.kwargs["providers"], ["ollama", "lmstudio"])
         self.assertTrue(FakeRuntime.last.kwargs["exhaustive"])
         self.assertEqual(FakeRuntime.last.kwargs["max_context"], 4096)
+        self.assertEqual(FakeRuntime.last.kwargs["context_sizes"], [1024])
         self.assertEqual(FakeRuntime.last.kwargs["temperatures"], [0.0, 0.1])
+        self.assertEqual(FakeRuntime.last.kwargs["lmstudio_profile_path"], Path("/tmp/lmstudio-profile.json"))
+        self.assertTrue(FakeRuntime.last.kwargs["use_lmstudio_profile"])
+        self.assertEqual(FakeRuntime.last.kwargs["max_model_runtime_seconds"], 2700)
         self.assertIn("local_code: lmstudio:lm-test", stdout.getvalue())
         self.assertIn("role suggestions:", stdout.getvalue())
         self.assertIn("confidence=0.91", stdout.getvalue())
+
+    def test_cli_tune_lmstudio_passes_flags_without_live_provider(self) -> None:
+        class FakeRuntime:
+            MODEL_ROLE_CONFIG = {
+                "local_fast": {},
+                "local_deep": {},
+                "local_code": {},
+                "local_compact": {},
+            }
+            last = None
+
+            @classmethod
+            def from_env(cls):
+                cls.last = cls()
+                return cls.last
+
+            def initialize(self) -> None:
+                self.initialized = True
+
+            def shutdown(self) -> None:
+                self.shutdown_called = True
+
+            def tune_lmstudio_models(self, **kwargs):
+                self.kwargs = kwargs
+                return {
+                    "status": "ok",
+                    "models": {
+                        "lm-test": {
+                            "best_config": {"eval_batch_size": 1024, "flash_attention": True},
+                            "tokens_per_second": 55.0,
+                        }
+                    },
+                    "artifacts": {"profile_path": "/tmp/profile.json", "json_path": "/tmp/tuning.json"},
+                    "warnings": [],
+                }
+
+        stdout = io.StringIO()
+        with patch("primordial.cli.run_startup_preflight"), patch(
+            "primordial.cli.PrimordialRuntime", FakeRuntime
+        ), redirect_stdout(stdout):
+            exit_code = cli_main(
+                [
+                    "models",
+                    "tune-lmstudio",
+                    "--model",
+                    "lm-test",
+                    "--context",
+                    "1024",
+                    "--max-tokens",
+                    "64",
+                    "--cpu-reserve-mb",
+                    "4096",
+                    "--vram-soft-reserve-mb",
+                    "128",
+                    "--timeout",
+                    "5",
+                    "--profile-out",
+                    "/tmp/profile.json",
+                    "--json-out",
+                    "/tmp/tuning.json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(FakeRuntime.last.kwargs["models"], ["lm-test"])
+        self.assertEqual(FakeRuntime.last.kwargs["context_length"], 1024)
+        self.assertEqual(FakeRuntime.last.kwargs["max_tokens"], 64)
+        self.assertEqual(FakeRuntime.last.kwargs["cpu_reserve_mb"], 4096)
+        self.assertEqual(FakeRuntime.last.kwargs["vram_soft_reserve_mb"], 128)
+        self.assertEqual(FakeRuntime.last.kwargs["profile_out"], Path("/tmp/profile.json"))
+        self.assertIn("tok/s=55.0", stdout.getvalue())
 
 
 if __name__ == "__main__":

@@ -1,0 +1,71 @@
+{
+  "rows": [
+    {
+      "avg_gpu_util": 13.934,
+      "avg_mem_util": 9.549,
+      "eval_count": 192,
+      "eval_tokens_per_second": 28.124,
+      "max_gpu_util": 30.0,
+      "max_mem_used_mb": 10083.0,
+      "model": "0xIbra/supergemma4-26b-uncensored-gguf-v2:q4_K_M",
+      "num_gpu": 12,
+      "ollama_ps": "NAME                                                ID              SIZE     PROCESSOR          CONTEXT    UNTIL       \n0xIbra/supergemma4-26b-uncensored-gguf-v2:q4_K_M    9453aa2a9e44    18 GB    60%/40% CPU/GPU    2048       Stopping...",
+      "prompt_eval_count": 153,
+      "prompt_tokens_per_second": 364.278,
+      "status": "ok",
+      "wall_seconds": 21.33
+    },
+    {
+      "avg_gpu_util": 18.711,
+      "avg_mem_util": 11.648,
+      "eval_count": 192,
+      "eval_tokens_per_second": 29.236,
+      "max_gpu_util": 89.0,
+      "max_mem_used_mb": 10631.0,
+      "model": "0xIbra/supergemma4-26b-uncensored-gguf-v2:q4_K_M",
+      "num_gpu": 13,
+      "ollama_ps": "NAME                                                ID              SIZE     PROCESSOR          CONTEXT    UNTIL       \n0xIbra/supergemma4-26b-uncensored-gguf-v2:q4_K_M    9453aa2a9e44    18 GB    57%/43% CPU/GPU    2048       Stopping...",
+      "prompt_eval_count": 153,
+      "prompt_tokens_per_second": 382.574,
+      "status": "ok",
+      "wall_seconds": 28.634
+    },
+    {
+      "avg_gpu_util": 15.583,
+      "avg_mem_util": 10.5,
+      "eval_count": 192,
+      "eval_tokens_per_second": 29.679,
+      "max_gpu_util": 55.0,
+      "max_mem_used_mb": 11116.0,
+      "model": "0xIbra/supergemma4-26b-uncensored-gguf-v2:q4_K_M",
+      "num_gpu": 14,
+      "ollama_ps": "NAME                                                ID              SIZE     PROCESSOR          CONTEXT    UNTIL       \n0xIbra/supergemma4-26b-uncensored-gguf-v2:q4_K_M    9453aa2a9e44    18 GB    54%/46% CPU/GPU    2048       Stopping...",
+      "prompt_eval_count": 153,
+      "prompt_tokens_per_second": 408.144,
+      "status": "ok",
+      "wall_seconds": 24.462
+    },
+    {
+      "avg_gpu_util": 16.064,
+      "avg_mem_util": 13.479,
+      "error": "HTTP 500 Internal Server Error: {\"error\":\"memory layout cannot be allocated with num_gpu = 15\"}",
+      "max_gpu_util": 26.0,
+      "max_mem_used_mb": 10363.0,
+      "model": "0xIbra/supergemma4-26b-uncensored-gguf-v2:q4_K_M",
+      "num_gpu": 15,
+      "status": "error",
+      "wall_seconds": 31.95
+    },
+    {
+      "avg_gpu_util": 15.472,
+      "avg_mem_util": 13.134,
+      "error": "HTTP 500 Internal Server Error: {\"error\":\"memory layout cannot be allocated with num_gpu = 16\"}",
+      "max_gpu_util": 25.0,
+      "max_mem_used_mb": 10755.0,
+      "model": "0xIbra/supergemma4-26b-uncensored-gguf-v2:q4_K_M",
+      "num_gpu": 16,
+      "status": "error",
+      "wall_seconds": 32.37
+    }
+  ]
+}

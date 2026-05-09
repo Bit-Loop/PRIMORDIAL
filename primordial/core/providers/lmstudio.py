@@ -36,6 +36,8 @@ class LMStudioResponse:
     completion_tokens: int | None = None
     tokens_per_second: float | None = None
     ttft_seconds: float | None = None
+    reasoning_content: str = ""
+    finish_reason: str | None = None
 
 
 @dataclass(slots=True)
@@ -44,6 +46,8 @@ class LMStudioLoadResult:
     ok: bool
     error: str | None = None
     elapsed_seconds: float | None = None
+    instance_id: str | None = None
+    load_config: dict[str, object] = field(default_factory=dict)
 
 
 class LMStudioClient:
@@ -72,6 +76,7 @@ class LMStudioClient:
         prompt: str,
         temperature: float = 0.0,
         num_ctx: int | None = None,
+        max_tokens: int | None = None,
         timeout_seconds: int | None = None,
     ) -> LMStudioResponse:
         def payload_with(messages: list[dict[str, str]]) -> dict[str, object]:
@@ -81,7 +86,9 @@ class LMStudioClient:
                 "temperature": temperature,
                 "stream": False,
             }
-            if num_ctx is not None:
+            if max_tokens is not None:
+                payload["max_tokens"] = max(1, int(max_tokens))
+            elif num_ctx is not None:
                 payload["max_tokens"] = max(128, min(2048, num_ctx // 8))
             return payload
 
@@ -107,8 +114,8 @@ class LMStudioClient:
                 timeout_seconds=timeout_seconds,
             )
         elapsed_seconds = time.monotonic() - started
-        text = self._extract_chat_text(data)
-        if not text:
+        text, reasoning_content, finish_reason = self._extract_chat_message(data)
+        if not text and not reasoning_content:
             raise RuntimeError("LM Studio returned an empty response")
         usage = data.get("usage") if isinstance(data, dict) else {}
         stats = data.get("stats") if isinstance(data, dict) else {}
@@ -140,36 +147,92 @@ class LMStudioClient:
             completion_tokens=completion_tokens,
             tokens_per_second=tokens_per_second,
             ttft_seconds=ttft_seconds,
+            reasoning_content=reasoning_content,
+            finish_reason=finish_reason,
         )
 
-    def load_model(self, *, model: str, context_length: int, timeout_seconds: int | None = None) -> LMStudioLoadResult:
+    def load_model(
+        self,
+        *,
+        model: str,
+        context_length: int,
+        eval_batch_size: int = 512,
+        flash_attention: bool = True,
+        offload_kv_cache_to_gpu: bool = True,
+        num_experts: int | None = None,
+        timeout_seconds: int | None = None,
+    ) -> LMStudioLoadResult:
         payload = {
             "model": model,
-            "context_length": context_length,
-            "contextLength": context_length,
-            "eval_batch_size": 512,
-            "evalBatchSize": 512,
-            "flash_attention": True,
-            "flashAttention": True,
-            "kv_cache_offload": True,
-            "kvCacheOffload": True,
-            "num_experts": 8,
-            "numExperts": 8,
+            "context_length": int(context_length),
+            "eval_batch_size": int(eval_batch_size),
+            "flash_attention": bool(flash_attention),
+            "offload_kv_cache_to_gpu": bool(offload_kv_cache_to_gpu),
+            "echo_load_config": True,
         }
+        if num_experts is not None:
+            payload["num_experts"] = int(num_experts)
         started = time.monotonic()
         try:
-            self._request_json("POST", "/api/v1/models/load", payload, timeout_seconds=timeout_seconds)
-            return LMStudioLoadResult(model=model, ok=True, elapsed_seconds=time.monotonic() - started)
+            data = self._request_json("POST", "/api/v1/models/load", payload, timeout_seconds=timeout_seconds)
+            instance_id = self._extract_instance_id(data) or model
+            load_config = self._extract_load_config(data) or self._load_config_from_payload(payload)
+            return LMStudioLoadResult(
+                model=model,
+                ok=True,
+                elapsed_seconds=time.monotonic() - started,
+                instance_id=instance_id,
+                load_config=load_config,
+            )
         except Exception as exc:  # noqa: BLE001 - caller records failed rows and continues
-            return LMStudioLoadResult(model=model, ok=False, error=str(exc), elapsed_seconds=time.monotonic() - started)
+            return LMStudioLoadResult(
+                model=model,
+                ok=False,
+                error=str(exc),
+                elapsed_seconds=time.monotonic() - started,
+                load_config=self._load_config_from_payload(payload),
+            )
 
-    def unload_model(self, *, model: str, timeout_seconds: int | None = None) -> LMStudioLoadResult:
+    def unload_model(
+        self,
+        *,
+        model: str,
+        instance_id: str | None = None,
+        timeout_seconds: int | None = None,
+    ) -> LMStudioLoadResult:
         started = time.monotonic()
         try:
-            self._request_json("POST", "/api/v1/models/unload", {"model": model}, timeout_seconds=timeout_seconds)
-            return LMStudioLoadResult(model=model, ok=True, elapsed_seconds=time.monotonic() - started)
+            unload_id = instance_id or model
+            self._request_json("POST", "/api/v1/models/unload", {"instance_id": unload_id}, timeout_seconds=timeout_seconds)
+            return LMStudioLoadResult(
+                model=model,
+                ok=True,
+                elapsed_seconds=time.monotonic() - started,
+                instance_id=unload_id,
+            )
         except Exception as exc:  # noqa: BLE001 - benchmark cleanup should be best-effort
-            return LMStudioLoadResult(model=model, ok=False, error=str(exc), elapsed_seconds=time.monotonic() - started)
+            return LMStudioLoadResult(
+                model=model,
+                ok=False,
+                error=str(exc),
+                elapsed_seconds=time.monotonic() - started,
+                instance_id=instance_id,
+            )
+
+    def unload_loaded_models(self, *, timeout_seconds: int | None = None) -> list[LMStudioLoadResult]:
+        listed = self.list_models()
+        if not listed.ok:
+            return [LMStudioLoadResult(model="", ok=False, error=listed.error)]
+        results: list[LMStudioLoadResult] = []
+        for model in listed.models:
+            if not model.loaded:
+                continue
+            instance_ids = self._loaded_instance_ids(model)
+            if not instance_ids:
+                instance_ids = [model.id]
+            for instance_id in instance_ids:
+                results.append(self.unload_model(model=model.id, instance_id=instance_id, timeout_seconds=timeout_seconds))
+        return results
 
     def _request_json(
         self,
@@ -263,19 +326,72 @@ class LMStudioClient:
             )
         return sorted(models, key=lambda item: item.id.lower())
 
-    def _extract_chat_text(self, data: dict[str, object] | list[object]) -> str:
+    def _extract_chat_message(self, data: dict[str, object] | list[object]) -> tuple[str, str, str | None]:
         if not isinstance(data, dict):
-            return ""
+            return "", "", None
         choices = data.get("choices")
         if not isinstance(choices, list) or not choices:
-            return ""
+            return "", "", None
         first = choices[0]
         if not isinstance(first, dict):
-            return ""
+            return "", "", None
+        finish_reason = self._optional_str(first.get("finish_reason") or first.get("finishReason"))
         message = first.get("message")
         if isinstance(message, dict):
-            return str(message.get("content") or "").strip()
-        return str(first.get("text") or "").strip()
+            text = str(message.get("content") or "").strip()
+            reasoning = str(
+                message.get("reasoning_content")
+                or message.get("reasoning")
+                or message.get("thinking")
+                or ""
+            ).strip()
+            return text, reasoning, finish_reason
+        return str(first.get("text") or "").strip(), "", finish_reason
+
+    def _extract_instance_id(self, data: dict[str, object] | list[object]) -> str | None:
+        if not isinstance(data, dict):
+            return None
+        for key in ("instance_id", "instanceId", "identifier", "id"):
+            value = self._optional_str(data.get(key))
+            if value:
+                return value
+        instance = data.get("instance")
+        if isinstance(instance, dict):
+            for key in ("instance_id", "identifier", "id"):
+                value = self._optional_str(instance.get(key))
+                if value:
+                    return value
+        return None
+
+    def _extract_load_config(self, data: dict[str, object] | list[object]) -> dict[str, object]:
+        if not isinstance(data, dict):
+            return {}
+        load_config = data.get("load_config") or data.get("loadConfig")
+        if isinstance(load_config, dict):
+            return dict(load_config)
+        return {}
+
+    def _load_config_from_payload(self, payload: dict[str, object]) -> dict[str, object]:
+        return {
+            key: value
+            for key, value in payload.items()
+            if key not in {"model", "echo_load_config"} and value is not None
+        }
+
+    def _loaded_instance_ids(self, model: LMStudioModelInfo) -> list[str]:
+        loaded_instances = model.raw.get("loaded_instances")
+        if not isinstance(loaded_instances, list):
+            return []
+        instance_ids: list[str] = []
+        for instance in loaded_instances:
+            if not isinstance(instance, dict):
+                continue
+            instance_id = self._optional_str(
+                instance.get("identifier") or instance.get("instance_id") or instance.get("id")
+            )
+            if instance_id:
+                instance_ids.append(instance_id)
+        return instance_ids
 
     def _optional_str(self, value: object) -> str | None:
         if value is None:

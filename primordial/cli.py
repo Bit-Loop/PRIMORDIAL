@@ -73,13 +73,41 @@ def build_parser() -> argparse.ArgumentParser:
     models_eval.add_argument("--json-out", type=Path, help="Optional detailed JSON artifact path.")
     models_eval.add_argument("--max-context", type=int, default=32768)
     models_eval.add_argument(
+        "--context-size",
+        type=int,
+        action="append",
+        help="Specific context length to evaluate. Repeat to compare sizes.",
+    )
+    models_eval.add_argument(
         "--temperature",
         type=float,
         action="append",
         help="Temperature to evaluate. Repeat to override the default 0.0 and 0.1 sweep.",
     )
     models_eval.add_argument("--judge-model", help="Optional supplemental local judge model name.")
+    models_eval.add_argument("--lmstudio-profile", type=Path, help="Optional LM Studio tuning profile JSON path.")
+    models_eval.add_argument("--no-lmstudio-profile", action="store_true", help="Disable LM Studio tuning profile loading.")
+    models_eval.add_argument(
+        "--max-model-minutes",
+        type=float,
+        default=30.0,
+        help="Hard planning cutoff per local model run before recommending Claude/GPT offload.",
+    )
     models_eval.add_argument("--json", action="store_true")
+    models_tune_lmstudio = models_subparsers.add_parser(
+        "tune-lmstudio",
+        help="Tune LM Studio load settings at a small context and persist a benchmark profile.",
+    )
+    models_tune_lmstudio.add_argument("--model", action="append", default=[], help="LM Studio model to tune. Repeat for multiple.")
+    models_tune_lmstudio.add_argument("--context", type=int, default=1024)
+    models_tune_lmstudio.add_argument("--max-tokens", type=int, default=128)
+    models_tune_lmstudio.add_argument("--temperature", type=float, default=0.0)
+    models_tune_lmstudio.add_argument("--cpu-reserve-mb", type=int, default=4096)
+    models_tune_lmstudio.add_argument("--vram-soft-reserve-mb", type=int, default=128)
+    models_tune_lmstudio.add_argument("--timeout", type=int, default=120)
+    models_tune_lmstudio.add_argument("--profile-out", type=Path)
+    models_tune_lmstudio.add_argument("--json-out", type=Path)
+    models_tune_lmstudio.add_argument("--json", action="store_true")
 
     caido = subparsers.add_parser("caido", help="Inspect Caido integration status.")
     caido_subparsers = caido.add_subparsers(dest="caido_command")
@@ -265,13 +293,34 @@ def main(argv: list[str] | None = None) -> int:
                     csv_path=args.csv,
                     json_out=args.json_out,
                     max_context=args.max_context,
+                    context_sizes=args.context_size,
                     temperatures=args.temperature,
                     judge_model=args.judge_model,
+                    lmstudio_profile_path=args.lmstudio_profile,
+                    use_lmstudio_profile=not args.no_lmstudio_profile,
+                    max_model_runtime_seconds=max(1, int(args.max_model_minutes * 60)),
                 )
                 if args.json:
                     print(json.dumps(payload, indent=2, sort_keys=True))
                 else:
                     print(_format_model_evaluation(payload))
+                return 0
+            if models_command == "tune-lmstudio":
+                payload = runtime.tune_lmstudio_models(
+                    models=args.model or None,
+                    context_length=args.context,
+                    max_tokens=args.max_tokens,
+                    temperature=args.temperature,
+                    cpu_reserve_mb=args.cpu_reserve_mb,
+                    vram_soft_reserve_mb=args.vram_soft_reserve_mb,
+                    timeout_seconds=args.timeout,
+                    profile_out=args.profile_out,
+                    json_out=args.json_out,
+                )
+                if args.json:
+                    print(json.dumps(payload, indent=2, sort_keys=True))
+                else:
+                    print(_format_lmstudio_tuning(payload))
                 return 0
         if command == "credentials":
             credentials_command = args.credentials_command or "status"
@@ -602,6 +651,40 @@ def _format_model_evaluation(payload: dict[str, object]) -> str:
         reasons = item.get("reasons", [])
         if isinstance(reasons, list) and reasons:
             lines.append(f"    reasons: {'; '.join(str(reason) for reason in reasons[:3])}")
+    return "\n".join(lines)
+
+
+def _format_lmstudio_tuning(payload: dict[str, object]) -> str:
+    lines = ["LM Studio tuning:"]
+    lines.append(f"status={payload.get('status')}")
+    error = payload.get("error")
+    if error:
+        lines.append(f"error={error}")
+    artifacts = payload.get("artifacts", {})
+    if isinstance(artifacts, dict):
+        if artifacts.get("profile_path"):
+            lines.append(f"profile={artifacts.get('profile_path')}")
+        if artifacts.get("json_path"):
+            lines.append(f"json={artifacts.get('json_path')}")
+    warnings = payload.get("warnings", [])
+    if isinstance(warnings, list) and warnings:
+        lines.append("warnings:")
+        for warning in warnings[:6]:
+            lines.append(f"  {warning}")
+    models = payload.get("models", {})
+    if isinstance(models, dict) and models:
+        lines.append("models:")
+        emitted: set[str] = set()
+        for key, profile in sorted(models.items()):
+            model = str(key)
+            if model.startswith("lmstudio:"):
+                continue
+            if model in emitted or not isinstance(profile, dict):
+                continue
+            emitted.add(model)
+            config = profile.get("best_config", {})
+            speed = profile.get("tokens_per_second")
+            lines.append(f"  {model}: tok/s={speed} config={json.dumps(config, sort_keys=True)}")
     return "\n".join(lines)
 
 

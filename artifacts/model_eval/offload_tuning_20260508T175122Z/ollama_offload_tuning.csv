@@ -1,0 +1,48 @@
+model,size_bytes,parameter_size,quantization_level,family,num_gpu,status,wall_seconds,eval_tokens_per_second,eval_count,eval_duration_ns,load_duration_ns,done_reason,error,returncode
+tripolskypetr/gemma4-uncensored-aggressive:latest,3009449425,4.6B,Q2_K,gemma4,0,ok,2.1,50.269,64,1273146207,587660580,length,,0
+tripolskypetr/gemma4-uncensored-aggressive:latest,3009449425,4.6B,Q2_K,gemma4,12,ok,2.061,59.667,64,1072628336,870519918,length,,0
+tripolskypetr/gemma4-uncensored-aggressive:latest,3009449425,4.6B,Q2_K,gemma4,24,ok,1.789,77.103,64,830058250,853118397,length,,0
+tripolskypetr/gemma4-uncensored-aggressive:latest,3009449425,4.6B,Q2_K,gemma4,999,ok,1.468,239.549,64,267168758,1118225159,length,,0
+deepseek-r1:8b,5225376047,8.2B,Q4_K_M,qwen3,0,ok,6.087,13.606,64,4703798582,927594786,length,,0
+deepseek-r1:8b,5225376047,8.2B,Q4_K_M,qwen3,8,ok,5.088,16.364,64,3910932797,944442032,length,,0
+deepseek-r1:8b,5225376047,8.2B,Q4_K_M,qwen3,16,ok,4.182,20.485,64,3124217049,876482805,length,,0
+deepseek-r1:8b,5225376047,8.2B,Q4_K_M,qwen3,24,ok,3.372,27.232,64,2350136598,886345228,length,,0
+deepseek-r1:8b,5225376047,8.2B,Q4_K_M,qwen3,999,ok,1.506,108.406,64,590371825,862044113,length,,0
+hf.co/TheBloke/CodeLlama-13B-GGUF:latest,5429443216,13B,unknown,llama,0,ok,7.469,12.377,64,5170947428,1555473909,length,,0
+hf.co/TheBloke/CodeLlama-13B-GGUF:latest,5429443216,13B,unknown,llama,8,ok,5.276,14.619,64,4377719384,633473117,length,,0
+hf.co/TheBloke/CodeLlama-13B-GGUF:latest,5429443216,13B,unknown,llama,16,ok,4.389,18.066,64,3542596804,633742086,length,,0
+hf.co/TheBloke/CodeLlama-13B-GGUF:latest,5429443216,13B,unknown,llama,24,ok,3.452,23.993,64,2667464113,632850282,length,,0
+hf.co/TheBloke/CodeLlama-13B-GGUF:latest,5429443216,13B,unknown,llama,999,ok,1.445,81.165,64,788520675,614524262,length,,0
+tripolskypetr/qwen3.5-uncensored-aggressive:9b,5627044757,9.0B,Q4_K_M,qwen35,0,ok,10.057,8.07,64,7930752375,1421398049,length,,0
+tripolskypetr/qwen3.5-uncensored-aggressive:9b,5627044757,9.0B,Q4_K_M,qwen35,8,ok,7.587,10.486,64,6103428748,1214396093,length,,0
+tripolskypetr/qwen3.5-uncensored-aggressive:9b,5627044757,9.0B,Q4_K_M,qwen35,16,ok,6.043,13.481,64,4747588462,1083854022,length,,0
+tripolskypetr/qwen3.5-uncensored-aggressive:9b,5627044757,9.0B,Q4_K_M,qwen35,24,ok,4.262,20.899,64,3062327117,1037799621,length,,0
+tripolskypetr/qwen3.5-uncensored-aggressive:9b,5627044757,9.0B,Q4_K_M,qwen35,999,ok,1.84,86.952,64,736036202,1021178314,length,,0
+gemma4:e4b,9608350718,8.0B,Q4_K_M,gemma4,0,ok,5.696,20.946,64,3055474631,2239687600,length,,0
+gemma4:e4b,9608350718,8.0B,Q4_K_M,gemma4,6,ok,4.866,22.172,64,2886537849,1765856517,length,,0
+gemma4:e4b,9608350718,8.0B,Q4_K_M,gemma4,12,ok,4.541,24.637,64,2597700616,1743221754,length,,0
+gemma4:e4b,9608350718,8.0B,Q4_K_M,gemma4,18,error,0.584,,,,,,<HTTPError 500: 'Internal Server Error'>,2
+gemma4:e4b,9608350718,8.0B,Q4_K_M,gemma4,24,ok,3.897,32.169,64,1989514370,1747998777,length,,0
+gemma4:e4b,9608350718,8.0B,Q4_K_M,gemma4,32,ok,3.477,39.531,64,1618984269,1728259357,length,,0
+bjoernb/gemma4-e4b-think:latest,9608351107,8.0B,Q4_K_M,gemma4,0,ok,4.969,20.712,64,3090000079,1476235015,length,,0
+bjoernb/gemma4-e4b-think:latest,9608351107,8.0B,Q4_K_M,gemma4,6,ok,4.796,22.693,64,2820302763,1761391268,length,,0
+bjoernb/gemma4-e4b-think:latest,9608351107,8.0B,Q4_K_M,gemma4,12,ok,4.524,24.702,64,2590877052,1737449355,length,,0
+bjoernb/gemma4-e4b-think:latest,9608351107,8.0B,Q4_K_M,gemma4,18,error,0.591,,,,,,<HTTPError 500: 'Internal Server Error'>,2
+bjoernb/gemma4-e4b-think:latest,9608351107,8.0B,Q4_K_M,gemma4,24,ok,3.893,31.783,64,2013639352,1718310002,length,,0
+bjoernb/gemma4-e4b-think:latest,9608351107,8.0B,Q4_K_M,gemma4,32,ok,3.476,39.342,64,1626745358,1716064598,length,,0
+phi4-reasoning:latest,11117503233,14.7B,Q4_K_M,phi3,0,ok,12.619,6.289,64,10175891091,1389535854,length,,0
+phi4-reasoning:latest,11117503233,14.7B,Q4_K_M,phi3,6,ok,10.005,7.286,64,8783618991,749602128,length,,0
+phi4-reasoning:latest,11117503233,14.7B,Q4_K_M,phi3,12,ok,8.962,8.439,64,7583582201,976754494,length,,0
+phi4-reasoning:latest,11117503233,14.7B,Q4_K_M,phi3,18,ok,7.562,10.206,64,6270720257,962030504,length,,0
+phi4-reasoning:latest,11117503233,14.7B,Q4_K_M,phi3,24,ok,6.234,12.768,64,5012448506,962433507,length,,0
+phi4-reasoning:latest,11117503233,14.7B,Q4_K_M,phi3,32,error,0.974,,,,,,<HTTPError 500: 'Internal Server Error'>,2
+0xIbra/supergemma4-26b-uncensored-gguf-v2:q4_K_M,16796015683,25.2B,Q4_K_M,gemma4,4,ok,6.37,24.332,64,2630331436,3168992228,length,,0
+0xIbra/supergemma4-26b-uncensored-gguf-v2:q4_K_M,16796015683,25.2B,Q4_K_M,gemma4,8,ok,5.252,27.228,64,2350512291,2407997221,length,,0
+0xIbra/supergemma4-26b-uncensored-gguf-v2:q4_K_M,16796015683,25.2B,Q4_K_M,gemma4,12,ok,4.526,29.298,64,2184418627,1908405039,length,,0
+0xIbra/supergemma4-26b-uncensored-gguf-v2:q4_K_M,16796015683,25.2B,Q4_K_M,gemma4,16,error,0.7,,,,,,<HTTPError 500: 'Internal Server Error'>,2
+0xIbra/supergemma4-26b-uncensored-gguf-v2:q4_K_M,16796015683,25.2B,Q4_K_M,gemma4,24,error,0.646,,,,,,<HTTPError 500: 'Internal Server Error'>,2
+qwen3-coder-next:q4_K_M,51741611823,79.7B,Q4_K_M,qwen3next,2,ok,14.86,10.069,64,6356245747,7508015882,length,,0
+qwen3-coder-next:q4_K_M,51741611823,79.7B,Q4_K_M,qwen3next,4,ok,15.28,10.422,64,6141102228,8167253239,length,,0
+qwen3-coder-next:q4_K_M,51741611823,79.7B,Q4_K_M,qwen3next,8,error,1.978,,,,,,<HTTPError 500: 'Internal Server Error'>,2
+qwen3-coder-next:q4_K_M,51741611823,79.7B,Q4_K_M,qwen3next,12,error,0.492,,,,,,<HTTPError 500: 'Internal Server Error'>,2
+qwen3-coder-next:q4_K_M,51741611823,79.7B,Q4_K_M,qwen3next,16,error,0.494,,,,,,<HTTPError 500: 'Internal Server Error'>,2

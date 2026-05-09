@@ -1,0 +1,68 @@
+{
+  "created_at": "20260508T175122Z",
+  "policy": {
+    "0xIbra/supergemma4-26b-uncensored-gguf-v2:q4_K_M": {
+      "num_gpu": 12,
+      "processor": "NAME                                                ID              SIZE     PROCESSOR          CONTEXT    UNTIL              \n0xIbra/supergemma4-26b-uncensored-gguf-v2:q4_K_M    9453aa2a9e44    18 GB    61%/39% CPU/GPU    2048       4 minutes from now",
+      "reason": "fastest successful short probe by generated-token throughput",
+      "tokens_per_second": 29.298,
+      "wall_seconds": 4.526
+    },
+    "bjoernb/gemma4-e4b-think:latest": {
+      "num_gpu": 32,
+      "processor": "NAME                               ID              SIZE     PROCESSOR          CONTEXT    UNTIL              \nbjoernb/gemma4-e4b-think:latest    4b05b47a07a1    10 GB    79%/21% CPU/GPU    2048       4 minutes from now",
+      "reason": "fastest successful short probe by generated-token throughput",
+      "tokens_per_second": 39.342,
+      "wall_seconds": 3.476
+    },
+    "deepseek-r1:8b": {
+      "num_gpu": 999,
+      "processor": "NAME              ID              SIZE      PROCESSOR    CONTEXT    UNTIL              \ndeepseek-r1:8b    6995872bfe4c    5.7 GB    100% GPU     2048       4 minutes from now",
+      "reason": "fastest successful short probe by generated-token throughput",
+      "tokens_per_second": 108.406,
+      "wall_seconds": 1.506
+    },
+    "gemma4:e4b": {
+      "num_gpu": 32,
+      "processor": "NAME          ID              SIZE     PROCESSOR          CONTEXT    UNTIL              \ngemma4:e4b    c6eb396dbd59    10 GB    79%/21% CPU/GPU    2048       4 minutes from now",
+      "reason": "fastest successful short probe by generated-token throughput",
+      "tokens_per_second": 39.531,
+      "wall_seconds": 3.477
+    },
+    "hf.co/TheBloke/CodeLlama-13B-GGUF:latest": {
+      "num_gpu": 999,
+      "processor": "NAME                                        ID              SIZE      PROCESSOR    CONTEXT    UNTIL              \nhf.co/TheBloke/CodeLlama-13B-GGUF:latest    dae60ecad215    7.3 GB    100% GPU     2048       4 minutes from now",
+      "reason": "fastest successful short probe by generated-token throughput",
+      "tokens_per_second": 81.165,
+      "wall_seconds": 1.445
+    },
+    "phi4-reasoning:latest": {
+      "num_gpu": 24,
+      "processor": "NAME                     ID              SIZE     PROCESSOR          CONTEXT    UNTIL              \nphi4-reasoning:latest    47e2630ccbcd    11 GB    41%/59% CPU/GPU    2048       4 minutes from now",
+      "reason": "fastest successful short probe by generated-token throughput",
+      "tokens_per_second": 12.768,
+      "wall_seconds": 6.234
+    },
+    "qwen3-coder-next:q4_K_M": {
+      "num_gpu": 4,
+      "processor": "NAME                       ID              SIZE     PROCESSOR         CONTEXT    UNTIL              \nqwen3-coder-next:q4_K_M    ca06e9e4087c    54 GB    91%/9% CPU/GPU    2048       4 minutes from now",
+      "reason": "fastest successful short probe by generated-token throughput",
+      "tokens_per_second": 10.422,
+      "wall_seconds": 15.28
+    },
+    "tripolskypetr/gemma4-uncensored-aggressive:latest": {
+      "num_gpu": 999,
+      "processor": "NAME                                                 ID              SIZE      PROCESSOR    CONTEXT    UNTIL              \ntripolskypetr/gemma4-uncensored-aggressive:latest    70a8c9621866    3.5 GB    100% GPU     2048       4 minutes from now",
+      "reason": "fastest successful short probe by generated-token throughput",
+      "tokens_per_second": 239.549,
+      "wall_seconds": 1.468
+    },
+    "tripolskypetr/qwen3.5-uncensored-aggressive:9b": {
+      "num_gpu": 999,
+      "processor": "NAME                                              ID              SIZE      PROCESSOR    CONTEXT    UNTIL              \ntripolskypetr/qwen3.5-uncensored-aggressive:9b    77574e8272a2    7.2 GB    100% GPU     2048       4 minutes from now",
+      "reason": "fastest successful short probe by generated-token throughput",
+      "tokens_per_second": 86.952,
+      "wall_seconds": 1.84
+    }
+  }
+}

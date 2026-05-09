@@ -7,6 +7,7 @@ import json
 import math
 from pathlib import Path
 import re
+import time
 from typing import Callable, Iterable
 
 from primordial.core.providers.lmstudio import LMStudioClient, LMStudioModelInfo
@@ -51,6 +52,8 @@ REFUSAL_PATTERNS: tuple[str, ...] = (
 )
 
 ROLE_NAMES: tuple[str, ...] = ("local_fast", "local_deep", "local_code", "local_compact")
+DEFAULT_MODEL_BENCHMARK_TIMEOUT_SECONDS = 30 * 60
+REMOTE_OFFLOAD_TARGETS: tuple[str, ...] = ("claude", "gpt")
 
 
 def _json_safe(value: object) -> object:
@@ -151,6 +154,14 @@ class ModelEvalResult:
     host_metrics_after: dict[str, object] = field(default_factory=dict)
     provider_state_before: dict[str, object] = field(default_factory=dict)
     provider_state_after: dict[str, object] = field(default_factory=dict)
+    reasoning_content_excerpt: str = ""
+    finish_reason: str | None = None
+    load_config: dict[str, object] = field(default_factory=dict)
+    tuned_profile_applied: bool = False
+    estimated_runtime_seconds: float | None = None
+    max_runtime_seconds: int | None = None
+    benchmark_plan: dict[str, object] = field(default_factory=dict)
+    offload_recommendation: dict[str, object] = field(default_factory=dict)
 
     @property
     def recommendation_id(self) -> str:
@@ -185,6 +196,14 @@ class ModelEvalResult:
             "host_metrics_after": _json_safe(self.host_metrics_after),
             "provider_state_before": _json_safe(self.provider_state_before),
             "provider_state_after": _json_safe(self.provider_state_after),
+            "reasoning_content_excerpt": self.reasoning_content_excerpt,
+            "finish_reason": self.finish_reason,
+            "load_config": _json_safe(self.load_config),
+            "tuned_profile_applied": self.tuned_profile_applied,
+            "estimated_runtime_seconds": self.estimated_runtime_seconds,
+            "max_runtime_seconds": self.max_runtime_seconds,
+            "benchmark_plan": _json_safe(self.benchmark_plan),
+            "offload_recommendation": _json_safe(self.offload_recommendation),
         }
 
 
@@ -233,6 +252,7 @@ class ModelEvalSummary:
     artifacts: dict[str, str] = field(default_factory=dict)
     judge_metadata: dict[str, object] = field(default_factory=dict)
     eval_config: dict[str, object] = field(default_factory=dict)
+    role_findings: dict[str, object] = field(default_factory=dict)
 
     def as_payload(self) -> dict[str, object]:
         return {
@@ -247,6 +267,7 @@ class ModelEvalSummary:
             "artifacts": self.artifacts,
             "judge_metadata": _json_safe(self.judge_metadata),
             "eval_config": _json_safe(self.eval_config),
+            "role_findings": _json_safe(self.role_findings),
         }
 
 
@@ -259,6 +280,8 @@ class _UnifiedResponse:
     completion_tokens: int | None = None
     tokens_per_second: float | None = None
     ttft_seconds: float | None = None
+    reasoning_content: str = ""
+    finish_reason: str | None = None
 
 
 class _OllamaAdapter:
@@ -351,9 +374,12 @@ class _OllamaAdapter:
 class _LMStudioAdapter:
     provider = "lmstudio"
 
-    def __init__(self, client: LMStudioClient) -> None:
+    def __init__(self, client: LMStudioClient, performance_profile: dict[str, object] | None = None) -> None:
         self.client = client
-        self._loaded_by_eval: set[str] = set()
+        self.performance_profile = performance_profile or {}
+        self._loaded_by_eval: dict[str, str | None] = {}
+        self._load_configs: dict[str, dict[str, object]] = {}
+        self._profile_applied: set[str] = set()
 
     def list_candidates(self) -> tuple[list[ModelCandidate], str | None]:
         result = self.client.list_models()
@@ -390,22 +416,41 @@ class _LMStudioAdapter:
             completion_tokens=response.completion_tokens,
             tokens_per_second=response.tokens_per_second,
             ttft_seconds=response.ttft_seconds,
+            reasoning_content=response.reasoning_content,
+            finish_reason=response.finish_reason,
         )
 
     def load_for_context(self, candidate: ModelCandidate, context_length: int) -> tuple[str, float | None, str | None]:
-        if candidate.loaded:
+        tuned_config = self._tuned_config_for(candidate)
+        if candidate.loaded and not tuned_config:
             return "already_loaded", None, None
-        result = self.client.load_model(model=candidate.model, context_length=context_length)
+        if candidate.loaded and tuned_config:
+            try:
+                self.client.unload_model(model=candidate.model)
+            except Exception:
+                pass
+        result = self.client.load_model(
+            model=candidate.model,
+            context_length=context_length,
+            eval_batch_size=int(tuned_config.get("eval_batch_size", 512)),
+            flash_attention=bool(tuned_config.get("flash_attention", True)),
+            offload_kv_cache_to_gpu=bool(tuned_config.get("offload_kv_cache_to_gpu", True)),
+            num_experts=self._optional_positive_int(tuned_config.get("num_experts")),
+        )
         if result.ok:
-            self._loaded_by_eval.add(candidate.model)
-            return "loaded_by_eval", result.elapsed_seconds, None
+            self._loaded_by_eval[candidate.model] = result.instance_id
+            self._load_configs[candidate.model] = dict(result.load_config)
+            if tuned_config:
+                self._profile_applied.add(candidate.model)
+            return "loaded_by_eval_tuned" if tuned_config else "loaded_by_eval", result.elapsed_seconds, None
+        self._load_configs[candidate.model] = dict(result.load_config)
         return "load_failed", result.elapsed_seconds, result.error or "LM Studio load failed"
 
     def cleanup(self, candidate: ModelCandidate) -> tuple[str, str | None]:
         if candidate.model not in self._loaded_by_eval:
             return "skipped", None
-        result = self.client.unload_model(model=candidate.model)
-        self._loaded_by_eval.discard(candidate.model)
+        result = self.client.unload_model(model=candidate.model, instance_id=self._loaded_by_eval.get(candidate.model))
+        self._loaded_by_eval.pop(candidate.model, None)
         return ("unloaded", None) if result.ok else ("unload_failed", result.error)
 
     def provider_state(self, candidate: ModelCandidate) -> dict[str, object]:
@@ -415,8 +460,17 @@ class _LMStudioAdapter:
             "loaded_at_list_time": candidate.loaded,
             "max_context_length": candidate.max_context_length,
             "load_strategy": "sequential_auto_load",
+            "tuned_profile_available": bool(self._tuned_config_for(candidate)),
+            "tuned_profile_applied": candidate.model in self._profile_applied,
+            "load_config": self._load_configs.get(candidate.model, {}),
             "raw": candidate.raw,
         }
+
+    def load_config_for(self, candidate: ModelCandidate) -> dict[str, object]:
+        return dict(self._load_configs.get(candidate.model, {}))
+
+    def profile_applied_for(self, candidate: ModelCandidate) -> bool:
+        return candidate.model in self._profile_applied
 
     def _candidate_from_info(self, info: LMStudioModelInfo) -> ModelCandidate:
         return ModelCandidate(
@@ -431,6 +485,47 @@ class _LMStudioAdapter:
             raw=info.raw,
         )
 
+    def _tuned_config_for(self, candidate: ModelCandidate) -> dict[str, object]:
+        profile = self.performance_profile if isinstance(self.performance_profile, dict) else {}
+        models = profile.get("models")
+        if not isinstance(models, dict):
+            return {}
+        keys = (candidate.recommendation_id, candidate.model, f"lmstudio:{candidate.model}")
+        entry: object = None
+        for key in keys:
+            entry = models.get(key)
+            if isinstance(entry, dict):
+                break
+        if not isinstance(entry, dict):
+            return {}
+        raw_config = entry.get("best_config") or entry.get("load_config") or entry.get("config") or {}
+        if not isinstance(raw_config, dict):
+            return {}
+        config: dict[str, object] = {}
+        eval_batch_size = self._optional_positive_int(raw_config.get("eval_batch_size"))
+        if eval_batch_size:
+            config["eval_batch_size"] = eval_batch_size
+        if "flash_attention" in raw_config:
+            config["flash_attention"] = bool(raw_config.get("flash_attention"))
+        if "offload_kv_cache_to_gpu" in raw_config:
+            config["offload_kv_cache_to_gpu"] = bool(raw_config.get("offload_kv_cache_to_gpu"))
+        num_experts = self._optional_positive_int(raw_config.get("num_experts"))
+        if num_experts:
+            config["num_experts"] = num_experts
+        return config
+
+    def _optional_positive_int(self, value: object) -> int | None:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int) and value > 0:
+            return value
+        if isinstance(value, float) and value > 0:
+            return int(value)
+        if isinstance(value, str) and value.strip().isdigit():
+            parsed = int(value.strip())
+            return parsed if parsed > 0 else None
+        return None
+
 
 class ModelEvaluationService:
     def __init__(
@@ -438,10 +533,12 @@ class ModelEvaluationService:
         ollama: OllamaClient | None = None,
         lmstudio: LMStudioClient | None = None,
         host_metrics_sampler: Callable[[], dict[str, object]] | None = None,
+        lmstudio_profile: dict[str, object] | None = None,
     ) -> None:
         self.ollama = ollama
         self.lmstudio = lmstudio
         self.host_metrics_sampler = host_metrics_sampler
+        self.lmstudio_profile = lmstudio_profile or {}
 
     def default_cases(self) -> list[ModelEvalCase]:
         base_system = (
@@ -753,10 +850,12 @@ class ModelEvaluationService:
         temperatures: Iterable[float] | None = None,
         context_sizes: Iterable[int] | None = None,
         judge_model: str | None = None,
+        max_model_runtime_seconds: int = DEFAULT_MODEL_BENCHMARK_TIMEOUT_SECONDS,
     ) -> ModelEvalSummary:
         provider_names = self._normalize_providers(providers or ["ollama"])
         temperature_values = self._normalize_temperatures(temperatures)
         context_overrides = self._normalize_context_sizes(context_sizes, max_context=max_context)
+        max_runtime_seconds = max(1, int(max_model_runtime_seconds or DEFAULT_MODEL_BENCHMARK_TIMEOUT_SECONDS))
         candidates, provider_errors = self._candidate_pool(provider_names)
         selected = self._select_preferred(candidates, models) if models else candidates
         missing_models = self._missing_preferred_models(candidates, models) if models else []
@@ -766,6 +865,7 @@ class ModelEvaluationService:
 
         adapters = self._adapters(provider_names)
         results: list[ModelEvalResult] = []
+        runtime_estimates: dict[str, dict[str, object]] = {}
         for error in provider_errors:
             results.append(
                 ModelEvalResult(
@@ -807,7 +907,25 @@ class ModelEvaluationService:
             if context_overrides and candidate_context_cap:
                 cap = max(512, candidate_context_cap)
                 contexts = sorted({max(512, min(cap, int(context))) for context in contexts})
+            runtime_estimate = self._estimate_model_runtime(
+                candidate,
+                contexts=contexts,
+                temperatures=temperature_values,
+                case_count=len(self.default_cases()),
+                max_runtime_seconds=max_runtime_seconds,
+            )
+            runtime_estimates[candidate.recommendation_id] = runtime_estimate
+            if runtime_estimate.get("action") == "skip_remote_offload":
+                results.append(self._estimated_timeout_result(candidate, runtime_estimate))
+                continue
+            model_started = time.monotonic()
+            stop_candidate = False
             for context_length in contexts:
+                timeout_result = self._runtime_timeout_result_if_needed(candidate, model_started, max_runtime_seconds)
+                if timeout_result is not None:
+                    results.append(timeout_result)
+                    stop_candidate = True
+                    break
                 try:
                     load_state, load_time, load_error = adapter.load_for_context(candidate, context_length)
                 except Exception as exc:  # noqa: BLE001 - provider lifecycle failures must not abort the suite
@@ -824,8 +942,15 @@ class ModelEvaluationService:
                         )
                     )
                     continue
+                load_config = self._adapter_load_config(adapter, candidate)
+                tuned_profile_applied = self._adapter_profile_applied(adapter, candidate)
                 for temperature in temperature_values:
                     for case in self.default_cases():
+                        timeout_result = self._runtime_timeout_result_if_needed(candidate, model_started, max_runtime_seconds)
+                        if timeout_result is not None:
+                            results.append(timeout_result)
+                            stop_candidate = True
+                            break
                         host_before = self._host_metrics_snapshot()
                         provider_before = self._provider_state_snapshot(adapter, candidate)
                         try:
@@ -852,6 +977,11 @@ class ModelEvaluationService:
                             result.completion_tokens = response.completion_tokens
                             result.tokens_per_second = response.tokens_per_second
                             result.ttft_seconds = response.ttft_seconds
+                            result.reasoning_content_excerpt = response.reasoning_content[:600]
+                            result.finish_reason = response.finish_reason
+                            if not response.text and response.reasoning_content:
+                                result.reasons.append("reasoning-only response with no final content")
+                                result.passed = False
                             result.role_name = case.role_name or case.category
                             result.stage = "eval"
                             result.load_state = load_state
@@ -877,11 +1007,20 @@ class ModelEvaluationService:
                             )
                         result.temperature = temperature
                         result.scenario_group = case.scenario_group or case.category
+                        result.load_config = dict(load_config)
+                        result.tuned_profile_applied = tuned_profile_applied
+                        result.benchmark_plan = dict(runtime_estimate)
+                        result.estimated_runtime_seconds = self._finite_float(runtime_estimate.get("estimated_seconds"))
+                        result.max_runtime_seconds = max_runtime_seconds
                         result.host_metrics_before = host_before
                         result.host_metrics_after = self._host_metrics_snapshot()
                         result.provider_state_before = provider_before
                         result.provider_state_after = self._provider_state_snapshot(adapter, candidate)
                         results.append(result)
+                    if stop_candidate:
+                        break
+                if stop_candidate:
+                    break
             try:
                 cleanup_state, cleanup_error = adapter.cleanup(candidate)
             except Exception as exc:  # noqa: BLE001 - provider lifecycle failures must not abort the suite
@@ -918,6 +1057,12 @@ class ModelEvaluationService:
             role_suggestions=role_suggestions,
             model_identification=model_identification,
         )
+        role_findings = self.role_findings(
+            recommendations=recommendations,
+            role_suggestions=role_suggestions,
+            aggregate_rows=aggregate_rows,
+            model_identification=model_identification,
+        )
         judge_metadata = self._judge_metadata(judge_model, recommendations, results)
         return ModelEvalSummary(
             providers=provider_names,
@@ -929,12 +1074,16 @@ class ModelEvaluationService:
             aggregate_rows=aggregate_rows,
             recommendations=recommendations,
             judge_metadata=judge_metadata,
+            role_findings=role_findings,
             eval_config={
                 "exhaustive": exhaustive,
                 "max_context": max_context,
                 "context_sizes": context_overrides,
                 "temperatures": temperature_values,
                 "case_count": len(self.default_cases()),
+                "lmstudio_profile_applied": bool(self.lmstudio_profile),
+                "max_model_runtime_seconds": max_runtime_seconds,
+                "runtime_estimates": _json_safe(runtime_estimates),
             },
         )
 
@@ -955,9 +1104,11 @@ class ModelEvaluationService:
         fieldnames = [
             "provider",
             "model",
+            "recommendation_id",
             "identified_tags",
             "identified_profile",
             "role_recommendation",
+            "role_fit_summary",
             "suggested_roles",
             "role_confidence",
             "aggregate_score",
@@ -989,6 +1140,10 @@ class ModelEvaluationService:
                 serialized = dict(row)
                 serialized["identified_profile"] = json.dumps(
                     _json_safe(serialized.get("identified_profile", {})),
+                    sort_keys=True,
+                )
+                serialized["role_fit_summary"] = json.dumps(
+                    _json_safe(serialized.get("role_fit_summary", {})),
                     sort_keys=True,
                 )
                 serialized["suggested_roles"] = json.dumps(
@@ -1188,9 +1343,14 @@ class ModelEvaluationService:
             row = {
                 "provider": model_results[0].provider,
                 "model": model_results[0].model,
+                "recommendation_id": model_id,
                 "identified_tags": ",".join(str(item) for item in model_identity.get("tags", []) if str(item).strip()),
                 "identified_profile": model_identity,
                 "role_recommendation": ",".join(sorted(recommended_roles_by_model.get(model_id, []))),
+                "role_fit_summary": self._role_fit_summary(
+                    recommended_roles=recommended_roles_by_model.get(model_id, []),
+                    model_suggestions=model_suggestions,
+                ),
                 "suggested_roles": [
                     {
                         "role": item.role,
@@ -1236,6 +1396,129 @@ class ModelEvaluationService:
             }
             rows.append(row)
         return rows
+
+    def role_findings(
+        self,
+        *,
+        recommendations: dict[str, str],
+        role_suggestions: list[ModelRoleSuggestion],
+        aggregate_rows: list[dict[str, object]],
+        model_identification: dict[str, dict[str, object]],
+    ) -> dict[str, object]:
+        suggestions_by_role: dict[str, list[ModelRoleSuggestion]] = {}
+        suggestions_by_model: dict[str, list[ModelRoleSuggestion]] = {}
+        for suggestion in role_suggestions:
+            if suggestion.status not in {"recommended", "candidate"}:
+                continue
+            suggestions_by_role.setdefault(suggestion.role, []).append(suggestion)
+            suggestions_by_model.setdefault(suggestion.recommendation_id, []).append(suggestion)
+
+        roles: dict[str, object] = {}
+        for role in ROLE_NAMES:
+            items = sorted(
+                suggestions_by_role.get(role, []),
+                key=lambda item: (0 if item.recommendation_id == recommendations.get(role) else 1, item.rank, -item.confidence),
+            )
+            roles[role] = {
+                "recommended_model": recommendations.get(role, ""),
+                "recommendation_status": "recommended" if recommendations.get(role) else "relative_only",
+                "relative_best_model": self._relative_best_model_for_role(role, aggregate_rows),
+                "relative_candidates": self._relative_candidates_for_role(role, aggregate_rows),
+                "candidates": [
+                    {
+                        "model": item.recommendation_id,
+                        "rank": item.rank,
+                        "confidence": round(item.confidence, 4),
+                        "fit_score": round(item.fit_score, 4),
+                        "status": item.status,
+                        "reasons": list(item.reasons[:3]),
+                        "warnings": list(item.warnings[:3]),
+                    }
+                    for item in items[:3]
+                ],
+            }
+
+        models: dict[str, object] = {}
+        relative_roles_by_model: dict[str, list[str]] = {}
+        for role in ROLE_NAMES:
+            relative_best = self._relative_best_model_for_role(role, aggregate_rows)
+            if relative_best:
+                relative_roles_by_model.setdefault(relative_best, []).append(role)
+        for row in aggregate_rows:
+            if not isinstance(row, dict):
+                continue
+            model_id = str(row.get("recommendation_id") or "").strip()
+            if not model_id:
+                provider = str(row.get("provider") or "")
+                model = str(row.get("model") or "")
+                model_id = model if provider == "ollama" else f"{provider}:{model}"
+            suggestions = sorted(
+                suggestions_by_model.get(model_id, []),
+                key=lambda item: (item.rank, -item.confidence, item.role),
+            )
+            identity = model_identification.get(model_id, {})
+            models[model_id] = {
+                "best_for": [role for role, winner in recommendations.items() if winner == model_id],
+                "relative_best_for": relative_roles_by_model.get(model_id, []),
+                "candidate_for": [item.role for item in suggestions[:4]],
+                "aggregate_score": row.get("aggregate_score"),
+                "avg_tokens_sec": row.get("avg_tokens_sec"),
+                "avg_latency_sec": row.get("avg_latency_sec"),
+                "tags": identity.get("tags", []),
+                "notes": row.get("notes", ""),
+                "rationale": self._role_finding_rationale(suggestions),
+            }
+        return {
+            "source": "deterministic_model_eval",
+            "roles": roles,
+            "models": models,
+            "note": (
+                "recommended_model is populated only when pass-rate and confidence gates are met; "
+                "relative_best_model is the best observed model for that role in this run."
+            ),
+        }
+
+    def _relative_best_model_for_role(self, role: str, aggregate_rows: list[dict[str, object]]) -> str:
+        candidates = self._relative_candidates_for_role(role, aggregate_rows)
+        return str(candidates[0]["model"]) if candidates else ""
+
+    def _relative_candidates_for_role(self, role: str, aggregate_rows: list[dict[str, object]]) -> list[dict[str, object]]:
+        ranked: list[dict[str, object]] = []
+        for row in aggregate_rows:
+            if not isinstance(row, dict):
+                continue
+            role_scores = row.get("role_scores", {})
+            if not isinstance(role_scores, dict):
+                continue
+            score = self._finite_float(role_scores.get(role))
+            if score is None:
+                continue
+            model_id = str(row.get("recommendation_id") or "").strip()
+            if not model_id:
+                provider = str(row.get("provider") or "")
+                model = str(row.get("model") or "")
+                model_id = model if provider == "ollama" else f"{provider}:{model}"
+            ranked.append(
+                {
+                    "model": model_id,
+                    "role_score": round(score, 4),
+                    "aggregate_score": row.get("aggregate_score"),
+                    "avg_tokens_sec": row.get("avg_tokens_sec"),
+                    "pass_rate": row.get("pass_rate"),
+                    "cautions": (row.get("role_fit_summary") or {}).get("cautions", [])
+                    if isinstance(row.get("role_fit_summary"), dict)
+                    else [],
+                }
+            )
+        ranked.sort(
+            key=lambda item: (
+                self._finite_float(item.get("role_score")) or 0.0,
+                self._finite_float(item.get("aggregate_score")) or 0.0,
+                self._finite_float(item.get("avg_tokens_sec")) or 0.0,
+            ),
+            reverse=True,
+        )
+        return ranked[:3]
 
     def suggest_roles(
         self,
@@ -1498,6 +1781,45 @@ class ModelEvaluationService:
             },
         )
 
+    def _role_fit_summary(
+        self,
+        *,
+        recommended_roles: list[str],
+        model_suggestions: list[ModelRoleSuggestion],
+    ) -> dict[str, object]:
+        candidate_roles = [
+            item.role
+            for item in sorted(model_suggestions, key=lambda suggestion: (suggestion.rank, -suggestion.confidence))
+            if item.status in {"recommended", "candidate"}
+        ]
+        strengths: list[str] = []
+        cautions: list[str] = []
+        for suggestion in model_suggestions:
+            for reason in suggestion.reasons:
+                if reason not in strengths:
+                    strengths.append(reason)
+            for warning in suggestion.warnings:
+                if warning not in cautions:
+                    cautions.append(warning)
+        return {
+            "best_for": sorted(set(recommended_roles)),
+            "candidate_for": list(dict.fromkeys(candidate_roles))[:4],
+            "strengths": strengths[:4],
+            "cautions": cautions[:4],
+        }
+
+    def _role_finding_rationale(self, suggestions: list[ModelRoleSuggestion]) -> list[str]:
+        rationale: list[str] = []
+        for suggestion in suggestions:
+            if suggestion.status not in {"recommended", "candidate"}:
+                continue
+            label = f"{suggestion.role}: confidence={suggestion.confidence:.3f}"
+            if suggestion.reasons:
+                label = f"{label}; {'; '.join(suggestion.reasons[:2])}"
+            if label not in rationale:
+                rationale.append(label)
+        return rationale[:4]
+
     def _metadata_role_score(self, role: str, model_id: str, metadata: dict[str, object]) -> float:
         lowered = model_id.lower()
         family = self._model_family(model_id, metadata)
@@ -1728,8 +2050,27 @@ class ModelEvaluationService:
             if provider == "ollama" and self.ollama is not None:
                 adapters[provider] = _OllamaAdapter(self.ollama)
             elif provider == "lmstudio" and self.lmstudio is not None:
-                adapters[provider] = _LMStudioAdapter(self.lmstudio)
+                adapters[provider] = _LMStudioAdapter(self.lmstudio, performance_profile=self.lmstudio_profile)
         return adapters
+
+    def _adapter_load_config(self, adapter: object, candidate: ModelCandidate) -> dict[str, object]:
+        getter = getattr(adapter, "load_config_for", None)
+        if not callable(getter):
+            return {}
+        try:
+            value = getter(candidate)
+        except Exception:  # noqa: BLE001 - config telemetry must not break evaluation
+            return {}
+        return dict(value) if isinstance(value, dict) else {}
+
+    def _adapter_profile_applied(self, adapter: object, candidate: ModelCandidate) -> bool:
+        getter = getattr(adapter, "profile_applied_for", None)
+        if not callable(getter):
+            return False
+        try:
+            return bool(getter(candidate))
+        except Exception:  # noqa: BLE001 - config telemetry must not break evaluation
+            return False
 
     def _select_preferred(self, candidates: list[ModelCandidate], preferred: list[str] | None) -> list[ModelCandidate]:
         if not preferred:
@@ -1756,6 +2097,175 @@ class ModelEvaluationService:
             if model and model not in available and model not in missing:
                 missing.append(model)
         return missing
+
+    def _estimate_model_runtime(
+        self,
+        candidate: ModelCandidate,
+        *,
+        contexts: list[int],
+        temperatures: list[float],
+        case_count: int,
+        max_runtime_seconds: int,
+    ) -> dict[str, object]:
+        profile = self._lmstudio_profile_entry(candidate) if candidate.provider == "lmstudio" else {}
+        tokens_per_second = self._finite_float(profile.get("tokens_per_second")) if profile else None
+        load_time_seconds = self._finite_float(profile.get("load_time_seconds")) if profile else None
+        if tokens_per_second is None or tokens_per_second <= 0:
+            return {
+                "provider": candidate.provider,
+                "model": candidate.model,
+                "recommendation_id": candidate.recommendation_id,
+                "source": "unavailable",
+                "action": "run_unestimated",
+                "reason": "no tuning tokens_per_second was available",
+                "contexts": list(contexts),
+                "temperatures": list(temperatures),
+                "case_count": case_count,
+                "max_runtime_seconds": max_runtime_seconds,
+            }
+        context_estimates: list[dict[str, object]] = []
+        total_seconds = 0.0
+        for context in contexts:
+            output_tokens = self._estimated_output_tokens(context)
+            generation_seconds = (
+                (output_tokens / tokens_per_second)
+                * max(1, case_count)
+                * max(1, len(temperatures))
+            )
+            context_seconds = generation_seconds + (load_time_seconds or 0.0)
+            total_seconds += context_seconds
+            context_estimates.append(
+                {
+                    "context_length": context,
+                    "estimated_output_tokens_per_case": output_tokens,
+                    "estimated_seconds": round(context_seconds, 4),
+                }
+            )
+        action = "skip_remote_offload" if total_seconds > max_runtime_seconds else "run"
+        return {
+            "provider": candidate.provider,
+            "model": candidate.model,
+            "recommendation_id": candidate.recommendation_id,
+            "source": "lmstudio_tuning_profile",
+            "action": action,
+            "tokens_per_second": round(tokens_per_second, 4),
+            "load_time_seconds": load_time_seconds,
+            "contexts": list(contexts),
+            "temperatures": list(temperatures),
+            "case_count": case_count,
+            "context_estimates": context_estimates,
+            "estimated_seconds": round(total_seconds, 4),
+            "max_runtime_seconds": max_runtime_seconds,
+            "offload_recommendation": self._offload_recommendation(candidate, round(total_seconds, 4), max_runtime_seconds)
+            if action == "skip_remote_offload"
+            else {},
+        }
+
+    def _estimated_timeout_result(
+        self,
+        candidate: ModelCandidate,
+        estimate: dict[str, object],
+    ) -> ModelEvalResult:
+        estimated_seconds = self._finite_float(estimate.get("estimated_seconds"))
+        max_runtime = self._optional_positive_int(estimate.get("max_runtime_seconds"))
+        offload = estimate.get("offload_recommendation")
+        offload_payload = dict(offload) if isinstance(offload, dict) else self._offload_recommendation(
+            candidate,
+            estimated_seconds,
+            max_runtime,
+        )
+        return ModelEvalResult(
+            provider=candidate.provider,
+            model=candidate.model,
+            case_id="estimated_runtime_timeout",
+            category="benchmark_planning",
+            role_name="benchmark_planning",
+            score=0.0,
+            passed=False,
+            elapsed_seconds=None,
+            reasons=[
+                (
+                    f"estimated runtime {self._format_seconds(estimated_seconds)} exceeds "
+                    f"max model runtime {self._format_seconds(max_runtime)}"
+                ),
+                "defer to remote premium model instead of running locally",
+            ],
+            stage="planning",
+            error="skipped_estimated_timeout",
+            load_state="skipped_estimated_timeout",
+            estimated_runtime_seconds=estimated_seconds,
+            max_runtime_seconds=max_runtime,
+            benchmark_plan=dict(estimate),
+            offload_recommendation=offload_payload,
+        )
+
+    def _runtime_timeout_result_if_needed(
+        self,
+        candidate: ModelCandidate,
+        model_started: float,
+        max_runtime_seconds: int,
+    ) -> ModelEvalResult | None:
+        elapsed = time.monotonic() - model_started
+        if elapsed <= max_runtime_seconds:
+            return None
+        return ModelEvalResult(
+            provider=candidate.provider,
+            model=candidate.model,
+            case_id="model_runtime_timeout",
+            category="benchmark_runtime",
+            role_name="benchmark_runtime",
+            score=0.0,
+            passed=False,
+            elapsed_seconds=elapsed,
+            reasons=[
+                (
+                    f"model runtime {self._format_seconds(elapsed)} exceeded "
+                    f"max model runtime {self._format_seconds(max_runtime_seconds)}"
+                ),
+                "defer remaining work to remote premium model instead of continuing locally",
+            ],
+            stage="runtime_timeout",
+            error="model_runtime_timeout",
+            load_state="runtime_timeout",
+            max_runtime_seconds=max_runtime_seconds,
+            offload_recommendation=self._offload_recommendation(candidate, elapsed, max_runtime_seconds),
+        )
+
+    def _lmstudio_profile_entry(self, candidate: ModelCandidate) -> dict[str, object]:
+        profile = self.lmstudio_profile if isinstance(self.lmstudio_profile, dict) else {}
+        models = profile.get("models")
+        if not isinstance(models, dict):
+            return {}
+        for key in (candidate.recommendation_id, candidate.model, f"lmstudio:{candidate.model}"):
+            value = models.get(key)
+            if isinstance(value, dict):
+                return value
+        return {}
+
+    def _estimated_output_tokens(self, context_length: int) -> int:
+        return max(128, min(2048, int(context_length) // 8))
+
+    def _offload_recommendation(
+        self,
+        candidate: ModelCandidate,
+        estimated_seconds: float | None,
+        max_runtime_seconds: int | None,
+    ) -> dict[str, object]:
+        return {
+            "recommended": True,
+            "targets": list(REMOTE_OFFLOAD_TARGETS),
+            "reason": "local runtime estimate exceeds benchmark cutoff",
+            "model": candidate.recommendation_id,
+            "estimated_seconds": estimated_seconds,
+            "max_runtime_seconds": max_runtime_seconds,
+        }
+
+    def _format_seconds(self, value: object) -> str:
+        seconds = self._finite_float(value)
+        if seconds is None:
+            return "unknown"
+        minutes = seconds / 60.0
+        return f"{minutes:.1f}m"
 
     def _failed_context_results(
         self,

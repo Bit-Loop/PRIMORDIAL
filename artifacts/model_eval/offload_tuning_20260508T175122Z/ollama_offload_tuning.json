@@ -1,0 +1,1581 @@
+{
+  "base_url": "http://127.0.0.1:11434",
+  "created_at": "20260508T175122Z",
+  "hardware": {
+    "nvidia_after": {
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "NVIDIA GeForce RTX 5070, 12227, 9028, 2739, 0, 0"
+    },
+    "nvidia_before": {
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "NVIDIA GeForce RTX 5070, 12227, 8929, 2838, 7, 20"
+    },
+    "ollama_ps_after": {
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "NAME    ID    SIZE    PROCESSOR    CONTEXT    UNTIL"
+    },
+    "ollama_ps_before": {
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "NAME    ID    SIZE    PROCESSOR    CONTEXT    UNTIL"
+    }
+  },
+  "policy": {
+    "0xIbra/supergemma4-26b-uncensored-gguf-v2:q4_K_M": {
+      "num_gpu": 12,
+      "processor": "NAME                                                ID              SIZE     PROCESSOR          CONTEXT    UNTIL              \n0xIbra/supergemma4-26b-uncensored-gguf-v2:q4_K_M    9453aa2a9e44    18 GB    61%/39% CPU/GPU    2048       4 minutes from now",
+      "reason": "fastest successful short probe by generated-token throughput",
+      "tokens_per_second": 29.298,
+      "wall_seconds": 4.526
+    },
+    "bjoernb/gemma4-e4b-think:latest": {
+      "num_gpu": 32,
+      "processor": "NAME                               ID              SIZE     PROCESSOR          CONTEXT    UNTIL              \nbjoernb/gemma4-e4b-think:latest    4b05b47a07a1    10 GB    79%/21% CPU/GPU    2048       4 minutes from now",
+      "reason": "fastest successful short probe by generated-token throughput",
+      "tokens_per_second": 39.342,
+      "wall_seconds": 3.476
+    },
+    "deepseek-r1:8b": {
+      "num_gpu": 999,
+      "processor": "NAME              ID              SIZE      PROCESSOR    CONTEXT    UNTIL              \ndeepseek-r1:8b    6995872bfe4c    5.7 GB    100% GPU     2048       4 minutes from now",
+      "reason": "fastest successful short probe by generated-token throughput",
+      "tokens_per_second": 108.406,
+      "wall_seconds": 1.506
+    },
+    "gemma4:e4b": {
+      "num_gpu": 32,
+      "processor": "NAME          ID              SIZE     PROCESSOR          CONTEXT    UNTIL              \ngemma4:e4b    c6eb396dbd59    10 GB    79%/21% CPU/GPU    2048       4 minutes from now",
+      "reason": "fastest successful short probe by generated-token throughput",
+      "tokens_per_second": 39.531,
+      "wall_seconds": 3.477
+    },
+    "hf.co/TheBloke/CodeLlama-13B-GGUF:latest": {
+      "num_gpu": 999,
+      "processor": "NAME                                        ID              SIZE      PROCESSOR    CONTEXT    UNTIL              \nhf.co/TheBloke/CodeLlama-13B-GGUF:latest    dae60ecad215    7.3 GB    100% GPU     2048       4 minutes from now",
+      "reason": "fastest successful short probe by generated-token throughput",
+      "tokens_per_second": 81.165,
+      "wall_seconds": 1.445
+    },
+    "phi4-reasoning:latest": {
+      "num_gpu": 24,
+      "processor": "NAME                     ID              SIZE     PROCESSOR          CONTEXT    UNTIL              \nphi4-reasoning:latest    47e2630ccbcd    11 GB    41%/59% CPU/GPU    2048       4 minutes from now",
+      "reason": "fastest successful short probe by generated-token throughput",
+      "tokens_per_second": 12.768,
+      "wall_seconds": 6.234
+    },
+    "qwen3-coder-next:q4_K_M": {
+      "num_gpu": 4,
+      "processor": "NAME                       ID              SIZE     PROCESSOR         CONTEXT    UNTIL              \nqwen3-coder-next:q4_K_M    ca06e9e4087c    54 GB    91%/9% CPU/GPU    2048       4 minutes from now",
+      "reason": "fastest successful short probe by generated-token throughput",
+      "tokens_per_second": 10.422,
+      "wall_seconds": 15.28
+    },
+    "tripolskypetr/gemma4-uncensored-aggressive:latest": {
+      "num_gpu": 999,
+      "processor": "NAME                                                 ID              SIZE      PROCESSOR    CONTEXT    UNTIL              \ntripolskypetr/gemma4-uncensored-aggressive:latest    70a8c9621866    3.5 GB    100% GPU     2048       4 minutes from now",
+      "reason": "fastest successful short probe by generated-token throughput",
+      "tokens_per_second": 239.549,
+      "wall_seconds": 1.468
+    },
+    "tripolskypetr/qwen3.5-uncensored-aggressive:9b": {
+      "num_gpu": 999,
+      "processor": "NAME                                              ID              SIZE      PROCESSOR    CONTEXT    UNTIL              \ntripolskypetr/qwen3.5-uncensored-aggressive:9b    77574e8272a2    7.2 GB    100% GPU     2048       4 minutes from now",
+      "reason": "fastest successful short probe by generated-token throughput",
+      "tokens_per_second": 86.952,
+      "wall_seconds": 1.84
+    }
+  },
+  "rows": [
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 1273146207,
+      "eval_tokens_per_second": 50.269,
+      "family": "gemma4",
+      "load_duration_ns": 587660580,
+      "model": "tripolskypetr/gemma4-uncensored-aggressive:latest",
+      "num_gpu": 0,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8929, 2838, 3, 10"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8929, 2838, 2, 2"
+      },
+      "ollama_ps_after": "NAME                                                 ID              SIZE      PROCESSOR    CONTEXT    UNTIL              \ntripolskypetr/gemma4-uncensored-aggressive:latest    70a8c9621866    3.5 GB    100% CPU     2048       4 minutes from now",
+      "parameter_size": "4.6B",
+      "prompt_eval_count": 63,
+      "prompt_eval_duration_ns": 166398951,
+      "quantization_level": "Q2_K",
+      "response_chars": 0,
+      "returncode": 0,
+      "size_bytes": 3009449425,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 2.0999867350037675, \"context\": [2, 105, 9731, 107, 98, 107, 7925, 1186, 506, 15633, 30998, 11172, 236761, 3574, 711, 4928, 672, 14787, 236761, 106, 107, 105, 2364, 107, 3048, 659, 1646, 30998, 524, 236761, 799, 1806, 63510, 57052, 236764, 8082, 1217, 20974, 236786, 88477, 6352, 1135, 2335, 3731, 2263, 32050, 236792, 34711, 3736, 236761, 39874, 3393, 532, 2514, 506, 3890, 59893, 236761, 106, 107, 105, 4368, 107, 100, 45518, 107, 120474, 12364, 236787, 108, 236770, 236761, 138, 1018, 115863, 506, 16499, 53121, 669, 2430, 8150, 1806, 63510, 57052, 26804, 1217, 20974, 236786, 88477, 6352, 1135, 2335, 3731, 2263, 32050, 236792, 34711, 3736, 236761, 669, 3890, 1921, 577, 59893, 532, 5571, 3393, 236761, 108, 236778, 236761, 138, 1018, 137938, 9533, 76423, 53121, 107, 140, 236829, 139, 2182, 236792, 157036, 568, 13149, 3736], \"created_at\": \"2026-05-08T17:51:25.411359896Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 1273146207, \"load_duration\": 587660580, \"model\": \"tripolskypetr/gemma4-uncensored-aggressive:latest\", \"prompt_eval_count\": 63, \"prompt_eval_duration\": 166398951, \"response\": \"\", \"total_duration\": 2094831812}, \"ok\": true}",
+      "total_duration_ns": 2094831812,
+      "wall_seconds": 2.1
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 1072628336,
+      "eval_tokens_per_second": 59.667,
+      "family": "gemma4",
+      "load_duration_ns": 870519918,
+      "model": "tripolskypetr/gemma4-uncensored-aggressive:latest",
+      "num_gpu": 12,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8241, 3526, 10, 5"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8929, 2838, 2, 2"
+      },
+      "ollama_ps_after": "NAME                                                 ID              SIZE      PROCESSOR          CONTEXT    UNTIL              \ntripolskypetr/gemma4-uncensored-aggressive:latest    70a8c9621866    3.6 GB    86%/14% CPU/GPU    2048       4 minutes from now",
+      "parameter_size": "4.6B",
+      "prompt_eval_count": 63,
+      "prompt_eval_duration_ns": 49651873,
+      "quantization_level": "Q2_K",
+      "response_chars": 0,
+      "returncode": 0,
+      "size_bytes": 3009449425,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 2.060735022998415, \"context\": [2, 105, 9731, 107, 98, 107, 7925, 1186, 506, 15633, 30998, 11172, 236761, 3574, 711, 4928, 672, 14787, 236761, 106, 107, 105, 2364, 107, 3048, 659, 1646, 30998, 524, 236761, 799, 1806, 63510, 57052, 236764, 8082, 1217, 20974, 236786, 88477, 6352, 1135, 2335, 3731, 2263, 32050, 236792, 34711, 3736, 236761, 39874, 3393, 532, 2514, 506, 3890, 59893, 236761, 106, 107, 105, 4368, 107, 100, 45518, 107, 120474, 12364, 236787, 108, 236770, 236761, 138, 1018, 115863, 506, 16499, 53121, 669, 2430, 8150, 1806, 63510, 57052, 26804, 1217, 20974, 236786, 88477, 6352, 1135, 2335, 3731, 2263, 32050, 236792, 34711, 3736, 236761, 669, 3890, 1921, 577, 59893, 532, 5571, 3393, 236761, 108, 236778, 236761, 138, 1018, 137938, 9533, 76423, 53121, 107, 140, 236829, 139, 2182, 236792, 157036, 568, 13149, 3736], \"created_at\": \"2026-05-08T17:51:29.809457148Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 1072628336, \"load_duration\": 870519918, \"model\": \"tripolskypetr/gemma4-uncensored-aggressive:latest\", \"prompt_eval_count\": 63, \"prompt_eval_duration\": 49651873, \"response\": \"\", \"total_duration\": 2055596900}, \"ok\": true}",
+      "total_duration_ns": 2055596900,
+      "wall_seconds": 2.061
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 830058250,
+      "eval_tokens_per_second": 77.103,
+      "family": "gemma4",
+      "load_duration_ns": 853118397,
+      "model": "tripolskypetr/gemma4-uncensored-aggressive:latest",
+      "num_gpu": 24,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8003, 3764, 20, 9"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8929, 2838, 1, 1"
+      },
+      "ollama_ps_after": "NAME                                                 ID              SIZE      PROCESSOR          CONTEXT    UNTIL              \ntripolskypetr/gemma4-uncensored-aggressive:latest    70a8c9621866    3.6 GB    79%/21% CPU/GPU    2048       4 minutes from now",
+      "parameter_size": "4.6B",
+      "prompt_eval_count": 63,
+      "prompt_eval_duration_ns": 33235372,
+      "quantization_level": "Q2_K",
+      "response_chars": 0,
+      "returncode": 0,
+      "size_bytes": 3009449425,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 1.7886987849778961, \"context\": [2, 105, 9731, 107, 98, 107, 7925, 1186, 506, 15633, 30998, 11172, 236761, 3574, 711, 4928, 672, 14787, 236761, 106, 107, 105, 2364, 107, 3048, 659, 1646, 30998, 524, 236761, 799, 1806, 63510, 57052, 236764, 8082, 1217, 20974, 236786, 88477, 6352, 1135, 2335, 3731, 2263, 32050, 236792, 34711, 3736, 236761, 39874, 3393, 532, 2514, 506, 3890, 59893, 236761, 106, 107, 105, 4368, 107, 100, 45518, 107, 120474, 12364, 236787, 108, 236770, 236761, 138, 1018, 115863, 506, 16499, 53121, 669, 2430, 8150, 1806, 63510, 57052, 26804, 1217, 20974, 236786, 88477, 6352, 1135, 2335, 3731, 2263, 32050, 236792, 34711, 3736, 236761, 669, 3890, 1921, 577, 59893, 532, 5571, 3393, 236761, 108, 236778, 236761, 138, 1018, 137938, 9533, 76423, 53121, 107, 140, 236829, 139, 2182, 236792, 157036, 568, 13149, 3736], \"created_at\": \"2026-05-08T17:51:33.941133869Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 830058250, \"load_duration\": 853118397, \"model\": \"tripolskypetr/gemma4-uncensored-aggressive:latest\", \"prompt_eval_count\": 63, \"prompt_eval_duration\": 33235372, \"response\": \"\", \"total_duration\": 1783726366}, \"ok\": true}",
+      "total_duration_ns": 1783726366,
+      "wall_seconds": 1.789
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 267168758,
+      "eval_tokens_per_second": 239.549,
+      "family": "gemma4",
+      "load_duration_ns": 1118225159,
+      "model": "tripolskypetr/gemma4-uncensored-aggressive:latest",
+      "num_gpu": 999,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 5641, 6126, 3, 1"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8929, 2838, 1, 1"
+      },
+      "ollama_ps_after": "NAME                                                 ID              SIZE      PROCESSOR    CONTEXT    UNTIL              \ntripolskypetr/gemma4-uncensored-aggressive:latest    70a8c9621866    3.5 GB    100% GPU     2048       4 minutes from now",
+      "parameter_size": "4.6B",
+      "prompt_eval_count": 63,
+      "prompt_eval_duration_ns": 12286554,
+      "quantization_level": "Q2_K",
+      "response_chars": 0,
+      "returncode": 0,
+      "size_bytes": 3009449425,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 1.4681676699838135, \"context\": [2, 105, 9731, 107, 98, 107, 7925, 1186, 506, 15633, 30998, 11172, 236761, 3574, 711, 4928, 672, 14787, 236761, 106, 107, 105, 2364, 107, 3048, 659, 1646, 30998, 524, 236761, 799, 1806, 63510, 57052, 236764, 8082, 1217, 20974, 236786, 88477, 6352, 1135, 2335, 3731, 2263, 32050, 236792, 34711, 3736, 236761, 39874, 3393, 532, 2514, 506, 3890, 59893, 236761, 106, 107, 105, 4368, 107, 100, 45518, 107, 120474, 12364, 236787, 108, 236770, 236761, 138, 1018, 115863, 506, 16499, 53121, 669, 2430, 8150, 1806, 63510, 57052, 26804, 1217, 20974, 236786, 88477, 6352, 1135, 2335, 3731, 2263, 32050, 236792, 34711, 3736, 236761, 669, 3890, 1921, 577, 59893, 532, 5571, 3393, 236761, 108, 236778, 236761, 138, 1018, 137938, 9533, 76423, 53121, 107, 140, 236829, 139, 2182, 236792, 157036, 568, 13149, 3736], \"created_at\": \"2026-05-08T17:51:37.736910015Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 267168758, \"load_duration\": 1118225159, \"model\": \"tripolskypetr/gemma4-uncensored-aggressive:latest\", \"prompt_eval_count\": 63, \"prompt_eval_duration\": 12286554, \"response\": \"\", \"total_duration\": 1463813930}, \"ok\": true}",
+      "total_duration_ns": 1463813930,
+      "wall_seconds": 1.468
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 4703798582,
+      "eval_tokens_per_second": 13.606,
+      "family": "qwen3",
+      "load_duration_ns": 927594786,
+      "model": "deepseek-r1:8b",
+      "num_gpu": 0,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8929, 2838, 1, 2"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8929, 2838, 1, 1"
+      },
+      "ollama_ps_after": "NAME              ID              SIZE      PROCESSOR    CONTEXT    UNTIL              \ndeepseek-r1:8b    6995872bfe4c    5.6 GB    100% CPU     2048       4 minutes from now",
+      "parameter_size": "8.2B",
+      "prompt_eval_count": 49,
+      "prompt_eval_duration_ns": 416708594,
+      "quantization_level": "Q4_K_M",
+      "response_chars": 0,
+      "returncode": 0,
+      "size_bytes": 5225376047,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 6.087339587975293, \"context\": [16141, 1172, 279, 11223, 28431, 9934, 13, 3155, 537, 6286, 419, 7600, 13, 151669, 2610, 525, 1660, 28431, 291, 13, 758, 2326, 63594, 33064, 11, 10339, 1246, 13940, 15792, 6325, 6193, 1007, 1078, 4344, 2205, 444, 10994, 44378, 5068, 13, 34006, 2038, 323, 2506, 279, 4226, 59901, 13, 151670, 151667, 198, 32313, 11, 279, 1196, 374, 10161, 911, 1246, 13940, 15792, 6325, 6193, 1007, 1078, 21501, 2205, 444, 10994, 44378, 5068, 11, 323, 807, 1366, 2326, 63594, 33064, 13, 2379, 11689, 1053, 311, 5648, 2038, 323, 2506, 432, 59901, 11, 773, 358, 1184, 311, 5244, 389, 1550, 11591, 18940, 2041, 42415, 1119, 10916, 3565, 382, 80022, 11, 279, 1196, 4977, 311, 387, 28431], \"created_at\": \"2026-05-08T17:51:46.082553441Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 4703798582, \"load_duration\": 927594786, \"model\": \"deepseek-r1:8b\", \"prompt_eval_count\": 49, \"prompt_eval_duration\": 416708594, \"response\": \"\", \"thinking\": \"Okay, the user is asking about how CPU/GPU layer offload affects local LLM inference performance, and they want three concise bullets. They specifically said to avoid code and keep it factual, so I need to focus on high-level concepts without diving into technical details.\\n\\nHmm, the user seems to be benchmark\", \"total_duration\": 6082327996}, \"ok\": true}",
+      "total_duration_ns": 6082327996,
+      "wall_seconds": 6.087
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 3910932797,
+      "eval_tokens_per_second": 16.364,
+      "family": "qwen3",
+      "load_duration_ns": 944442032,
+      "model": "deepseek-r1:8b",
+      "num_gpu": 8,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 7559, 4208, 5, 4"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8929, 2838, 4, 10"
+      },
+      "ollama_ps_after": "NAME              ID              SIZE      PROCESSOR          CONTEXT    UNTIL              \ndeepseek-r1:8b    6995872bfe4c    5.7 GB    79%/21% CPU/GPU    2048       4 minutes from now",
+      "parameter_size": "8.2B",
+      "prompt_eval_count": 49,
+      "prompt_eval_duration_ns": 200382469,
+      "quantization_level": "Q4_K_M",
+      "response_chars": 0,
+      "returncode": 0,
+      "size_bytes": 5225376047,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 5.088022281997837, \"context\": [16141, 1172, 279, 11223, 28431, 9934, 13, 3155, 537, 6286, 419, 7600, 13, 151669, 2610, 525, 1660, 28431, 291, 13, 758, 2326, 63594, 33064, 11, 10339, 1246, 13940, 15792, 6325, 6193, 1007, 1078, 4344, 2205, 444, 10994, 44378, 5068, 13, 34006, 2038, 323, 2506, 279, 4226, 59901, 13, 151670, 151667, 198, 32313, 11, 279, 1196, 374, 10161, 752, 311, 10339, 1246, 13940, 15792, 6325, 6193, 1007, 1078, 21501, 2205, 444, 10994, 44378, 5068, 304, 2326, 63594, 33064, 11, 2041, 2038, 323, 10282, 432, 59901, 13, 4710, 80022, 11, 807, 2299, 4658, 264, 15754, 476, 31085, 3238, 389, 2205, 444, 10994, 83723, 11, 4460, 311, 3535, 25262, 6559, 63939, 13, 576, 1319, 96478, 13230], \"created_at\": \"2026-05-08T17:51:53.405407516Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 3910932797, \"load_duration\": 944442032, \"model\": \"deepseek-r1:8b\", \"prompt_eval_count\": 49, \"prompt_eval_duration\": 200382469, \"response\": \"\", \"thinking\": \"Okay, the user is asking me to explain how CPU/GPU layer offload affects local LLM inference performance in three concise bullets, without code and keeping it factual. \\n\\nHmm, they're probably a developer or researcher working on local LLM setups, trying to understand optimization trade-offs. The phrasing suggests\", \"total_duration\": 5083057087}, \"ok\": true}",
+      "total_duration_ns": 5083057087,
+      "wall_seconds": 5.088
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 3124217049,
+      "eval_tokens_per_second": 20.485,
+      "family": "qwen3",
+      "load_duration_ns": 876482805,
+      "model": "deepseek-r1:8b",
+      "num_gpu": 16,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 6583, 5184, 9, 7"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8929, 2838, 2, 1"
+      },
+      "ollama_ps_after": "NAME              ID              SIZE      PROCESSOR          CONTEXT    UNTIL              \ndeepseek-r1:8b    6995872bfe4c    5.7 GB    61%/39% CPU/GPU    2048       4 minutes from now",
+      "parameter_size": "8.2B",
+      "prompt_eval_count": 49,
+      "prompt_eval_duration_ns": 150440207,
+      "quantization_level": "Q4_K_M",
+      "response_chars": 0,
+      "returncode": 0,
+      "size_bytes": 5225376047,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 4.182196056004614, \"context\": [16141, 1172, 279, 11223, 28431, 9934, 13, 3155, 537, 6286, 419, 7600, 13, 151669, 2610, 525, 1660, 28431, 291, 13, 758, 2326, 63594, 33064, 11, 10339, 1246, 13940, 15792, 6325, 6193, 1007, 1078, 4344, 2205, 444, 10994, 44378, 5068, 13, 34006, 2038, 323, 2506, 279, 4226, 59901, 13, 151670, 151667, 198, 32313, 11, 279, 1196, 374, 10161, 911, 1246, 13940, 15792, 6325, 6193, 1007, 1078, 21501, 2205, 444, 10994, 44378, 5068, 11, 323, 807, 1366, 2326, 63594, 33064, 13, 2379, 11689, 1053, 311, 5648, 2038, 323, 2506, 432, 59901, 11, 773, 358, 1184, 311, 5244, 389, 1550, 11591, 18940, 2041, 42415, 1119, 10916, 3565, 382, 80022, 11, 279, 1196, 2578, 387, 4325, 3238], \"created_at\": \"2026-05-08T17:51:59.804192275Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 3124217049, \"load_duration\": 876482805, \"model\": \"deepseek-r1:8b\", \"prompt_eval_count\": 49, \"prompt_eval_duration\": 150440207, \"response\": \"\", \"thinking\": \"Okay, the user is asking about how CPU/GPU layer offload affects local LLM inference performance, and they want three concise bullets. They specifically said to avoid code and keep it factual, so I need to focus on high-level concepts without diving into technical details.\\n\\nHmm, the user might be someone working\", \"total_duration\": 4177889346}, \"ok\": true}",
+      "total_duration_ns": 4177889346,
+      "wall_seconds": 4.182
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 2350136598,
+      "eval_tokens_per_second": 27.232,
+      "family": "qwen3",
+      "load_duration_ns": 886345228,
+      "model": "deepseek-r1:8b",
+      "num_gpu": 24,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 5605, 6162, 12, 10"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8929, 2838, 1, 1"
+      },
+      "ollama_ps_after": "NAME              ID              SIZE      PROCESSOR          CONTEXT    UNTIL              \ndeepseek-r1:8b    6995872bfe4c    5.7 GB    43%/57% CPU/GPU    2048       4 minutes from now",
+      "parameter_size": "8.2B",
+      "prompt_eval_count": 49,
+      "prompt_eval_duration_ns": 104462368,
+      "quantization_level": "Q4_K_M",
+      "response_chars": 0,
+      "returncode": 0,
+      "size_bytes": 5225376047,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 3.371857893973356, \"context\": [16141, 1172, 279, 11223, 28431, 9934, 13, 3155, 537, 6286, 419, 7600, 13, 151669, 2610, 525, 1660, 28431, 291, 13, 758, 2326, 63594, 33064, 11, 10339, 1246, 13940, 15792, 6325, 6193, 1007, 1078, 4344, 2205, 444, 10994, 44378, 5068, 13, 34006, 2038, 323, 2506, 279, 4226, 59901, 13, 151670, 151667, 198, 32313, 11, 279, 1196, 374, 10161, 911, 1246, 13940, 15792, 6325, 6193, 1007, 1078, 21501, 2205, 444, 10994, 44378, 5068, 11, 323, 807, 1366, 2326, 63594, 33064, 13, 2379, 11689, 1053, 311, 5648, 2038, 323, 2506, 432, 59901, 11, 773, 358, 1184, 311, 5244, 389, 1550, 11591, 18940, 2041, 42415, 1119, 10916, 3565, 382, 80022, 11, 279, 1196, 4977, 311, 387, 28431], \"created_at\": \"2026-05-08T17:52:05.37926752Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 2350136598, \"load_duration\": 886345228, \"model\": \"deepseek-r1:8b\", \"prompt_eval_count\": 49, \"prompt_eval_duration\": 104462368, \"response\": \"\", \"thinking\": \"Okay, the user is asking about how CPU/GPU layer offload affects local LLM inference performance, and they want three concise bullets. They specifically said to avoid code and keep it factual, so I need to focus on high-level concepts without diving into technical details.\\n\\nHmm, the user seems to be benchmark\", \"total_duration\": 3367272276}, \"ok\": true}",
+      "total_duration_ns": 3367272276,
+      "wall_seconds": 3.372
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 590371825,
+      "eval_tokens_per_second": 108.406,
+      "family": "qwen3",
+      "load_duration_ns": 862044113,
+      "model": "deepseek-r1:8b",
+      "num_gpu": 999,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 3641, 8126, 97, 85"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8929, 2838, 1, 1"
+      },
+      "ollama_ps_after": "NAME              ID              SIZE      PROCESSOR    CONTEXT    UNTIL              \ndeepseek-r1:8b    6995872bfe4c    5.7 GB    100% GPU     2048       4 minutes from now",
+      "parameter_size": "8.2B",
+      "prompt_eval_count": 49,
+      "prompt_eval_duration_ns": 24354606,
+      "quantization_level": "Q4_K_M",
+      "response_chars": 0,
+      "returncode": 0,
+      "size_bytes": 5225376047,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 1.5058364130090922, \"context\": [16141, 1172, 279, 11223, 28431, 9934, 13, 3155, 537, 6286, 419, 7600, 13, 151669, 2610, 525, 1660, 28431, 291, 13, 758, 2326, 63594, 33064, 11, 10339, 1246, 13940, 15792, 6325, 6193, 1007, 1078, 4344, 2205, 444, 10994, 44378, 5068, 13, 34006, 2038, 323, 2506, 279, 4226, 59901, 13, 151670, 151667, 198, 32313, 11, 279, 1196, 374, 10161, 911, 1246, 13940, 15792, 6325, 6193, 1007, 1078, 21501, 2205, 444, 10994, 44378, 5068, 11, 323, 807, 1366, 2326, 63594, 33064, 13, 2379, 11689, 1053, 311, 5648, 2038, 323, 2506, 432, 59901, 11, 773, 358, 1184, 311, 5244, 389, 1550, 11591, 18940, 2041, 42415, 1119, 10916, 3565, 382, 80022, 11, 279, 1196, 4977, 311, 387, 28431], \"created_at\": \"2026-05-08T17:52:09.084582619Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 590371825, \"load_duration\": 862044113, \"model\": \"deepseek-r1:8b\", \"prompt_eval_count\": 49, \"prompt_eval_duration\": 24354606, \"response\": \"\", \"thinking\": \"Okay, the user is asking about how CPU/GPU layer offload affects local LLM inference performance, and they want three concise bullets. They specifically said to avoid code and keep it factual, so I need to focus on high-level concepts without diving into technical details.\\n\\nHmm, the user seems to be benchmark\", \"total_duration\": 1501701378}, \"ok\": true}",
+      "total_duration_ns": 1501701378,
+      "wall_seconds": 1.506
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 5170947428,
+      "eval_tokens_per_second": 12.377,
+      "family": "llama",
+      "load_duration_ns": 1555473909,
+      "model": "hf.co/TheBloke/CodeLlama-13B-GGUF:latest",
+      "num_gpu": 0,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8929, 2838, 4, 9"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8929, 2838, 1, 1"
+      },
+      "ollama_ps_after": "NAME                                        ID              SIZE      PROCESSOR    CONTEXT    UNTIL              \nhf.co/TheBloke/CodeLlama-13B-GGUF:latest    dae60ecad215    7.1 GB    100% CPU     2048       4 minutes from now",
+      "parameter_size": "13B",
+      "prompt_eval_count": 40,
+      "prompt_eval_duration_ns": 727908789,
+      "quantization_level": "unknown",
+      "response_chars": 230,
+      "returncode": 0,
+      "size_bytes": 5429443216,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 7.468616275000386, \"context\": [887, 526, 1641, 23513, 287, 29889, 512, 2211, 3022, 895, 8227, 10376, 29892, 5649, 920, 10808, 29914, 29954, 7056, 7546, 1283, 1359, 3620, 1887, 365, 26369, 27262, 4180, 29889, 319, 5405, 775, 322, 3013, 278, 1234, 2114, 950, 29889, 13, 13, 2277, 29937, 29871, 29941, 29889, 1724, 338, 278, 4328, 1546, 263, 22796, 322, 263, 323, 7056, 29973, 13, 13, 3492, 526, 1641, 23513, 287, 29889, 512, 2211, 3022, 895, 8227, 10376, 29892, 5649, 920, 10808, 29914, 29954, 7056, 7546, 1283, 1359, 3620, 1887, 365, 26369, 27262, 4180, 29889, 319, 5405, 775, 322, 3013, 278, 1234, 2114, 950, 29889, 13, 13, 2277, 29937], \"created_at\": \"2026-05-08T17:52:18.698882041Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 5170947428, \"load_duration\": 1555473909, \"model\": \"hf.co/TheBloke/CodeLlama-13B-GGUF:latest\", \"prompt_eval_count\": 40, \"prompt_eval_duration\": 727908789, \"response\": \"\\n\\n### 3. What is the difference between a GPU and a TPU?\\n\\nYou are being benchmarked. In three concise bullets, explain how CPU/GPU layer offload changes local LLM inference performance. Avoid code and keep the answer factual.\\n\\n###\", \"total_duration\": 7464012542}, \"ok\": true}",
+      "total_duration_ns": 7464012542,
+      "wall_seconds": 7.469
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 4377719384,
+      "eval_tokens_per_second": 14.619,
+      "family": "llama",
+      "load_duration_ns": 633473117,
+      "model": "hf.co/TheBloke/CodeLlama-13B-GGUF:latest",
+      "num_gpu": 8,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 7203, 4564, 6, 5"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8929, 2838, 2, 1"
+      },
+      "ollama_ps_after": "NAME                                        ID              SIZE      PROCESSOR          CONTEXT    UNTIL              \nhf.co/TheBloke/CodeLlama-13B-GGUF:latest    dae60ecad215    7.3 GB    78%/22% CPU/GPU    2048       4 minutes from now",
+      "parameter_size": "13B",
+      "prompt_eval_count": 40,
+      "prompt_eval_duration_ns": 242651922,
+      "quantization_level": "unknown",
+      "response_chars": 230,
+      "returncode": 0,
+      "size_bytes": 5429443216,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 5.276196371996775, \"context\": [887, 526, 1641, 23513, 287, 29889, 512, 2211, 3022, 895, 8227, 10376, 29892, 5649, 920, 10808, 29914, 29954, 7056, 7546, 1283, 1359, 3620, 1887, 365, 26369, 27262, 4180, 29889, 319, 5405, 775, 322, 3013, 278, 1234, 2114, 950, 29889, 13, 13, 2277, 29937, 29871, 29941, 29889, 1724, 338, 278, 4328, 1546, 263, 22796, 322, 263, 323, 7056, 29973, 13, 13, 3492, 526, 1641, 23513, 287, 29889, 512, 2211, 3022, 895, 8227, 10376, 29892, 5649, 920, 10808, 29914, 29954, 7056, 7546, 1283, 1359, 3620, 1887, 365, 26369, 27262, 4180, 29889, 319, 5405, 775, 322, 3013, 278, 1234, 2114, 950, 29889, 13, 13, 2277, 29937], \"created_at\": \"2026-05-08T17:52:26.063143564Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 4377719384, \"load_duration\": 633473117, \"model\": \"hf.co/TheBloke/CodeLlama-13B-GGUF:latest\", \"prompt_eval_count\": 40, \"prompt_eval_duration\": 242651922, \"response\": \"\\n\\n### 3. What is the difference between a GPU and a TPU?\\n\\nYou are being benchmarked. In three concise bullets, explain how CPU/GPU layer offload changes local LLM inference performance. Avoid code and keep the answer factual.\\n\\n###\", \"total_duration\": 5263049111}, \"ok\": true}",
+      "total_duration_ns": 5263049111,
+      "wall_seconds": 5.276
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 3542596804,
+      "eval_tokens_per_second": 18.066,
+      "family": "llama",
+      "load_duration_ns": 633742086,
+      "model": "hf.co/TheBloke/CodeLlama-13B-GGUF:latest",
+      "num_gpu": 16,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 5885, 5882, 11, 9"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8993, 2774, 1, 1"
+      },
+      "ollama_ps_after": "NAME                                        ID              SIZE      PROCESSOR          CONTEXT    UNTIL              \nhf.co/TheBloke/CodeLlama-13B-GGUF:latest    dae60ecad215    7.3 GB    59%/41% CPU/GPU    2048       4 minutes from now",
+      "parameter_size": "13B",
+      "prompt_eval_count": 40,
+      "prompt_eval_duration_ns": 190310607,
+      "quantization_level": "unknown",
+      "response_chars": 230,
+      "returncode": 0,
+      "size_bytes": 5429443216,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 4.389344672003062, \"context\": [887, 526, 1641, 23513, 287, 29889, 512, 2211, 3022, 895, 8227, 10376, 29892, 5649, 920, 10808, 29914, 29954, 7056, 7546, 1283, 1359, 3620, 1887, 365, 26369, 27262, 4180, 29889, 319, 5405, 775, 322, 3013, 278, 1234, 2114, 950, 29889, 13, 13, 2277, 29937, 29871, 29941, 29889, 1724, 338, 278, 4328, 1546, 263, 22796, 322, 263, 323, 7056, 29973, 13, 13, 3492, 526, 1641, 23513, 287, 29889, 512, 2211, 3022, 895, 8227, 10376, 29892, 5649, 920, 10808, 29914, 29954, 7056, 7546, 1283, 1359, 3620, 1887, 365, 26369, 27262, 4180, 29889, 319, 5405, 775, 322, 3013, 278, 1234, 2114, 950, 29889, 13, 13, 2277, 29937], \"created_at\": \"2026-05-08T17:52:32.554391888Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 3542596804, \"load_duration\": 633742086, \"model\": \"hf.co/TheBloke/CodeLlama-13B-GGUF:latest\", \"prompt_eval_count\": 40, \"prompt_eval_duration\": 190310607, \"response\": \"\\n\\n### 3. What is the difference between a GPU and a TPU?\\n\\nYou are being benchmarked. In three concise bullets, explain how CPU/GPU layer offload changes local LLM inference performance. Avoid code and keep the answer factual.\\n\\n###\", \"total_duration\": 4385230626}, \"ok\": true}",
+      "total_duration_ns": 4385230626,
+      "wall_seconds": 4.389
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 2667464113,
+      "eval_tokens_per_second": 23.993,
+      "family": "llama",
+      "load_duration_ns": 632850282,
+      "model": "hf.co/TheBloke/CodeLlama-13B-GGUF:latest",
+      "num_gpu": 24,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 4565, 7202, 17, 13"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8992, 2774, 1, 1"
+      },
+      "ollama_ps_after": "NAME                                        ID              SIZE      PROCESSOR          CONTEXT    UNTIL              \nhf.co/TheBloke/CodeLlama-13B-GGUF:latest    dae60ecad215    7.3 GB    40%/60% CPU/GPU    2048       4 minutes from now",
+      "parameter_size": "13B",
+      "prompt_eval_count": 40,
+      "prompt_eval_duration_ns": 138599052,
+      "quantization_level": "unknown",
+      "response_chars": 230,
+      "returncode": 0,
+      "size_bytes": 5429443216,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 3.452159748005215, \"context\": [887, 526, 1641, 23513, 287, 29889, 512, 2211, 3022, 895, 8227, 10376, 29892, 5649, 920, 10808, 29914, 29954, 7056, 7546, 1283, 1359, 3620, 1887, 365, 26369, 27262, 4180, 29889, 319, 5405, 775, 322, 3013, 278, 1234, 2114, 950, 29889, 13, 13, 2277, 29937, 29871, 29906, 29889, 1724, 338, 278, 4328, 1546, 263, 22796, 322, 263, 323, 7056, 29973, 13, 13, 3492, 526, 1641, 23513, 287, 29889, 512, 2211, 3022, 895, 8227, 10376, 29892, 5649, 920, 10808, 29914, 29954, 7056, 7546, 1283, 1359, 3620, 1887, 365, 26369, 27262, 4180, 29889, 319, 5405, 775, 322, 3013, 278, 1234, 2114, 950, 29889, 13, 13, 2277, 29937], \"created_at\": \"2026-05-08T17:52:38.099225084Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 2667464113, \"load_duration\": 632850282, \"model\": \"hf.co/TheBloke/CodeLlama-13B-GGUF:latest\", \"prompt_eval_count\": 40, \"prompt_eval_duration\": 138599052, \"response\": \"\\n\\n### 2. What is the difference between a GPU and a TPU?\\n\\nYou are being benchmarked. In three concise bullets, explain how CPU/GPU layer offload changes local LLM inference performance. Avoid code and keep the answer factual.\\n\\n###\", \"total_duration\": 3447945733}, \"ok\": true}",
+      "total_duration_ns": 3447945733,
+      "wall_seconds": 3.452
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 788520675,
+      "eval_tokens_per_second": 81.165,
+      "family": "llama",
+      "load_duration_ns": 614524262,
+      "model": "hf.co/TheBloke/CodeLlama-13B-GGUF:latest",
+      "num_gpu": 999,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 1919, 9848, 99, 77"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8992, 2774, 1, 1"
+      },
+      "ollama_ps_after": "NAME                                        ID              SIZE      PROCESSOR    CONTEXT    UNTIL              \nhf.co/TheBloke/CodeLlama-13B-GGUF:latest    dae60ecad215    7.3 GB    100% GPU     2048       4 minutes from now",
+      "parameter_size": "13B",
+      "prompt_eval_count": 40,
+      "prompt_eval_duration_ns": 29393240,
+      "quantization_level": "unknown",
+      "response_chars": 230,
+      "returncode": 0,
+      "size_bytes": 5429443216,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 1.444891193008516, \"context\": [887, 526, 1641, 23513, 287, 29889, 512, 2211, 3022, 895, 8227, 10376, 29892, 5649, 920, 10808, 29914, 29954, 7056, 7546, 1283, 1359, 3620, 1887, 365, 26369, 27262, 4180, 29889, 319, 5405, 775, 322, 3013, 278, 1234, 2114, 950, 29889, 13, 13, 2277, 29937, 29871, 29906, 29889, 1724, 338, 278, 4328, 1546, 263, 22796, 322, 263, 323, 7056, 29973, 13, 13, 3492, 526, 1641, 23513, 287, 29889, 512, 2211, 3022, 895, 8227, 10376, 29892, 5649, 920, 10808, 29914, 29954, 7056, 7546, 1283, 1359, 3620, 1887, 365, 26369, 27262, 4180, 29889, 319, 5405, 775, 322, 3013, 278, 1234, 2114, 950, 29889, 13, 13, 2277, 29937], \"created_at\": \"2026-05-08T17:52:41.638318348Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 788520675, \"load_duration\": 614524262, \"model\": \"hf.co/TheBloke/CodeLlama-13B-GGUF:latest\", \"prompt_eval_count\": 40, \"prompt_eval_duration\": 29393240, \"response\": \"\\n\\n### 2. What is the difference between a GPU and a TPU?\\n\\nYou are being benchmarked. In three concise bullets, explain how CPU/GPU layer offload changes local LLM inference performance. Avoid code and keep the answer factual.\\n\\n###\", \"total_duration\": 1440722303}, \"ok\": true}",
+      "total_duration_ns": 1440722303,
+      "wall_seconds": 1.445
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 7930752375,
+      "eval_tokens_per_second": 8.07,
+      "family": "qwen35",
+      "load_duration_ns": 1421398049,
+      "model": "tripolskypetr/qwen3.5-uncensored-aggressive:9b",
+      "num_gpu": 0,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8992, 2774, 2, 2"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8992, 2774, 2, 1"
+      },
+      "ollama_ps_after": "NAME                                              ID              SIZE      PROCESSOR    CONTEXT    UNTIL              \ntripolskypetr/qwen3.5-uncensored-aggressive:9b    77574e8272a2    7.1 GB    100% CPU     2048       4 minutes from now",
+      "parameter_size": "9.0B",
+      "prompt_eval_count": 62,
+      "prompt_eval_duration_ns": 645625802,
+      "quantization_level": "Q4_K_M",
+      "response_chars": 0,
+      "returncode": 0,
+      "size_bytes": 5627044757,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 10.056510485999752, \"context\": [248045, 8678, 198, 15666, 1132, 279, 10897, 27502, 9640, 13, 3054, 524, 6088, 411, 7359, 13, 248046, 198, 248045, 846, 198, 2523, 513, 1602, 27502, 290, 13, 733, 2250, 61446, 31969, 11, 10033, 1204, 13540, 15328, 6126, 6000, 974, 1043, 4203, 2136, 436, 10673, 42903, 4906, 13, 32879, 1970, 321, 2426, 279, 4087, 57879, 13, 248046, 198, 248045, 74455, 198, 248068, 198, 90700, 8340, 25, 271, 16, 13, 220, 2972, 2014, 53983, 279, 5952, 64700, 198, 262, 348, 256, 2972, 6065, 64700, 79091, 1204, 13540, 15328, 6126, 6000, 974, 1043, 4203, 2136, 436, 10673, 42903, 4906, 13, 198, 262, 348, 256, 2972, 3925, 64700, 14095, 61446, 31969, 13, 198, 262, 348, 256, 2972, 12554, 64700, 32879, 1970, 11, 2426, 279, 4087, 57879, 13, 198, 262, 348], \"created_at\": \"2026-05-08T17:52:53.871024492Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 7930752375, \"load_duration\": 1421398049, \"model\": \"tripolskypetr/qwen3.5-uncensored-aggressive:9b\", \"prompt_eval_count\": 62, \"prompt_eval_duration\": 645625802, \"response\": \"\", \"thinking\": \"Thinking Process:\\n\\n1.  **Analyze the Request:**\\n    *   **Task:** Explain how CPU/GPU layer offload changes local LLM inference performance.\\n    *   **Format:** Three concise bullets.\\n    *   **Constraints:** Avoid code, keep the answer factual.\\n    *\", \"total_duration\": 10051652864}, \"ok\": true}",
+      "total_duration_ns": 10051652864,
+      "wall_seconds": 10.057
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 6103428748,
+      "eval_tokens_per_second": 10.486,
+      "family": "qwen35",
+      "load_duration_ns": 1214396093,
+      "model": "tripolskypetr/qwen3.5-uncensored-aggressive:9b",
+      "num_gpu": 8,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 7233, 4534, 4, 3"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8992, 2774, 4, 12"
+      },
+      "ollama_ps_after": "NAME                                              ID              SIZE      PROCESSOR          CONTEXT    UNTIL              \ntripolskypetr/qwen3.5-uncensored-aggressive:9b    77574e8272a2    7.3 GB    78%/22% CPU/GPU    2048       4 minutes from now",
+      "parameter_size": "9.0B",
+      "prompt_eval_count": 62,
+      "prompt_eval_duration_ns": 218876023,
+      "quantization_level": "Q4_K_M",
+      "response_chars": 0,
+      "returncode": 0,
+      "size_bytes": 5627044757,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 7.587038377998397, \"context\": [248045, 8678, 198, 15666, 1132, 279, 10897, 27502, 9640, 13, 3054, 524, 6088, 411, 7359, 13, 248046, 198, 248045, 846, 198, 2523, 513, 1602, 27502, 290, 13, 733, 2250, 61446, 31969, 11, 10033, 1204, 13540, 15328, 6126, 6000, 974, 1043, 4203, 2136, 436, 10673, 42903, 4906, 13, 32879, 1970, 321, 2426, 279, 4087, 57879, 13, 248046, 198, 248045, 74455, 198, 248068, 198, 90700, 8340, 25, 271, 16, 13, 220, 2972, 2014, 53983, 279, 5952, 64700, 198, 262, 348, 256, 2972, 6065, 64700, 21134, 264, 3050, 27502, 9640, 13, 198, 262, 348, 256, 2972, 17355, 220, 16, 64700, 21134, 1132, 279, 10897, 27502, 9640, 318, 2083, 4799, 19104, 46705, 298, 553, 198, 262, 348, 256, 2972, 17355, 220, 17, 64700, 3054, 524, 6088, 279, 7359, 4924, 13], \"created_at\": \"2026-05-08T17:53:03.772038786Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 6103428748, \"load_duration\": 1214396093, \"model\": \"tripolskypetr/qwen3.5-uncensored-aggressive:9b\", \"prompt_eval_count\": 62, \"prompt_eval_duration\": 218876023, \"response\": \"\", \"thinking\": \"Thinking Process:\\n\\n1.  **Analyze the Request:**\\n    *   **Task:** Answer a specific benchmark prompt.\\n    *   **Constraint 1:** Answer only the requested benchmark prompt (no extra intro/outro).\\n    *   **Constraint 2:** Do not mention the instruction itself.\", \"total_duration\": 7582786030}, \"ok\": true}",
+      "total_duration_ns": 7582786030,
+      "wall_seconds": 7.587
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 4747588462,
+      "eval_tokens_per_second": 13.481,
+      "family": "qwen35",
+      "load_duration_ns": 1083854022,
+      "model": "tripolskypetr/qwen3.5-uncensored-aggressive:9b",
+      "num_gpu": 16,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 5927, 5840, 7, 5"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8992, 2774, 1, 1"
+      },
+      "ollama_ps_after": "NAME                                              ID              SIZE      PROCESSOR          CONTEXT    UNTIL              \ntripolskypetr/qwen3.5-uncensored-aggressive:9b    77574e8272a2    7.3 GB    59%/41% CPU/GPU    2048       4 minutes from now",
+      "parameter_size": "9.0B",
+      "prompt_eval_count": 62,
+      "prompt_eval_duration_ns": 161077823,
+      "quantization_level": "Q4_K_M",
+      "response_chars": 0,
+      "returncode": 0,
+      "size_bytes": 5627044757,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 6.0430700319993775, \"context\": [248045, 8678, 198, 15666, 1132, 279, 10897, 27502, 9640, 13, 3054, 524, 6088, 411, 7359, 13, 248046, 198, 248045, 846, 198, 2523, 513, 1602, 27502, 290, 13, 733, 2250, 61446, 31969, 11, 10033, 1204, 13540, 15328, 6126, 6000, 974, 1043, 4203, 2136, 436, 10673, 42903, 4906, 13, 32879, 1970, 321, 2426, 279, 4087, 57879, 13, 248046, 198, 248045, 74455, 198, 248068, 198, 90700, 8340, 25, 271, 16, 13, 220, 2972, 2014, 53983, 279, 5952, 64700, 198, 262, 348, 256, 2972, 6065, 64700, 21134, 264, 3050, 27502, 9640, 13, 198, 262, 348, 256, 2972, 17355, 220, 16, 64700, 21134, 1132, 279, 10897, 27502, 9640, 318, 2083, 4799, 19104, 46705, 298, 553, 198, 262, 348, 256, 2972, 17355, 220, 17, 64700, 3054, 524, 6088, 279, 7359, 4924, 13], \"created_at\": \"2026-05-08T17:53:12.09118985Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 4747588462, \"load_duration\": 1083854022, \"model\": \"tripolskypetr/qwen3.5-uncensored-aggressive:9b\", \"prompt_eval_count\": 62, \"prompt_eval_duration\": 161077823, \"response\": \"\", \"thinking\": \"Thinking Process:\\n\\n1.  **Analyze the Request:**\\n    *   **Task:** Answer a specific benchmark prompt.\\n    *   **Constraint 1:** Answer only the requested benchmark prompt (no extra intro/outro).\\n    *   **Constraint 2:** Do not mention the instruction itself.\", \"total_duration\": 6038564956}, \"ok\": true}",
+      "total_duration_ns": 6038564956,
+      "wall_seconds": 6.043
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 3062327117,
+      "eval_tokens_per_second": 20.899,
+      "family": "qwen35",
+      "load_duration_ns": 1037799621,
+      "model": "tripolskypetr/qwen3.5-uncensored-aggressive:9b",
+      "num_gpu": 24,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 4601, 7166, 16, 12"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8992, 2774, 1, 1"
+      },
+      "ollama_ps_after": "NAME                                              ID              SIZE      PROCESSOR          CONTEXT    UNTIL              \ntripolskypetr/qwen3.5-uncensored-aggressive:9b    77574e8272a2    7.3 GB    40%/60% CPU/GPU    2048       4 minutes from now",
+      "parameter_size": "9.0B",
+      "prompt_eval_count": 62,
+      "prompt_eval_duration_ns": 102867713,
+      "quantization_level": "Q4_K_M",
+      "response_chars": 0,
+      "returncode": 0,
+      "size_bytes": 5627044757,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 4.2617573350144085, \"context\": [248045, 8678, 198, 15666, 1132, 279, 10897, 27502, 9640, 13, 3054, 524, 6088, 411, 7359, 13, 248046, 198, 248045, 846, 198, 2523, 513, 1602, 27502, 290, 13, 733, 2250, 61446, 31969, 11, 10033, 1204, 13540, 15328, 6126, 6000, 974, 1043, 4203, 2136, 436, 10673, 42903, 4906, 13, 32879, 1970, 321, 2426, 279, 4087, 57879, 13, 248046, 198, 248045, 74455, 198, 248068, 198, 90700, 8340, 25, 271, 16, 13, 220, 2972, 2014, 53983, 279, 5952, 64700, 198, 262, 348, 256, 2972, 6065, 64700, 21134, 264, 3050, 27502, 9640, 13, 198, 262, 348, 256, 2972, 17355, 220, 16, 64700, 21134, 1132, 279, 10897, 27502, 9640, 318, 2083, 4799, 19104, 46705, 298, 553, 198, 262, 348, 256, 2972, 17355, 220, 17, 64700, 3054, 524, 6088, 279, 7359, 4924, 13], \"created_at\": \"2026-05-08T17:53:18.628794399Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 3062327117, \"load_duration\": 1037799621, \"model\": \"tripolskypetr/qwen3.5-uncensored-aggressive:9b\", \"prompt_eval_count\": 62, \"prompt_eval_duration\": 102867713, \"response\": \"\", \"thinking\": \"Thinking Process:\\n\\n1.  **Analyze the Request:**\\n    *   **Task:** Answer a specific benchmark prompt.\\n    *   **Constraint 1:** Answer only the requested benchmark prompt (no extra intro/outro).\\n    *   **Constraint 2:** Do not mention the instruction itself.\", \"total_duration\": 4257273119}, \"ok\": true}",
+      "total_duration_ns": 4257273119,
+      "wall_seconds": 4.262
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 736036202,
+      "eval_tokens_per_second": 86.952,
+      "family": "qwen35",
+      "load_duration_ns": 1021178314,
+      "model": "tripolskypetr/qwen3.5-uncensored-aggressive:9b",
+      "num_gpu": 999,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 2479, 9288, 95, 74"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8992, 2774, 1, 1"
+      },
+      "ollama_ps_after": "NAME                                              ID              SIZE      PROCESSOR    CONTEXT    UNTIL              \ntripolskypetr/qwen3.5-uncensored-aggressive:9b    77574e8272a2    7.2 GB    100% GPU     2048       4 minutes from now",
+      "parameter_size": "9.0B",
+      "prompt_eval_count": 62,
+      "prompt_eval_duration_ns": 30577949,
+      "quantization_level": "Q4_K_M",
+      "response_chars": 0,
+      "returncode": 0,
+      "size_bytes": 5627044757,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 1.8401489109965041, \"context\": [248045, 8678, 198, 15666, 1132, 279, 10897, 27502, 9640, 13, 3054, 524, 6088, 411, 7359, 13, 248046, 198, 248045, 846, 198, 2523, 513, 1602, 27502, 290, 13, 733, 2250, 61446, 31969, 11, 10033, 1204, 13540, 15328, 6126, 6000, 974, 1043, 4203, 2136, 436, 10673, 42903, 4906, 13, 32879, 1970, 321, 2426, 279, 4087, 57879, 13, 248046, 198, 248045, 74455, 198, 248068, 198, 90700, 8340, 25, 271, 16, 13, 220, 2972, 2014, 53983, 279, 5952, 64700, 198, 262, 348, 256, 2972, 6065, 64700, 21134, 264, 3050, 27502, 9640, 13, 198, 262, 348, 256, 2972, 17355, 220, 16, 64700, 21134, 1132, 279, 10897, 27502, 9640, 318, 2083, 4799, 19104, 46705, 298, 553, 198, 262, 348, 256, 2972, 17355, 220, 17, 64700, 3054, 524, 6088, 279, 7359, 4924, 13], \"created_at\": \"2026-05-08T17:53:22.729981474Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 736036202, \"load_duration\": 1021178314, \"model\": \"tripolskypetr/qwen3.5-uncensored-aggressive:9b\", \"prompt_eval_count\": 62, \"prompt_eval_duration\": 30577949, \"response\": \"\", \"thinking\": \"Thinking Process:\\n\\n1.  **Analyze the Request:**\\n    *   **Task:** Answer a specific benchmark prompt.\\n    *   **Constraint 1:** Answer only the requested benchmark prompt (no extra intro/outro).\\n    *   **Constraint 2:** Do not mention the instruction itself.\", \"total_duration\": 1836024495}, \"ok\": true}",
+      "total_duration_ns": 1836024495,
+      "wall_seconds": 1.84
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 3055474631,
+      "eval_tokens_per_second": 20.946,
+      "family": "gemma4",
+      "load_duration_ns": 2239687600,
+      "model": "gemma4:e4b",
+      "num_gpu": 0,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8992, 2774, 2, 2"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8992, 2774, 2, 1"
+      },
+      "ollama_ps_after": "NAME          ID              SIZE     PROCESSOR    CONTEXT    UNTIL              \ngemma4:e4b    c6eb396dbd59    10 GB    100% CPU     2048       4 minutes from now",
+      "parameter_size": "8.0B",
+      "prompt_eval_count": 63,
+      "prompt_eval_duration_ns": 326806698,
+      "quantization_level": "Q4_K_M",
+      "response_chars": 0,
+      "returncode": 0,
+      "size_bytes": 9608350718,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 5.696013289998518, \"context\": [2, 105, 9731, 107, 98, 107, 7925, 1186, 506, 15633, 30998, 11172, 236761, 3574, 711, 4928, 672, 14787, 236761, 106, 107, 105, 2364, 107, 3048, 659, 1646, 30998, 524, 236761, 799, 1806, 63510, 57052, 236764, 8082, 1217, 20974, 236786, 88477, 6352, 1135, 2335, 3731, 2263, 32050, 236792, 34711, 3736, 236761, 39874, 3393, 532, 2514, 506, 3890, 59893, 236761, 106, 107, 105, 4368, 107, 100, 45518, 107, 8291, 236789, 236751, 496, 6972, 1657, 531, 5675, 506, 3890, 236787, 108, 236770, 236761, 138, 1018, 115863, 506, 16499, 53121, 107, 140, 236829, 139, 1018, 47589, 53121, 2088, 20974, 236786, 88477, 6352, 1135, 2335, 3731, 2263, 32050, 236792, 34711, 3736, 236761, 107, 140, 236829, 139, 1018, 11238, 53121, 14019, 63510, 57052, 236761, 107, 140, 236829, 139, 1018, 40498, 53121, 39874, 3393], \"created_at\": \"2026-05-08T17:53:30.731611784Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 3055474631, \"load_duration\": 2239687600, \"model\": \"gemma4:e4b\", \"prompt_eval_count\": 63, \"prompt_eval_duration\": 326806698, \"response\": \"\", \"total_duration\": 5691239917}, \"ok\": true}",
+      "total_duration_ns": 5691239917,
+      "wall_seconds": 5.696
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 2886537849,
+      "eval_tokens_per_second": 22.172,
+      "family": "gemma4",
+      "load_duration_ns": 1765856517,
+      "model": "gemma4:e4b",
+      "num_gpu": 6,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8233, 3534, 4, 2"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8992, 2774, 3, 11"
+      },
+      "ollama_ps_after": "NAME          ID              SIZE     PROCESSOR         CONTEXT    UNTIL              \ngemma4:e4b    c6eb396dbd59    10 GB    95%/5% CPU/GPU    2048       4 minutes from now",
+      "parameter_size": "8.0B",
+      "prompt_eval_count": 63,
+      "prompt_eval_duration_ns": 139439993,
+      "quantization_level": "Q4_K_M",
+      "response_chars": 0,
+      "returncode": 0,
+      "size_bytes": 9608350718,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 4.866066753980704, \"context\": [2, 105, 9731, 107, 98, 107, 7925, 1186, 506, 15633, 30998, 11172, 236761, 3574, 711, 4928, 672, 14787, 236761, 106, 107, 105, 2364, 107, 3048, 659, 1646, 30998, 524, 236761, 799, 1806, 63510, 57052, 236764, 8082, 1217, 20974, 236786, 88477, 6352, 1135, 2335, 3731, 2263, 32050, 236792, 34711, 3736, 236761, 39874, 3393, 532, 2514, 506, 3890, 59893, 236761, 106, 107, 105, 4368, 107, 100, 45518, 107, 8291, 236789, 236751, 496, 6972, 1657, 531, 5675, 506, 3890, 236787, 108, 236770, 236761, 138, 1018, 115863, 506, 16499, 53121, 107, 140, 236829, 139, 1018, 47589, 53121, 2088, 20974, 236786, 88477, 6352, 1135, 2335, 3731, 2263, 32050, 236792, 34711, 3736, 236761, 107, 140, 236829, 139, 1018, 11238, 53121, 14019, 63510, 57052, 236761, 107, 140, 236829, 139, 1018, 40498, 53121, 39874, 3393], \"created_at\": \"2026-05-08T17:53:37.955153357Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 2886537849, \"load_duration\": 1765856517, \"model\": \"gemma4:e4b\", \"prompt_eval_count\": 63, \"prompt_eval_duration\": 139439993, \"response\": \"\", \"total_duration\": 4860958117}, \"ok\": true}",
+      "total_duration_ns": 4860958117,
+      "wall_seconds": 4.866
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 2597700616,
+      "eval_tokens_per_second": 24.637,
+      "family": "gemma4",
+      "load_duration_ns": 1743221754,
+      "model": "gemma4:e4b",
+      "num_gpu": 12,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 7885, 3882, 6, 3"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8992, 2774, 1, 1"
+      },
+      "ollama_ps_after": "NAME          ID              SIZE     PROCESSOR         CONTEXT    UNTIL              \ngemma4:e4b    c6eb396dbd59    10 GB    91%/9% CPU/GPU    2048       4 minutes from now",
+      "parameter_size": "8.0B",
+      "prompt_eval_count": 63,
+      "prompt_eval_duration_ns": 122316015,
+      "quantization_level": "Q4_K_M",
+      "response_chars": 0,
+      "returncode": 0,
+      "size_bytes": 9608350718,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 4.5409481519891415, \"context\": [2, 105, 9731, 107, 98, 107, 7925, 1186, 506, 15633, 30998, 11172, 236761, 3574, 711, 4928, 672, 14787, 236761, 106, 107, 105, 2364, 107, 3048, 659, 1646, 30998, 524, 236761, 799, 1806, 63510, 57052, 236764, 8082, 1217, 20974, 236786, 88477, 6352, 1135, 2335, 3731, 2263, 32050, 236792, 34711, 3736, 236761, 39874, 3393, 532, 2514, 506, 3890, 59893, 236761, 106, 107, 105, 4368, 107, 100, 45518, 107, 8291, 236789, 236751, 496, 6972, 1657, 531, 5675, 506, 3890, 236787, 108, 236770, 236761, 138, 1018, 115863, 506, 16499, 53121, 107, 140, 236829, 139, 1018, 47589, 53121, 2088, 20974, 236786, 88477, 6352, 1135, 2335, 3731, 2263, 32050, 236792, 34711, 3736, 236761, 107, 140, 236829, 139, 1018, 11238, 53121, 14019, 63510, 57052, 236761, 107, 140, 236829, 139, 1018, 40498, 53121, 39874, 3393], \"created_at\": \"2026-05-08T17:53:44.86354409Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 2597700616, \"load_duration\": 1743221754, \"model\": \"gemma4:e4b\", \"prompt_eval_count\": 63, \"prompt_eval_duration\": 122316015, \"response\": \"\", \"total_duration\": 4536190599}, \"ok\": true}",
+      "total_duration_ns": 4536190599,
+      "wall_seconds": 4.541
+    },
+    {
+      "error": "<HTTPError 500: 'Internal Server Error'>",
+      "family": "gemma4",
+      "model": "gemma4:e4b",
+      "num_gpu": 18,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8992, 2774, 1, 1"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8992, 2774, 2, 1"
+      },
+      "ollama_ps_after": "NAME    ID    SIZE    PROCESSOR    CONTEXT    UNTIL",
+      "parameter_size": "8.0B",
+      "quantization_level": "Q4_K_M",
+      "returncode": 2,
+      "size_bytes": 9608350718,
+      "status": "error",
+      "stderr": "",
+      "stdout": "{\"_wall_seconds\": 0.5842289050051477, \"error\": \"<HTTPError 500: 'Internal Server Error'>\", \"ok\": false}",
+      "wall_seconds": 0.584
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 1989514370,
+      "eval_tokens_per_second": 32.169,
+      "family": "gemma4",
+      "load_duration_ns": 1747998777,
+      "model": "gemma4:e4b",
+      "num_gpu": 24,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 7247, 4520, 16, 10"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8992, 2774, 2, 1"
+      },
+      "ollama_ps_after": "NAME          ID              SIZE     PROCESSOR          CONTEXT    UNTIL              \ngemma4:e4b    c6eb396dbd59    10 GB    85%/15% CPU/GPU    2048       4 minutes from now",
+      "parameter_size": "8.0B",
+      "prompt_eval_count": 63,
+      "prompt_eval_duration_ns": 85549097,
+      "quantization_level": "Q4_K_M",
+      "response_chars": 0,
+      "returncode": 0,
+      "size_bytes": 9608350718,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 3.8969974360079505, \"context\": [2, 105, 9731, 107, 98, 107, 7925, 1186, 506, 15633, 30998, 11172, 236761, 3574, 711, 4928, 672, 14787, 236761, 106, 107, 105, 2364, 107, 3048, 659, 1646, 30998, 524, 236761, 799, 1806, 63510, 57052, 236764, 8082, 1217, 20974, 236786, 88477, 6352, 1135, 2335, 3731, 2263, 32050, 236792, 34711, 3736, 236761, 39874, 3393, 532, 2514, 506, 3890, 59893, 236761, 106, 107, 105, 4368, 107, 100, 45518, 107, 8291, 236789, 236751, 496, 6972, 1657, 531, 5675, 506, 3890, 236787, 108, 236770, 236761, 138, 1018, 115863, 506, 16499, 53121, 107, 140, 236829, 139, 1018, 47589, 53121, 2088, 20974, 236786, 88477, 6352, 1135, 2335, 3731, 2263, 32050, 236792, 34711, 3736, 236761, 107, 140, 236829, 139, 1018, 11238, 53121, 14019, 63510, 57052, 236761, 107, 140, 236829, 139, 1018, 40498, 53121, 39874, 3393], \"created_at\": \"2026-05-08T17:53:54.05558256Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 1989514370, \"load_duration\": 1747998777, \"model\": \"gemma4:e4b\", \"prompt_eval_count\": 63, \"prompt_eval_duration\": 85549097, \"response\": \"\", \"total_duration\": 3892077547}, \"ok\": true}",
+      "total_duration_ns": 3892077547,
+      "wall_seconds": 3.897
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 1618984269,
+      "eval_tokens_per_second": 39.531,
+      "family": "gemma4",
+      "load_duration_ns": 1728259357,
+      "model": "gemma4:e4b",
+      "num_gpu": 32,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 6679, 5087, 22, 14"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8995, 2772, 1, 1"
+      },
+      "ollama_ps_after": "NAME          ID              SIZE     PROCESSOR          CONTEXT    UNTIL              \ngemma4:e4b    c6eb396dbd59    10 GB    79%/21% CPU/GPU    2048       4 minutes from now",
+      "parameter_size": "8.0B",
+      "prompt_eval_count": 63,
+      "prompt_eval_duration_ns": 60671964,
+      "quantization_level": "Q4_K_M",
+      "response_chars": 0,
+      "returncode": 0,
+      "size_bytes": 9608350718,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 3.476895471016178, \"context\": [2, 105, 9731, 107, 98, 107, 7925, 1186, 506, 15633, 30998, 11172, 236761, 3574, 711, 4928, 672, 14787, 236761, 106, 107, 105, 2364, 107, 3048, 659, 1646, 30998, 524, 236761, 799, 1806, 63510, 57052, 236764, 8082, 1217, 20974, 236786, 88477, 6352, 1135, 2335, 3731, 2263, 32050, 236792, 34711, 3736, 236761, 39874, 3393, 532, 2514, 506, 3890, 59893, 236761, 106, 107, 105, 4368, 107, 100, 45518, 107, 8291, 236789, 236751, 496, 6972, 1657, 531, 5675, 506, 3890, 236787, 108, 236770, 236761, 138, 1018, 115863, 506, 16499, 53121, 107, 140, 236829, 139, 1018, 47589, 53121, 2088, 20974, 236786, 88477, 6352, 1135, 2335, 3731, 2263, 32050, 236792, 34711, 3736, 236761, 107, 140, 236829, 139, 1018, 11238, 53121, 14019, 63510, 57052, 236761, 107, 140, 236829, 139, 1018, 40498, 53121, 39874, 3393], \"created_at\": \"2026-05-08T17:53:59.88577316Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 1618984269, \"load_duration\": 1728259357, \"model\": \"gemma4:e4b\", \"prompt_eval_count\": 63, \"prompt_eval_duration\": 60671964, \"response\": \"\", \"total_duration\": 3471816351}, \"ok\": true}",
+      "total_duration_ns": 3471816351,
+      "wall_seconds": 3.477
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 3090000079,
+      "eval_tokens_per_second": 20.712,
+      "family": "gemma4",
+      "load_duration_ns": 1476235015,
+      "model": "bjoernb/gemma4-e4b-think:latest",
+      "num_gpu": 0,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8995, 2772, 2, 1"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8995, 2772, 1, 1"
+      },
+      "ollama_ps_after": "NAME                               ID              SIZE     PROCESSOR    CONTEXT    UNTIL              \nbjoernb/gemma4-e4b-think:latest    4b05b47a07a1    10 GB    100% CPU     2048       4 minutes from now",
+      "parameter_size": "8.0B",
+      "prompt_eval_count": 63,
+      "prompt_eval_duration_ns": 331592226,
+      "quantization_level": "Q4_K_M",
+      "response_chars": 0,
+      "returncode": 0,
+      "size_bytes": 9608351107,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 4.968583943002159, \"context\": [2, 105, 9731, 107, 98, 107, 7925, 1186, 506, 15633, 30998, 11172, 236761, 3574, 711, 4928, 672, 14787, 236761, 106, 107, 105, 2364, 107, 3048, 659, 1646, 30998, 524, 236761, 799, 1806, 63510, 57052, 236764, 8082, 1217, 20974, 236786, 88477, 6352, 1135, 2335, 3731, 2263, 32050, 236792, 34711, 3736, 236761, 39874, 3393, 532, 2514, 506, 3890, 59893, 236761, 106, 107, 105, 4368, 107, 100, 45518, 107, 8291, 236789, 236751, 496, 6972, 1657, 531, 5675, 506, 3890, 236787, 108, 236770, 236761, 138, 1018, 115863, 506, 16499, 53121, 107, 140, 236829, 139, 1018, 47589, 53121, 2088, 20974, 236786, 88477, 6352, 1135, 2335, 3731, 2263, 32050, 236792, 34711, 3736, 236761, 107, 140, 236829, 139, 1018, 11238, 53121, 14019, 63510, 57052, 236761, 107, 140, 236829, 139, 1018, 40498, 53121, 39874, 3393], \"created_at\": \"2026-05-08T17:54:07.21600443Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 3090000079, \"load_duration\": 1476235015, \"model\": \"bjoernb/gemma4-e4b-think:latest\", \"prompt_eval_count\": 63, \"prompt_eval_duration\": 331592226, \"response\": \"\", \"total_duration\": 4963421203}, \"ok\": true}",
+      "total_duration_ns": 4963421203,
+      "wall_seconds": 4.969
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 2820302763,
+      "eval_tokens_per_second": 22.693,
+      "family": "gemma4",
+      "load_duration_ns": 1761391268,
+      "model": "bjoernb/gemma4-e4b-think:latest",
+      "num_gpu": 6,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8235, 3531, 4, 2"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8995, 2772, 2, 2"
+      },
+      "ollama_ps_after": "NAME                               ID              SIZE     PROCESSOR         CONTEXT    UNTIL              \nbjoernb/gemma4-e4b-think:latest    4b05b47a07a1    10 GB    95%/5% CPU/GPU    2048       4 minutes from now",
+      "parameter_size": "8.0B",
+      "prompt_eval_count": 63,
+      "prompt_eval_duration_ns": 137613161,
+      "quantization_level": "Q4_K_M",
+      "response_chars": 0,
+      "returncode": 0,
+      "size_bytes": 9608351107,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 4.796497365983669, \"context\": [2, 105, 9731, 107, 98, 107, 7925, 1186, 506, 15633, 30998, 11172, 236761, 3574, 711, 4928, 672, 14787, 236761, 106, 107, 105, 2364, 107, 3048, 659, 1646, 30998, 524, 236761, 799, 1806, 63510, 57052, 236764, 8082, 1217, 20974, 236786, 88477, 6352, 1135, 2335, 3731, 2263, 32050, 236792, 34711, 3736, 236761, 39874, 3393, 532, 2514, 506, 3890, 59893, 236761, 106, 107, 105, 4368, 107, 100, 45518, 107, 8291, 236789, 236751, 496, 6972, 1657, 531, 5675, 506, 3890, 236787, 108, 236770, 236761, 138, 1018, 115863, 506, 16499, 53121, 107, 140, 236829, 139, 1018, 47589, 53121, 2088, 20974, 236786, 88477, 6352, 1135, 2335, 3731, 2263, 32050, 236792, 34711, 3736, 236761, 107, 140, 236829, 139, 1018, 11238, 53121, 14019, 63510, 57052, 236761, 107, 140, 236829, 139, 1018, 40498, 53121, 39874, 3393], \"created_at\": \"2026-05-08T17:54:14.378459014Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 2820302763, \"load_duration\": 1761391268, \"model\": \"bjoernb/gemma4-e4b-think:latest\", \"prompt_eval_count\": 63, \"prompt_eval_duration\": 137613161, \"response\": \"\", \"total_duration\": 4790150809}, \"ok\": true}",
+      "total_duration_ns": 4790150809,
+      "wall_seconds": 4.796
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 2590877052,
+      "eval_tokens_per_second": 24.702,
+      "family": "gemma4",
+      "load_duration_ns": 1737449355,
+      "model": "bjoernb/gemma4-e4b-think:latest",
+      "num_gpu": 12,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 7887, 3879, 6, 3"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8995, 2772, 1, 1"
+      },
+      "ollama_ps_after": "NAME                               ID              SIZE     PROCESSOR         CONTEXT    UNTIL              \nbjoernb/gemma4-e4b-think:latest    4b05b47a07a1    10 GB    91%/9% CPU/GPU    2048       4 minutes from now",
+      "parameter_size": "8.0B",
+      "prompt_eval_count": 63,
+      "prompt_eval_duration_ns": 121997955,
+      "quantization_level": "Q4_K_M",
+      "response_chars": 0,
+      "returncode": 0,
+      "size_bytes": 9608351107,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 4.523932401003549, \"context\": [2, 105, 9731, 107, 98, 107, 7925, 1186, 506, 15633, 30998, 11172, 236761, 3574, 711, 4928, 672, 14787, 236761, 106, 107, 105, 2364, 107, 3048, 659, 1646, 30998, 524, 236761, 799, 1806, 63510, 57052, 236764, 8082, 1217, 20974, 236786, 88477, 6352, 1135, 2335, 3731, 2263, 32050, 236792, 34711, 3736, 236761, 39874, 3393, 532, 2514, 506, 3890, 59893, 236761, 106, 107, 105, 4368, 107, 100, 45518, 107, 8291, 236789, 236751, 496, 6972, 1657, 531, 5675, 506, 3890, 236787, 108, 236770, 236761, 138, 1018, 115863, 506, 16499, 53121, 107, 140, 236829, 139, 1018, 47589, 53121, 2088, 20974, 236786, 88477, 6352, 1135, 2335, 3731, 2263, 32050, 236792, 34711, 3736, 236761, 107, 140, 236829, 139, 1018, 11238, 53121, 14019, 63510, 57052, 236761, 107, 140, 236829, 139, 1018, 40498, 53121, 39874, 3393], \"created_at\": \"2026-05-08T17:54:21.271321476Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 2590877052, \"load_duration\": 1737449355, \"model\": \"bjoernb/gemma4-e4b-think:latest\", \"prompt_eval_count\": 63, \"prompt_eval_duration\": 121997955, \"response\": \"\", \"total_duration\": 4519069319}, \"ok\": true}",
+      "total_duration_ns": 4519069319,
+      "wall_seconds": 4.524
+    },
+    {
+      "error": "<HTTPError 500: 'Internal Server Error'>",
+      "family": "gemma4",
+      "model": "bjoernb/gemma4-e4b-think:latest",
+      "num_gpu": 18,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8995, 2772, 2, 1"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8995, 2772, 2, 1"
+      },
+      "ollama_ps_after": "NAME    ID    SIZE    PROCESSOR    CONTEXT    UNTIL",
+      "parameter_size": "8.0B",
+      "quantization_level": "Q4_K_M",
+      "returncode": 2,
+      "size_bytes": 9608351107,
+      "status": "error",
+      "stderr": "",
+      "stdout": "{\"_wall_seconds\": 0.5914733039971907, \"error\": \"<HTTPError 500: 'Internal Server Error'>\", \"ok\": false}",
+      "wall_seconds": 0.591
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 2013639352,
+      "eval_tokens_per_second": 31.783,
+      "family": "gemma4",
+      "load_duration_ns": 1718310002,
+      "model": "bjoernb/gemma4-e4b-think:latest",
+      "num_gpu": 24,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 7249, 4517, 13, 8"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8995, 2772, 2, 1"
+      },
+      "ollama_ps_after": "NAME                               ID              SIZE     PROCESSOR          CONTEXT    UNTIL              \nbjoernb/gemma4-e4b-think:latest    4b05b47a07a1    10 GB    85%/15% CPU/GPU    2048       4 minutes from now",
+      "parameter_size": "8.0B",
+      "prompt_eval_count": 63,
+      "prompt_eval_duration_ns": 86859696,
+      "quantization_level": "Q4_K_M",
+      "response_chars": 0,
+      "returncode": 0,
+      "size_bytes": 9608351107,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 3.892716633010423, \"context\": [2, 105, 9731, 107, 98, 107, 7925, 1186, 506, 15633, 30998, 11172, 236761, 3574, 711, 4928, 672, 14787, 236761, 106, 107, 105, 2364, 107, 3048, 659, 1646, 30998, 524, 236761, 799, 1806, 63510, 57052, 236764, 8082, 1217, 20974, 236786, 88477, 6352, 1135, 2335, 3731, 2263, 32050, 236792, 34711, 3736, 236761, 39874, 3393, 532, 2514, 506, 3890, 59893, 236761, 106, 107, 105, 4368, 107, 100, 45518, 107, 8291, 236789, 236751, 496, 6972, 1657, 531, 5675, 506, 3890, 236787, 108, 236770, 236761, 138, 1018, 115863, 506, 16499, 53121, 107, 140, 236829, 139, 1018, 47589, 53121, 2088, 20974, 236786, 88477, 6352, 1135, 2335, 3731, 2263, 32050, 236792, 34711, 3736, 236761, 107, 140, 236829, 139, 1018, 11238, 53121, 14019, 63510, 57052, 236761, 107, 140, 236829, 139, 1018, 40498, 53121, 39874, 3393], \"created_at\": \"2026-05-08T17:54:30.460387977Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 2013639352, \"load_duration\": 1718310002, \"model\": \"bjoernb/gemma4-e4b-think:latest\", \"prompt_eval_count\": 63, \"prompt_eval_duration\": 86859696, \"response\": \"\", \"total_duration\": 3888130725}, \"ok\": true}",
+      "total_duration_ns": 3888130725,
+      "wall_seconds": 3.893
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 1626745358,
+      "eval_tokens_per_second": 39.342,
+      "family": "gemma4",
+      "load_duration_ns": 1716064598,
+      "model": "bjoernb/gemma4-e4b-think:latest",
+      "num_gpu": 32,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 6679, 5087, 21, 14"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8995, 2772, 1, 1"
+      },
+      "ollama_ps_after": "NAME                               ID              SIZE     PROCESSOR          CONTEXT    UNTIL              \nbjoernb/gemma4-e4b-think:latest    4b05b47a07a1    10 GB    79%/21% CPU/GPU    2048       4 minutes from now",
+      "parameter_size": "8.0B",
+      "prompt_eval_count": 63,
+      "prompt_eval_duration_ns": 60317935,
+      "quantization_level": "Q4_K_M",
+      "response_chars": 0,
+      "returncode": 0,
+      "size_bytes": 9608351107,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 3.476101987005677, \"context\": [2, 105, 9731, 107, 98, 107, 7925, 1186, 506, 15633, 30998, 11172, 236761, 3574, 711, 4928, 672, 14787, 236761, 106, 107, 105, 2364, 107, 3048, 659, 1646, 30998, 524, 236761, 799, 1806, 63510, 57052, 236764, 8082, 1217, 20974, 236786, 88477, 6352, 1135, 2335, 3731, 2263, 32050, 236792, 34711, 3736, 236761, 39874, 3393, 532, 2514, 506, 3890, 59893, 236761, 106, 107, 105, 4368, 107, 100, 45518, 107, 8291, 236789, 236751, 496, 6972, 1657, 531, 5675, 506, 3890, 236787, 108, 236770, 236761, 138, 1018, 115863, 506, 16499, 53121, 107, 140, 236829, 139, 1018, 47589, 53121, 2088, 20974, 236786, 88477, 6352, 1135, 2335, 3731, 2263, 32050, 236792, 34711, 3736, 236761, 107, 140, 236829, 139, 1018, 11238, 53121, 14019, 63510, 57052, 236761, 107, 140, 236829, 139, 1018, 40498, 53121, 39874, 3393], \"created_at\": \"2026-05-08T17:54:36.283642398Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 1626745358, \"load_duration\": 1716064598, \"model\": \"bjoernb/gemma4-e4b-think:latest\", \"prompt_eval_count\": 63, \"prompt_eval_duration\": 60317935, \"response\": \"\", \"total_duration\": 3470971529}, \"ok\": true}",
+      "total_duration_ns": 3470971529,
+      "wall_seconds": 3.476
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 10175891091,
+      "eval_tokens_per_second": 6.289,
+      "family": "phi3",
+      "load_duration_ns": 1389535854,
+      "model": "phi4-reasoning:latest",
+      "num_gpu": 0,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 9030, 2737, 0, 0"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 8995, 2772, 1, 1"
+      },
+      "ollama_ps_after": "NAME                     ID              SIZE     PROCESSOR    CONTEXT    UNTIL              \nphi4-reasoning:latest    47e2630ccbcd    11 GB    100% CPU     2048       4 minutes from now",
+      "parameter_size": "14.7B",
+      "prompt_eval_count": 63,
+      "prompt_eval_duration_ns": 1026327433,
+      "quantization_level": "Q4_K_M",
+      "response_chars": 307,
+      "returncode": 0,
+      "size_bytes": 11117503233,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 12.619147057994269, \"context\": [100264, 9125, 100266, 198, 16533, 1193, 279, 11472, 29531, 10137, 13, 3234, 539, 6420, 420, 7754, 13, 100265, 198, 100264, 882, 100266, 198, 2675, 527, 1694, 29531, 291, 13, 763, 2380, 64694, 34164, 11, 10552, 1268, 14266, 16169, 6459, 6324, 1022, 1096, 4442, 2254, 445, 11237, 45478, 5178, 13, 35106, 2082, 323, 2567, 279, 4320, 61001, 13, 100265, 198, 100264, 78191, 100266, 198, 100350, 1502, 21745, 82, 25, 330, 2675, 527, 1694, 29531, 291, 13, 763, 2380, 64694, 34164, 11, 10552, 1268, 14266, 16169, 6459, 6324, 1022, 1096, 4442, 2254, 445, 11237, 45478, 5178, 13, 35106, 2082, 323, 2567, 279, 4320, 61001, 1210, 1226, 1205, 311, 8356, 4320, 304, 2380, 17889, 3585, 13, 578, 11470, 2019, 25, 330, 5519, 539, 6420, 1521, 17959, 1, 5099, 382, 1687], \"created_at\": \"2026-05-08T17:54:51.168822115Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 10175891091, \"load_duration\": 1389535854, \"model\": \"phi4-reasoning:latest\", \"prompt_eval_count\": 63, \"prompt_eval_duration\": 1026327433, \"response\": \"<think>User instructs: \\\"You are being benchmarked. In three concise bullets, explain how CPU/GPU layer offload changes local LLM inference performance. Avoid code and keep the answer factual.\\\" We need to produce answer in three bullet points. The instructions say: \\\"Do not mention these guidelines\\\" etc.\\n\\nWe\", \"total_duration\": 12614881906}, \"ok\": true}",
+      "total_duration_ns": 12614881906,
+      "wall_seconds": 12.619
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 8783618991,
+      "eval_tokens_per_second": 7.286,
+      "family": "phi3",
+      "load_duration_ns": 749602128,
+      "model": "phi4-reasoning:latest",
+      "num_gpu": 6,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 6569, 5198, 3, 3"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 9030, 2737, 0, 0"
+      },
+      "ollama_ps_after": "NAME                     ID              SIZE     PROCESSOR          CONTEXT    UNTIL              \nphi4-reasoning:latest    47e2630ccbcd    11 GB    83%/17% CPU/GPU    2048       4 minutes from now",
+      "parameter_size": "14.7B",
+      "prompt_eval_count": 63,
+      "prompt_eval_duration_ns": 444481808,
+      "quantization_level": "Q4_K_M",
+      "response_chars": 307,
+      "returncode": 0,
+      "size_bytes": 11117503233,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 10.004546383017441, \"context\": [100264, 9125, 100266, 198, 16533, 1193, 279, 11472, 29531, 10137, 13, 3234, 539, 6420, 420, 7754, 13, 100265, 198, 100264, 882, 100266, 198, 2675, 527, 1694, 29531, 291, 13, 763, 2380, 64694, 34164, 11, 10552, 1268, 14266, 16169, 6459, 6324, 1022, 1096, 4442, 2254, 445, 11237, 45478, 5178, 13, 35106, 2082, 323, 2567, 279, 4320, 61001, 13, 100265, 198, 100264, 78191, 100266, 198, 100350, 1502, 21745, 82, 25, 330, 2675, 527, 1694, 29531, 291, 13, 763, 2380, 64694, 34164, 11, 10552, 1268, 14266, 16169, 6459, 6324, 1022, 1096, 4442, 2254, 445, 11237, 45478, 5178, 13, 35106, 2082, 323, 2567, 279, 4320, 61001, 1210, 1226, 1205, 311, 8356, 4320, 304, 2380, 17889, 3585, 13, 578, 11470, 2019, 25, 330, 5519, 539, 6420, 1521, 17959, 1, 5099, 382, 1687], \"created_at\": \"2026-05-08T17:55:03.336527691Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 8783618991, \"load_duration\": 749602128, \"model\": \"phi4-reasoning:latest\", \"prompt_eval_count\": 63, \"prompt_eval_duration\": 444481808, \"response\": \"<think>User instructs: \\\"You are being benchmarked. In three concise bullets, explain how CPU/GPU layer offload changes local LLM inference performance. Avoid code and keep the answer factual.\\\" We need to produce answer in three bullet points. The instructions say: \\\"Do not mention these guidelines\\\" etc.\\n\\nWe\", \"total_duration\": 10000374838}, \"ok\": true}",
+      "total_duration_ns": 10000374838,
+      "wall_seconds": 10.005
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 7583582201,
+      "eval_tokens_per_second": 8.439,
+      "family": "phi3",
+      "load_duration_ns": 976754494,
+      "model": "phi4-reasoning:latest",
+      "num_gpu": 12,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 5040, 6726, 3, 3"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 9030, 2737, 0, 0"
+      },
+      "ollama_ps_after": "NAME                     ID              SIZE     PROCESSOR          CONTEXT    UNTIL              \nphi4-reasoning:latest    47e2630ccbcd    11 GB    69%/31% CPU/GPU    2048       4 minutes from now",
+      "parameter_size": "14.7B",
+      "prompt_eval_count": 63,
+      "prompt_eval_duration_ns": 375512660,
+      "quantization_level": "Q4_K_M",
+      "response_chars": 307,
+      "returncode": 0,
+      "size_bytes": 11117503233,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 8.962315418000799, \"context\": [100264, 9125, 100266, 198, 16533, 1193, 279, 11472, 29531, 10137, 13, 3234, 539, 6420, 420, 7754, 13, 100265, 198, 100264, 882, 100266, 198, 2675, 527, 1694, 29531, 291, 13, 763, 2380, 64694, 34164, 11, 10552, 1268, 14266, 16169, 6459, 6324, 1022, 1096, 4442, 2254, 445, 11237, 45478, 5178, 13, 35106, 2082, 323, 2567, 279, 4320, 61001, 13, 100265, 198, 100264, 78191, 100266, 198, 100350, 1502, 21745, 82, 25, 330, 2675, 527, 1694, 29531, 291, 13, 763, 2380, 64694, 34164, 11, 10552, 1268, 14266, 16169, 6459, 6324, 1022, 1096, 4442, 2254, 445, 11237, 45478, 5178, 13, 35106, 2082, 323, 2567, 279, 4320, 61001, 1210, 1226, 1205, 311, 8356, 4320, 304, 2380, 17889, 3585, 13, 578, 11470, 2019, 25, 330, 5519, 539, 6420, 1521, 17959, 1, 5099, 382, 1687], \"created_at\": \"2026-05-08T17:55:14.441886452Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 7583582201, \"load_duration\": 976754494, \"model\": \"phi4-reasoning:latest\", \"prompt_eval_count\": 63, \"prompt_eval_duration\": 375512660, \"response\": \"<think>User instructs: \\\"You are being benchmarked. In three concise bullets, explain how CPU/GPU layer offload changes local LLM inference performance. Avoid code and keep the answer factual.\\\" We need to produce answer in three bullet points. The instructions say: \\\"Do not mention these guidelines\\\" etc.\\n\\nWe\", \"total_duration\": 8958105271}, \"ok\": true}",
+      "total_duration_ns": 8958105271,
+      "wall_seconds": 8.962
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 6270720257,
+      "eval_tokens_per_second": 10.206,
+      "family": "phi3",
+      "load_duration_ns": 962030504,
+      "model": "phi4-reasoning:latest",
+      "num_gpu": 18,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 3515, 8252, 8, 8"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 9028, 2739, 0, 0"
+      },
+      "ollama_ps_after": "NAME                     ID              SIZE     PROCESSOR          CONTEXT    UNTIL              \nphi4-reasoning:latest    47e2630ccbcd    11 GB    55%/45% CPU/GPU    2048       4 minutes from now",
+      "parameter_size": "14.7B",
+      "prompt_eval_count": 63,
+      "prompt_eval_duration_ns": 301973153,
+      "quantization_level": "Q4_K_M",
+      "response_chars": 307,
+      "returncode": 0,
+      "size_bytes": 11117503233,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 7.561866750998888, \"context\": [100264, 9125, 100266, 198, 16533, 1193, 279, 11472, 29531, 10137, 13, 3234, 539, 6420, 420, 7754, 13, 100265, 198, 100264, 882, 100266, 198, 2675, 527, 1694, 29531, 291, 13, 763, 2380, 64694, 34164, 11, 10552, 1268, 14266, 16169, 6459, 6324, 1022, 1096, 4442, 2254, 445, 11237, 45478, 5178, 13, 35106, 2082, 323, 2567, 279, 4320, 61001, 13, 100265, 198, 100264, 78191, 100266, 198, 100350, 1502, 21745, 82, 25, 330, 2675, 527, 1694, 29531, 291, 13, 763, 2380, 64694, 34164, 11, 10552, 1268, 14266, 16169, 6459, 6324, 1022, 1096, 4442, 2254, 445, 11237, 45478, 5178, 13, 35106, 2082, 323, 2567, 279, 4320, 61001, 1210, 1226, 1205, 311, 8356, 4320, 304, 2380, 17889, 3585, 13, 578, 11470, 2019, 25, 330, 5519, 539, 6420, 1521, 17959, 1, 5099, 382, 1687], \"created_at\": \"2026-05-08T17:55:24.146340058Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 6270720257, \"load_duration\": 962030504, \"model\": \"phi4-reasoning:latest\", \"prompt_eval_count\": 63, \"prompt_eval_duration\": 301973153, \"response\": \"<think>User instructs: \\\"You are being benchmarked. In three concise bullets, explain how CPU/GPU layer offload changes local LLM inference performance. Avoid code and keep the answer factual.\\\" We need to produce answer in three bullet points. The instructions say: \\\"Do not mention these guidelines\\\" etc.\\n\\nWe\", \"total_duration\": 7557625885}, \"ok\": true}",
+      "total_duration_ns": 7557625885,
+      "wall_seconds": 7.562
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 5012448506,
+      "eval_tokens_per_second": 12.768,
+      "family": "phi3",
+      "load_duration_ns": 962433507,
+      "model": "phi4-reasoning:latest",
+      "num_gpu": 24,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 1989, 9778, 15, 14"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 9028, 2739, 0, 0"
+      },
+      "ollama_ps_after": "NAME                     ID              SIZE     PROCESSOR          CONTEXT    UNTIL              \nphi4-reasoning:latest    47e2630ccbcd    11 GB    41%/59% CPU/GPU    2048       4 minutes from now",
+      "parameter_size": "14.7B",
+      "prompt_eval_count": 63,
+      "prompt_eval_duration_ns": 232875753,
+      "quantization_level": "Q4_K_M",
+      "response_chars": 307,
+      "returncode": 0,
+      "size_bytes": 11117503233,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 6.234128109004814, \"context\": [100264, 9125, 100266, 198, 16533, 1193, 279, 11472, 29531, 10137, 13, 3234, 539, 6420, 420, 7754, 13, 100265, 198, 100264, 882, 100266, 198, 2675, 527, 1694, 29531, 291, 13, 763, 2380, 64694, 34164, 11, 10552, 1268, 14266, 16169, 6459, 6324, 1022, 1096, 4442, 2254, 445, 11237, 45478, 5178, 13, 35106, 2082, 323, 2567, 279, 4320, 61001, 13, 100265, 198, 100264, 78191, 100266, 198, 100350, 1502, 21745, 82, 25, 330, 2675, 527, 1694, 29531, 291, 13, 763, 2380, 64694, 34164, 11, 10552, 1268, 14266, 16169, 6459, 6324, 1022, 1096, 4442, 2254, 445, 11237, 45478, 5178, 13, 35106, 2082, 323, 2567, 279, 4320, 61001, 1210, 1226, 1205, 311, 8356, 4320, 304, 2380, 17889, 3585, 13, 578, 11470, 2019, 25, 330, 5519, 539, 6420, 1521, 17959, 1, 5099, 382, 1687], \"created_at\": \"2026-05-08T17:55:32.524311211Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 5012448506, \"load_duration\": 962433507, \"model\": \"phi4-reasoning:latest\", \"prompt_eval_count\": 63, \"prompt_eval_duration\": 232875753, \"response\": \"<think>User instructs: \\\"You are being benchmarked. In three concise bullets, explain how CPU/GPU layer offload changes local LLM inference performance. Avoid code and keep the answer factual.\\\" We need to produce answer in three bullet points. The instructions say: \\\"Do not mention these guidelines\\\" etc.\\n\\nWe\", \"total_duration\": 6229845393}, \"ok\": true}",
+      "total_duration_ns": 6229845393,
+      "wall_seconds": 6.234
+    },
+    {
+      "error": "<HTTPError 500: 'Internal Server Error'>",
+      "family": "phi3",
+      "model": "phi4-reasoning:latest",
+      "num_gpu": 32,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 9028, 2739, 80, 7"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 9028, 2739, 0, 0"
+      },
+      "ollama_ps_after": "NAME    ID    SIZE    PROCESSOR    CONTEXT    UNTIL",
+      "parameter_size": "14.7B",
+      "quantization_level": "Q4_K_M",
+      "returncode": 2,
+      "size_bytes": 11117503233,
+      "status": "error",
+      "stderr": "",
+      "stdout": "{\"_wall_seconds\": 0.9735613730154, \"error\": \"<HTTPError 500: 'Internal Server Error'>\", \"ok\": false}",
+      "wall_seconds": 0.974
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 2630331436,
+      "eval_tokens_per_second": 24.332,
+      "family": "gemma4",
+      "load_duration_ns": 3168992228,
+      "model": "0xIbra/supergemma4-26b-uncensored-gguf-v2:q4_K_M",
+      "num_gpu": 4,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 6092, 5674, 2, 1"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 9028, 2739, 0, 0"
+      },
+      "ollama_ps_after": "NAME                                                ID              SIZE     PROCESSOR          CONTEXT    UNTIL              \n0xIbra/supergemma4-26b-uncensored-gguf-v2:q4_K_M    9453aa2a9e44    18 GB    84%/16% CPU/GPU    2048       4 minutes from now",
+      "parameter_size": "25.2B",
+      "prompt_eval_count": 64,
+      "prompt_eval_duration_ns": 496375925,
+      "quantization_level": "Q4_K_M",
+      "response_chars": 0,
+      "returncode": 0,
+      "size_bytes": 16796015683,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 6.370406322996132, \"context\": [2, 105, 9731, 107, 98, 107, 7925, 1186, 506, 15633, 30998, 11172, 236761, 3574, 711, 4928, 672, 14787, 236761, 106, 107, 105, 2364, 107, 3048, 659, 1646, 30998, 524, 236761, 799, 1806, 63510, 57052, 236764, 8082, 1217, 20974, 236786, 88477, 6352, 1135, 2335, 3731, 2263, 32050, 236792, 34711, 3736, 236761, 39874, 3393, 532, 2514, 506, 3890, 59893, 236761, 106, 107, 105, 4368, 107, 100, 45518, 107, 236829, 139, 47589, 236787, 2088, 20974, 236786, 88477, 6352, 1135, 2335, 3731, 2263, 32050, 236792, 34711, 3736, 236761, 107, 140, 236829, 139, 11238, 236787, 14019, 63510, 57052, 236761, 107, 140, 236829, 139, 40498, 236787, 2301, 3393, 236764, 59893, 236764, 951, 4928, 529, 506, 14787, 236761, 107, 140, 236829, 139, 35559, 236787, 42085, 506, 4100, 529, 1135, 24259, 12627, 1534, 20974, 532], \"created_at\": \"2026-05-08T17:55:44.264318839Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 2630331436, \"load_duration\": 3168992228, \"model\": \"0xIbra/supergemma4-26b-uncensored-gguf-v2:q4_K_M\", \"prompt_eval_count\": 64, \"prompt_eval_duration\": 496375925, \"response\": \"\", \"total_duration\": 6364698314}, \"ok\": true}",
+      "total_duration_ns": 6364698314,
+      "wall_seconds": 6.37
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 2350512291,
+      "eval_tokens_per_second": 27.228,
+      "family": "gemma4",
+      "load_duration_ns": 2407997221,
+      "model": "0xIbra/supergemma4-26b-uncensored-gguf-v2:q4_K_M",
+      "num_gpu": 8,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 4051, 7716, 5, 3"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 9028, 2739, 0, 0"
+      },
+      "ollama_ps_after": "NAME                                                ID              SIZE     PROCESSOR          CONTEXT    UNTIL              \n0xIbra/supergemma4-26b-uncensored-gguf-v2:q4_K_M    9453aa2a9e44    18 GB    73%/27% CPU/GPU    2048       4 minutes from now",
+      "parameter_size": "25.2B",
+      "prompt_eval_count": 64,
+      "prompt_eval_duration_ns": 426032509,
+      "quantization_level": "Q4_K_M",
+      "response_chars": 0,
+      "returncode": 0,
+      "size_bytes": 16796015683,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 5.251693174010143, \"context\": [2, 105, 9731, 107, 98, 107, 7925, 1186, 506, 15633, 30998, 11172, 236761, 3574, 711, 4928, 672, 14787, 236761, 106, 107, 105, 2364, 107, 3048, 659, 1646, 30998, 524, 236761, 799, 1806, 63510, 57052, 236764, 8082, 1217, 20974, 236786, 88477, 6352, 1135, 2335, 3731, 2263, 32050, 236792, 34711, 3736, 236761, 39874, 3393, 532, 2514, 506, 3890, 59893, 236761, 106, 107, 105, 4368, 107, 100, 45518, 107, 236829, 139, 47589, 236787, 2088, 20974, 236786, 88477, 6352, 1135, 2335, 3731, 2263, 32050, 236792, 34711, 3736, 236761, 107, 140, 236829, 139, 11238, 236787, 14019, 63510, 57052, 236761, 107, 140, 236829, 139, 40498, 236787, 2301, 3393, 236764, 59893, 236764, 951, 4928, 529, 506, 14787, 236761, 107, 140, 236829, 139, 35559, 236787, 42085, 506, 4100, 529, 1135, 24259, 12627, 1534, 20974, 532], \"created_at\": \"2026-05-08T17:55:51.907949426Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 2350512291, \"load_duration\": 2407997221, \"model\": \"0xIbra/supergemma4-26b-uncensored-gguf-v2:q4_K_M\", \"prompt_eval_count\": 64, \"prompt_eval_duration\": 426032509, \"response\": \"\", \"total_duration\": 5245943615}, \"ok\": true}",
+      "total_duration_ns": 5245943615,
+      "wall_seconds": 5.252
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 2184418627,
+      "eval_tokens_per_second": 29.298,
+      "family": "gemma4",
+      "load_duration_ns": 1908405039,
+      "model": "0xIbra/supergemma4-26b-uncensored-gguf-v2:q4_K_M",
+      "num_gpu": 12,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 2013, 9754, 8, 4"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 9028, 2739, 0, 0"
+      },
+      "ollama_ps_after": "NAME                                                ID              SIZE     PROCESSOR          CONTEXT    UNTIL              \n0xIbra/supergemma4-26b-uncensored-gguf-v2:q4_K_M    9453aa2a9e44    18 GB    61%/39% CPU/GPU    2048       4 minutes from now",
+      "parameter_size": "25.2B",
+      "prompt_eval_count": 64,
+      "prompt_eval_duration_ns": 362850299,
+      "quantization_level": "Q4_K_M",
+      "response_chars": 0,
+      "returncode": 0,
+      "size_bytes": 16796015683,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 4.52584332000697, \"context\": [2, 105, 9731, 107, 98, 107, 7925, 1186, 506, 15633, 30998, 11172, 236761, 3574, 711, 4928, 672, 14787, 236761, 106, 107, 105, 2364, 107, 3048, 659, 1646, 30998, 524, 236761, 799, 1806, 63510, 57052, 236764, 8082, 1217, 20974, 236786, 88477, 6352, 1135, 2335, 3731, 2263, 32050, 236792, 34711, 3736, 236761, 39874, 3393, 532, 2514, 506, 3890, 59893, 236761, 106, 107, 105, 4368, 107, 100, 45518, 107, 236829, 139, 47589, 236787, 2088, 20974, 236786, 88477, 6352, 1135, 2335, 3731, 2263, 32050, 236792, 34711, 3736, 236761, 107, 140, 236829, 139, 11238, 236787, 14019, 63510, 57052, 236761, 107, 140, 236829, 139, 40498, 236787, 2301, 3393, 236764, 59893, 236764, 951, 4928, 529, 506, 14787, 236761, 107, 140, 236829, 139, 35559, 236787, 42085, 506, 4100, 529, 1135, 24259, 12627, 1534, 20974, 532], \"created_at\": \"2026-05-08T17:55:58.785952182Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 2184418627, \"load_duration\": 1908405039, \"model\": \"0xIbra/supergemma4-26b-uncensored-gguf-v2:q4_K_M\", \"prompt_eval_count\": 64, \"prompt_eval_duration\": 362850299, \"response\": \"\", \"total_duration\": 4520647620}, \"ok\": true}",
+      "total_duration_ns": 4520647620,
+      "wall_seconds": 4.526
+    },
+    {
+      "error": "<HTTPError 500: 'Internal Server Error'>",
+      "family": "gemma4",
+      "model": "0xIbra/supergemma4-26b-uncensored-gguf-v2:q4_K_M",
+      "num_gpu": 16,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 9028, 2739, 0, 0"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 9028, 2739, 0, 0"
+      },
+      "ollama_ps_after": "NAME    ID    SIZE    PROCESSOR    CONTEXT    UNTIL",
+      "parameter_size": "25.2B",
+      "quantization_level": "Q4_K_M",
+      "returncode": 2,
+      "size_bytes": 16796015683,
+      "status": "error",
+      "stderr": "",
+      "stdout": "{\"_wall_seconds\": 0.6996755950094666, \"error\": \"<HTTPError 500: 'Internal Server Error'>\", \"ok\": false}",
+      "wall_seconds": 0.7
+    },
+    {
+      "error": "<HTTPError 500: 'Internal Server Error'>",
+      "family": "gemma4",
+      "model": "0xIbra/supergemma4-26b-uncensored-gguf-v2:q4_K_M",
+      "num_gpu": 24,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 9028, 2739, 0, 0"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 9028, 2739, 0, 0"
+      },
+      "ollama_ps_after": "NAME    ID    SIZE    PROCESSOR    CONTEXT    UNTIL",
+      "parameter_size": "25.2B",
+      "quantization_level": "Q4_K_M",
+      "returncode": 2,
+      "size_bytes": 16796015683,
+      "status": "error",
+      "stderr": "",
+      "stdout": "{\"_wall_seconds\": 0.646207385987509, \"error\": \"<HTTPError 500: 'Internal Server Error'>\", \"ok\": false}",
+      "wall_seconds": 0.646
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 6356245747,
+      "eval_tokens_per_second": 10.069,
+      "family": "qwen3next",
+      "load_duration_ns": 7508015882,
+      "model": "qwen3-coder-next:q4_K_M",
+      "num_gpu": 2,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 6163, 5604, 0, 0"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 9028, 2739, 0, 0"
+      },
+      "ollama_ps_after": "NAME                       ID              SIZE     PROCESSOR         CONTEXT    UNTIL              \nqwen3-coder-next:q4_K_M    ca06e9e4087c    54 GB    95%/5% CPU/GPU    2048       4 minutes from now",
+      "parameter_size": "79.7B",
+      "prompt_eval_count": 60,
+      "prompt_eval_duration_ns": 962535049,
+      "quantization_level": "Q4_K_M",
+      "response_chars": 338,
+      "returncode": 0,
+      "size_bytes": 51741611823,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 14.860359616985079, \"context\": [151644, 8948, 198, 16141, 1172, 279, 11223, 28431, 9934, 13, 3155, 537, 6286, 419, 7600, 13, 151645, 198, 151644, 872, 198, 2610, 525, 1660, 28431, 291, 13, 758, 2326, 63594, 33064, 11, 10339, 1246, 13940, 15792, 6325, 6193, 1007, 1078, 4344, 2205, 444, 10994, 44378, 5068, 13, 34006, 2038, 323, 2506, 279, 4226, 59901, 13, 151645, 198, 151644, 77091, 198, 12, 13940, 15792, 6325, 6193, 1007, 1078, 25271, 19168, 1402, 7262, 553, 7218, 2686, 9023, 13617, 311, 13940, 4938, 11, 27362, 8131, 4119, 476, 7162, 12282, 389, 4938, 14859, 57727, 70403, 13, 2303, 12, 1084, 38919, 39270, 31015, 4152, 311, 821, 30611, 1948, 13940, 323, 22670, 11, 892, 646, 4347, 12564, 7567, 7241, 13617, 525, 15516, 4091, 369, 1007, 10628, 13, 2303, 12, 20651], \"created_at\": \"2026-05-08T17:56:21.953839714Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 6356245747, \"load_duration\": 7508015882, \"model\": \"qwen3-coder-next:q4_K_M\", \"prompt_eval_count\": 60, \"prompt_eval_duration\": 962535049, \"response\": \"- CPU/GPU layer offload reduces VRAM pressure by moving less critical layers to CPU memory, enabling larger models or batch sizes on memory-constrained GPUs.  \\n- It introduces latency overhead due to data transfers between CPU and GPU, which can offset compute benefits unless layers are carefully selected for offloading.  \\n- Performance\", \"total_duration\": 14856204322}, \"ok\": true}",
+      "total_duration_ns": 14856204322,
+      "wall_seconds": 14.86
+    },
+    {
+      "done_reason": "length",
+      "eval_count": 64,
+      "eval_duration_ns": 6141102228,
+      "eval_tokens_per_second": 10.422,
+      "family": "qwen3next",
+      "load_duration_ns": 8167253239,
+      "model": "qwen3-coder-next:q4_K_M",
+      "num_gpu": 4,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 4019, 7748, 1, 0"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 9028, 2739, 0, 0"
+      },
+      "ollama_ps_after": "NAME                       ID              SIZE     PROCESSOR         CONTEXT    UNTIL              \nqwen3-coder-next:q4_K_M    ca06e9e4087c    54 GB    91%/9% CPU/GPU    2048       4 minutes from now",
+      "parameter_size": "79.7B",
+      "prompt_eval_count": 60,
+      "prompt_eval_duration_ns": 939436680,
+      "quantization_level": "Q4_K_M",
+      "response_chars": 337,
+      "returncode": 0,
+      "size_bytes": 51741611823,
+      "status": "ok",
+      "stderr": "",
+      "stdout": "{\"data\": {\"_wall_seconds\": 15.279880192014389, \"context\": [151644, 8948, 198, 16141, 1172, 279, 11223, 28431, 9934, 13, 3155, 537, 6286, 419, 7600, 13, 151645, 198, 151644, 872, 198, 2610, 525, 1660, 28431, 291, 13, 758, 2326, 63594, 33064, 11, 10339, 1246, 13940, 15792, 6325, 6193, 1007, 1078, 4344, 2205, 444, 10994, 44378, 5068, 13, 34006, 2038, 323, 2506, 279, 4226, 59901, 13, 151645, 198, 151644, 77091, 198, 12, 13940, 15792, 6325, 6193, 1007, 1078, 25271, 19168, 1402, 7262, 553, 7218, 2686, 9023, 13617, 311, 13940, 4938, 11, 27362, 8131, 4119, 476, 7162, 12282, 389, 4938, 14859, 57727, 70403, 13, 2303, 12, 1084, 38919, 39270, 31015, 4152, 311, 821, 30611, 1948, 13940, 323, 22670, 11, 892, 646, 4347, 12564, 7567, 7241, 1007, 15589, 13617, 525, 12564, 17709, 476, 4132, 69841, 24758, 13], \"created_at\": \"2026-05-08T17:56:39.484695982Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 64, \"eval_duration\": 6141102228, \"load_duration\": 8167253239, \"model\": \"qwen3-coder-next:q4_K_M\", \"prompt_eval_count\": 60, \"prompt_eval_duration\": 939436680, \"response\": \"- CPU/GPU layer offload reduces VRAM pressure by moving less critical layers to CPU memory, enabling larger models or batch sizes on memory-constrained GPUs.  \\n- It introduces latency overhead due to data transfers between CPU and GPU, which can offset compute benefits unless offloaded layers are compute-light or infrequently accessed.\", \"total_duration\": 15275615751}, \"ok\": true}",
+      "total_duration_ns": 15275615751,
+      "wall_seconds": 15.28
+    },
+    {
+      "error": "<HTTPError 500: 'Internal Server Error'>",
+      "family": "qwen3next",
+      "model": "qwen3-coder-next:q4_K_M",
+      "num_gpu": 8,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 9028, 2739, 0, 0"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 9028, 2739, 0, 0"
+      },
+      "ollama_ps_after": "NAME    ID    SIZE    PROCESSOR    CONTEXT    UNTIL",
+      "parameter_size": "79.7B",
+      "quantization_level": "Q4_K_M",
+      "returncode": 2,
+      "size_bytes": 51741611823,
+      "status": "error",
+      "stderr": "",
+      "stdout": "{\"_wall_seconds\": 1.9784097440133337, \"error\": \"<HTTPError 500: 'Internal Server Error'>\", \"ok\": false}",
+      "wall_seconds": 1.978
+    },
+    {
+      "error": "<HTTPError 500: 'Internal Server Error'>",
+      "family": "qwen3next",
+      "model": "qwen3-coder-next:q4_K_M",
+      "num_gpu": 12,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 9028, 2739, 0, 0"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 9028, 2739, 0, 0"
+      },
+      "ollama_ps_after": "NAME    ID    SIZE    PROCESSOR    CONTEXT    UNTIL",
+      "parameter_size": "79.7B",
+      "quantization_level": "Q4_K_M",
+      "returncode": 2,
+      "size_bytes": 51741611823,
+      "status": "error",
+      "stderr": "",
+      "stdout": "{\"_wall_seconds\": 0.4919689910020679, \"error\": \"<HTTPError 500: 'Internal Server Error'>\", \"ok\": false}",
+      "wall_seconds": 0.492
+    },
+    {
+      "error": "<HTTPError 500: 'Internal Server Error'>",
+      "family": "qwen3next",
+      "model": "qwen3-coder-next:q4_K_M",
+      "num_gpu": 16,
+      "nvidia_after": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 9028, 2739, 0, 0"
+      },
+      "nvidia_before": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "NVIDIA GeForce RTX 5070, 12227, 9028, 2739, 0, 0"
+      },
+      "ollama_ps_after": "NAME    ID    SIZE    PROCESSOR    CONTEXT    UNTIL",
+      "parameter_size": "79.7B",
+      "quantization_level": "Q4_K_M",
+      "returncode": 2,
+      "size_bytes": 51741611823,
+      "status": "error",
+      "stderr": "",
+      "stdout": "{\"_wall_seconds\": 0.4943874120071996, \"error\": \"<HTTPError 500: 'Internal Server Error'>\", \"ok\": false}",
+      "wall_seconds": 0.494
+    }
+  ],
+  "tune_timeout_seconds": 150
+}
