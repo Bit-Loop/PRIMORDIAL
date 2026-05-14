@@ -101,7 +101,7 @@ class CredentialStore:
             service_status[field.key] = {
                 "configured": bool(value),
                 "source": source,
-                "hint": self._redact(value),
+                "hint": self._status_hint(field, value),
                 "updated_at": stored_entry.get("updated_at") if isinstance(stored_entry, dict) and value else None,
             }
         return result
@@ -188,9 +188,18 @@ class CredentialStore:
         os.replace(tmp_path, self.path)
         self.path.chmod(0o600)
 
+    def _status_hint(self, field: CredentialField, value: str) -> str:
+        if not value:
+            return ""
+        if field.key == "username":
+            return value
+        return self._redact(value)
+
     def _redact(self, value: str) -> str:
         if not value:
             return ""
-        if len(value) <= 8:
+        if len(value) <= 2:
             return "*" * len(value)
+        if len(value) <= 8:
+            return f"{value[:1]}...{value[-1:]}"
         return f"{value[:4]}...{value[-4:]}"

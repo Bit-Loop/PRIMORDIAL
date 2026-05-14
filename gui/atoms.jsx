@@ -134,22 +134,38 @@ function Rail({ mode, setMode }) {
 }
 
 // ===== top bar =====
-function TopBar({ crumbs, stats }) {
+function TopBar({ crumbs, stats = [] }) {
+  const api = window.PD_API || {};
+  const uiStatus = window.PD_STATUS || {};
+  const busy = !!uiStatus.busy;
+  const error = String(uiStatus.error || '');
   return (
     <div className="mode-topbar">
-      {crumbs.map((c, i) => (
-        <React.Fragment key={i}>
-          {i > 0 && <span className="sep">/</span>}
-          <span className={i === crumbs.length - 1 ? 'crumb' : ''}>{c}</span>
-        </React.Fragment>
-      ))}
-      <div className="right">
-        {stats.map((s, i) => (
-          <span key={i} className="stat">
-            <span className="stat-k">{s.k}</span>
-            <span className="stat-v mono">{s.v}</span>
-          </span>
+      <div className="crumbs">
+        {crumbs.map((c, i) => (
+          <React.Fragment key={i}>
+            {i > 0 && <span className="sep">/</span>}
+            <span className={i === crumbs.length - 1 ? 'crumb' : ''}>{c}</span>
+          </React.Fragment>
         ))}
+      </div>
+      <div className="right">
+        <div className="stats">
+          {stats.map((s, i) => (
+            <span key={i} className="stat">
+              <span className="stat-k">{s.k}</span>
+              <span className="stat-v mono" title={String(s.v)}>{s.v}</span>
+            </span>
+          ))}
+        </div>
+        <div className="topbar-actions">
+          {error && <span className="pd-error mono" title={error}>{error}</span>}
+          {api.refresh && (
+            <button className="btn ghost sm topbar-refresh" onClick={() => api.refresh()} disabled={busy}>
+              {busy ? 'WORKING' : 'REFRESH'}
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

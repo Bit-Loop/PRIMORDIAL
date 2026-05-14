@@ -2,12 +2,34 @@ from __future__ import annotations
 
 import json
 from urllib import error, request
+from urllib.parse import urlsplit
 
 from primordial.core.credentials import CredentialStore
 from primordial.core.events.bus import EventBus, RuntimeSignal
 from primordial.core.domain.enums import EventType, NotificationStatus
 from primordial.core.domain.models import DiscordDelivery, EventRecord
 from primordial.core.storage.runtime import RuntimeStore
+
+
+class DiscordWebhookConfigurationError(ValueError):
+    pass
+
+
+def validate_discord_webhook_url(webhook_url: str) -> str:
+    value = str(webhook_url or "").strip()
+    if not value:
+        return ""
+    parsed = urlsplit(value)
+    host = parsed.netloc.lower()
+    if parsed.scheme != "https":
+        raise DiscordWebhookConfigurationError("Discord webhook URL must use HTTPS")
+    allowed_hosts = {"discord.com", "discordapp.com", "canary.discord.com", "ptb.discord.com"}
+    if host not in allowed_hosts:
+        raise DiscordWebhookConfigurationError("Discord webhook URL must use a Discord domain")
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) < 4 or parts[0] != "api" or parts[1] != "webhooks" or not parts[2] or not parts[3]:
+        raise DiscordWebhookConfigurationError("Discord webhook URL must look like https://discord.com/api/webhooks/{id}/{token}")
+    return value
 
 
 class DiscordNotificationService:
@@ -50,26 +72,12 @@ class DiscordNotificationService:
 
             try:
                 external_ref = self._send_webhook(webhook_url, notification.summary)
+            except DiscordWebhookConfigurationError as exc:
+                self._record_failure(notification, str(exc), invalid_configuration=True)
+                self._fail_pending_invalid_webhook(str(exc), exclude_id=notification.id)
+                break
             except (OSError, error.URLError, error.HTTPError, ValueError) as exc:
-                notification.status = NotificationStatus.FAILED
-                self.store.insert_notification(notification)
-                self.store.insert_discord_delivery(
-                    DiscordDelivery(
-                        notification_id=notification.id,
-                        status=NotificationStatus.FAILED,
-                        attempts=1,
-                        last_error=str(exc),
-                        metadata={"summary": notification.summary},
-                    )
-                )
-                self.store.insert_event(
-                    EventRecord(
-                        type=EventType.NOTIFICATION_FAILED,
-                        summary=f"Discord delivery failed: {exc}",
-                        target_id=notification.target_id,
-                        task_id=notification.task_id,
-                    )
-                )
+                self._record_failure(notification, str(exc))
                 continue
 
             notification.status = NotificationStatus.DELIVERED
@@ -99,6 +107,7 @@ class DiscordNotificationService:
         return delivered
 
     def _send_webhook(self, webhook_url: str, summary: str) -> str:
+        webhook_url = validate_discord_webhook_url(webhook_url)
         payload = json.dumps({"content": summary[:1900]}).encode("utf-8")
         req = request.Request(
             webhook_url,
@@ -112,4 +121,52 @@ class DiscordNotificationService:
                 return response.headers.get("X-Discord-Trace-Id", f"discord-http-{response.status}")
         except error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
+            exc.close()
+            if exc.code == 405:
+                raise DiscordWebhookConfigurationError(
+                    "invalid Discord webhook configuration: URL returned 405 Method Not Allowed; "
+                    "save the /api/webhooks/{id}/{token} endpoint, not a channel or browser URL"
+                ) from exc
             raise ValueError(f"Discord webhook returned {exc.code}: {detail}") from exc
+
+    def _record_failure(
+        self,
+        notification,
+        message: str,
+        *,
+        invalid_configuration: bool = False,
+    ) -> None:
+        notification.status = NotificationStatus.FAILED
+        self.store.insert_notification(notification)
+        self.store.insert_discord_delivery(
+            DiscordDelivery(
+                notification_id=notification.id,
+                status=NotificationStatus.FAILED,
+                attempts=1,
+                last_error=message,
+                metadata={
+                    "summary": notification.summary,
+                    "invalid_webhook_configuration": invalid_configuration,
+                },
+            )
+        )
+        summary = (
+            f"Discord delivery failed: invalid webhook configuration ({message})"
+            if invalid_configuration
+            else f"Discord delivery failed: {message}"
+        )
+        self.store.insert_event(
+            EventRecord(
+                type=EventType.NOTIFICATION_FAILED,
+                summary=summary,
+                target_id=notification.target_id,
+                task_id=notification.task_id,
+                metadata={"invalid_webhook_configuration": invalid_configuration},
+            )
+        )
+
+    def _fail_pending_invalid_webhook(self, message: str, *, exclude_id: str) -> None:
+        for notification in self.store.list_notifications(status=NotificationStatus.PENDING, limit=100):
+            if notification.id == exclude_id:
+                continue
+            self._record_failure(notification, message, invalid_configuration=True)

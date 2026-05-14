@@ -1,0 +1,14 @@
+[Unit]
+Description=Agent Chat API
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/bitloop/Desktop/PRIMORDIAL/agent_chat_api
+EnvironmentFile=-/home/bitloop/Desktop/PRIMORDIAL/agent_chat_api/runtime/agent-chat-api.env
+ExecStart=/usr/bin/python3 /home/bitloop/Desktop/PRIMORDIAL/agent_chat_api/app.py --host 127.0.0.1 --port 8787 --workspace-root /home/bitloop/Desktop/PRIMORDIAL/agent_chat_api
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

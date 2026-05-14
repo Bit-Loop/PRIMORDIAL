@@ -1,0 +1,15 @@
+{
+  "body": "Hello! I'm here to help. How can I assist you today?",
+  "created_at": "2026-05-14T15:35:10.052919-05:00",
+  "id": "opmsg_a804a4523b32",
+  "metadata": {
+    "elapsed_seconds": 5.656932229,
+    "mode": "local_model",
+    "ok": true,
+    "rag_context_ids": [],
+    "route_num_gpu": null
+  },
+  "model": "deepseek-r1:8b",
+  "role": "assistant",
+  "target": null
+}

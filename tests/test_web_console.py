@@ -1,15 +1,32 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
+import threading
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from primordial.config import AppConfig
-from primordial.core.domain.enums import AgentRole, EvidenceType, InterestStatus, ScopeProfile, VerificationStatus
-from primordial.core.domain.models import AgentTrace, EvidenceRecord, Interest
+from primordial.adapters.caido import CaidoIntegrationService
+from primordial.core.domain.enums import (
+    AgentRole,
+    EvidenceType,
+    InterestStatus,
+    MethodologyPhase,
+    NotificationChannel,
+    NotificationStatus,
+    RiskTier,
+    ProviderRoute,
+    ScopeProfile,
+    TaskKind,
+    TaskStatus,
+    VerificationStatus,
+)
+from primordial.core.domain.models import AgentTrace, EvidenceRecord, Interest, NotificationRecord, Task
 from primordial.core.providers.ollama import OllamaModelListResult, OllamaPreloadResult, OllamaResponse
 from primordial.core.web.app import PrimordialWebApp
 from primordial.runtime import PrimordialRuntime
@@ -95,6 +112,71 @@ class WebConsoleTests(unittest.TestCase):
         self.assertIn("skills", skills)
         self.assertIn("workspace", findings)
         self.assertIn("guidance_path", findings["workspace"])
+
+    def test_caido_health_status_reports_auth_failure_and_legacy_port_migration(self) -> None:
+        self.runtime.credentials.update_service(
+            "caido",
+            {
+                "graphql_url": "http://127.0.0.1:8080/graphql",
+                "api_token": "caido-secret-token",
+            },
+        )
+        calls = []
+
+        def unauthorized(req, timeout):
+            calls.append(req.full_url)
+            err = __import__("urllib.error").error.HTTPError(
+                req.full_url,
+                401,
+                "Unauthorized",
+                {},
+                None,
+            )
+            err.fp = io.BytesIO(b'{"error":"Unauthorized"}')
+            raise err
+
+        with patch("primordial.adapters.caido.request.urlopen", side_effect=unauthorized):
+            response = self.app.dispatch("GET", "/api/integrations/caido?check_health=1")
+
+        payload = json.loads(response.body)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(calls, [CaidoIntegrationService.DEFAULT_GRAPHQL_URL])
+        self.assertEqual(payload["graphql_url"], CaidoIntegrationService.DEFAULT_GRAPHQL_URL)
+        self.assertEqual(payload["graphql_url_migrated_from"], "http://127.0.0.1:8080/graphql")
+        self.assertTrue(payload["auth_error"])
+        self.assertFalse(payload["ok"])
+        self.assertFalse(payload["schema"]["ok"])
+
+    def test_caido_presets_are_generic_and_targets_are_runtime_scope(self) -> None:
+        create_response = self.app.dispatch(
+            "POST",
+            "/api/targets",
+            json.dumps(
+                {
+                    "handle": "helix.htb",
+                    "display_name": "helix.htb",
+                    "profile": "hack_the_box",
+                    "assets": ["helix.htb", "10.129.54.140"],
+                    "active_ip": "10.129.54.140",
+                    "in_scope": True,
+                }
+            ).encode("utf-8"),
+        )
+        response = self.app.dispatch("GET", "/api/control-plane")
+        payload = json.loads(response.body)
+        caido = payload["caido"]
+        handles = {item["handle"] for item in caido["targetOptions"]}
+        preset_labels = {item["label"] for item in caido["savedFilters"]}
+
+        self.assertEqual(create_response.status, 200)
+        self.assertEqual(response.status, 200)
+        self.assertIn("pirate.htb", handles)
+        self.assertIn("helix.htb", handles)
+        self.assertIn("Error responses", preset_labels)
+        self.assertIn("Auth paths", preset_labels)
+        self.assertIn("Token hints", preset_labels)
+        self.assertNotIn("pirate.htb scope", preset_labels)
+        self.assertNotIn("helix.htb scope", preset_labels)
 
     def test_caido_import_creates_redacted_evidence_and_artifact(self) -> None:
         detail = {
@@ -259,9 +341,11 @@ class WebConsoleTests(unittest.TestCase):
 
         self.assertEqual(tick_response.status, 200)
         self.assertTrue(tick_payload["ok"])
-        self.assertIn("dashboard", tick_payload)
+        self.assertIn("work_status", tick_payload)
+        self.assertNotIn("dashboard", tick_payload)
+        self.assertNotIn("control_plane", tick_payload)
 
-        task_id = tick_payload["dashboard"]["tasks"][0]["id"]
+        task_id = self.runtime.store.list_tasks(limit=1)[0].id
         detail_response = self.app.dispatch("GET", f"/api/tasks/{task_id}")
         detail_payload = json.loads(detail_response.body)
 
@@ -310,6 +394,57 @@ class WebConsoleTests(unittest.TestCase):
         self.assertIn("gpuMemory", payload["runtime"])
         self.assertIn("role_metrics", payload["modelPayload"])
 
+    def test_control_plane_live_metrics_force_refreshes_system_payload(self) -> None:
+        metrics = {
+            "cpu": {"available": True, "percent": 37.0, "memory": {"percent": 48.0}},
+            "gpu": {
+                "available": True,
+                "percent": 64.0,
+                "memory_percent": 25.0,
+                "memory_used_mb": 2000.0,
+                "memory_free_mb": 6000.0,
+                "memory_total_mb": 8000.0,
+            },
+            "network": {"available": True, "rx_label": "1.0 KB/s", "tx_label": "2.0 KB/s"},
+        }
+
+        with patch.object(self.runtime, "system_metrics_payload", return_value=metrics) as mocked_metrics:
+            response = self.app.dispatch("GET", "/api/control-plane?live_metrics=1")
+
+        payload = json.loads(response.body)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload["runtime"]["cpu"], 0.37)
+        self.assertEqual(payload["runtime"]["gpu"], 0.64)
+        self.assertEqual(payload["runtime"]["mem"], 0.48)
+        self.assertEqual(payload["runtime"]["gpuMemory"]["free_label"], "6000 MB")
+        mocked_metrics.assert_any_call(force_refresh=True)
+
+    def test_system_metrics_endpoint_returns_live_runtime_metric_shape(self) -> None:
+        metrics = {
+            "cpu": {"available": True, "percent": 41.0, "memory": {"percent": 52.0}},
+            "gpu": {
+                "available": True,
+                "percent": 73.0,
+                "memory_percent": 50.0,
+                "memory_used_mb": 4096.0,
+                "memory_free_mb": 4096.0,
+                "memory_total_mb": 8192.0,
+            },
+            "network": {"available": True, "rx_label": "4.0 KB/s", "tx_label": "8.0 KB/s"},
+        }
+
+        with patch.object(self.runtime, "system_metrics_payload", return_value=metrics) as mocked_metrics:
+            response = self.app.dispatch("GET", "/api/system-metrics")
+
+        payload = json.loads(response.body)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload["runtime"]["cpu"], 0.41)
+        self.assertEqual(payload["runtime"]["gpu"], 0.73)
+        self.assertEqual(payload["runtime"]["mem"], 0.52)
+        self.assertEqual(payload["runtime"]["netIn"], "4.0 KB/s")
+        self.assertEqual(payload["runtime"]["gpuMemory"]["used_label"], "4096 / 8192 MB")
+        mocked_metrics.assert_called_once_with(force_refresh=True)
+
     def test_self_test_is_deterministic_and_does_not_call_generation(self) -> None:
         with patch.object(self.runtime.ollama, "is_reachable", return_value=False), patch.object(
             self.runtime.ollama,
@@ -356,6 +491,57 @@ class WebConsoleTests(unittest.TestCase):
         self.assertTrue(any(item["summary"] == "Repeated trace" and item["count"] == 3 for item in children))
         self.assertTrue(all(pin["kind"] != "target" or "pirate.htb" in pin["label"] for pin in payload["geo"]["pins"]))
 
+    def test_control_plane_groups_completed_tasks_and_hints_missing_compact_model(self) -> None:
+        target = self.runtime.store.get_target_by_handle("pirate.htb")
+        self.assertIsNotNone(target)
+        assert target is not None
+        for index in range(2):
+            task = Task(
+                target_id=target.id,
+                phase=MethodologyPhase.RECON,
+                kind=TaskKind.RECON_SCAN,
+                title=f"Completed recon {index}",
+                summary="Repeated completed recon task.",
+                role=AgentRole.RECON_WORKER,
+                status=TaskStatus.SUCCEEDED,
+                provider_route=ProviderRoute.LOCAL_FAST,
+                provider_model="gemma4:e4b",
+                metadata={"active_ip_generation": 3},
+            )
+            self.runtime.store.insert_task(task)
+        invalid = Task(
+            target_id=None,
+            phase=MethodologyPhase.RECON,
+            kind=TaskKind.RECON_SCAN,
+            title="Blocked invalid target",
+            summary="Stale invalid-target row.",
+            role=AgentRole.RECON_WORKER,
+            status=TaskStatus.BLOCKED,
+            metadata={"invalid_target": True},
+        )
+        self.runtime.store.insert_task(invalid)
+        compact = Task(
+            target_id=target.id,
+            phase=MethodologyPhase.MEMORY_MAINTENANCE,
+            kind=TaskKind.COMPACT_MEMORY,
+            title="Compact memory",
+            summary="Queued compact task.",
+            role=AgentRole.MEMORY_WORKER,
+            status=TaskStatus.PENDING,
+            provider_route=ProviderRoute.LOCAL_COMPACT,
+            provider_model="phi4-reasoning",
+        )
+        self.runtime.store.insert_task(compact)
+
+        response = self.app.dispatch("GET", "/api/control-plane")
+        payload = json.loads(response.body)
+        tasks = payload["tasks"]
+
+        self.assertTrue(any(item.get("grouped_count") == 2 for item in tasks))
+        self.assertFalse(any(item["id"] == invalid.id for item in tasks))
+        compact_row = next(item for item in tasks if item["id"] == compact.id)
+        self.assertIn("Missing local model hint", compact_row["hint"])
+
     def test_ui_command_endpoint_creates_proposal_only_approval(self) -> None:
         response = self.app.dispatch(
             "POST",
@@ -386,6 +572,88 @@ class WebConsoleTests(unittest.TestCase):
         self.assertTrue(stored.metadata["proposal_resolved"])
         self.assertTrue(stored.metadata["proposal_approved"])
 
+    def test_ops_approval_buttons_resolve_credentialed_access_tasks(self) -> None:
+        target = self.runtime.store.get_target_by_handle("pirate.htb")
+        self.assertIsNotNone(target)
+        assert target is not None
+        self.runtime.set_operator_intent("credential_validation")
+        self.runtime.store.insert_evidence(
+            EvidenceRecord(
+                target_id=target.id,
+                type=EvidenceType.TOOL_OUTPUT,
+                title="Windows remote access services",
+                summary="Observed Microsoft Windows SMB and WinRM surfaces.",
+                source_ref="fixture://windows-remote-access",
+                verification_status=VerificationStatus.VERIFIED,
+                confidence=0.86,
+                freshness=0.9,
+                metadata={
+                    "kind": "tcp_service_discovery",
+                    "open_services": [
+                        {"port": 445, "service": "microsoft-ds", "product": "Microsoft Windows Server 2019"},
+                        {"port": 5985, "service": "winrm", "product": "Microsoft HTTPAPI httpd"},
+                    ],
+                },
+            )
+        )
+        approve_task = Task(
+            target_id=target.id,
+            phase=MethodologyPhase.EXPLOITATION,
+            kind=TaskKind.CREDENTIALED_ACCESS_CHECK,
+            title="Verify credentialed SMB/WinRM access",
+            summary="Use configured known credentials to verify access for pirate.htb.",
+            role=AgentRole.EXPLOITATION_WORKER,
+            risk_tier=RiskTier.HIGH,
+            status=TaskStatus.NEEDS_APPROVAL,
+            requires_approval=True,
+        )
+        deny_task = Task(
+            target_id=target.id,
+            phase=MethodologyPhase.EXPLOITATION,
+            kind=TaskKind.CREDENTIALED_ACCESS_CHECK,
+            title="Verify credentialed SMB/WinRM access",
+            summary="Use configured known credentials to verify access for pirate.htb.",
+            role=AgentRole.EXPLOITATION_WORKER,
+            risk_tier=RiskTier.HIGH,
+            status=TaskStatus.NEEDS_APPROVAL,
+            requires_approval=True,
+        )
+        self.runtime.store.insert_task(approve_task)
+        self.runtime.store.insert_task(deny_task)
+
+        control_response = self.app.dispatch("GET", "/api/control-plane")
+        control_payload = json.loads(control_response.body)
+        approval_ids = {item["task"] for item in control_payload["approvals"]}
+
+        self.assertEqual(control_response.status, 200)
+        self.assertIn(approve_task.id, approval_ids)
+        self.assertIn(deny_task.id, approval_ids)
+
+        with patch.object(self.runtime, "run_tick") as run_tick:
+            approve_response = self.app.dispatch(
+                "POST",
+                "/api/actions/approve",
+                json.dumps({"task_id": approve_task.id}).encode("utf-8"),
+            )
+        deny_response = self.app.dispatch(
+            "POST",
+            "/api/actions/deny",
+            json.dumps({"task_id": deny_task.id}).encode("utf-8"),
+        )
+        approved = self.runtime.store.get_task(approve_task.id)
+        denied = self.runtime.store.get_task(deny_task.id)
+
+        self.assertEqual(approve_response.status, 200)
+        self.assertEqual(deny_response.status, 200)
+        self.assertIsNotNone(approved)
+        self.assertIsNotNone(denied)
+        assert approved is not None
+        assert denied is not None
+        self.assertEqual(approved.status, TaskStatus.PENDING)
+        self.assertFalse(approved.requires_approval)
+        self.assertEqual(denied.status, TaskStatus.CANCELLED)
+        run_tick.assert_called_once_with(max_executions=1)
+
     def test_generated_web_bundle_has_no_fixture_switch_or_payload(self) -> None:
         generated = Path("primordial/core/web/frontend/src/generated-gui.jsx").read_text(encoding="utf-8")
         static_assets = Path("primordial/core/web/static/assets")
@@ -407,6 +675,25 @@ class WebConsoleTests(unittest.TestCase):
         for text in (generated, bundle_text):
             for token in forbidden:
                 self.assertNotIn(token, text)
+            for token in [
+                "Target scope editor",
+                "Target / domain",
+                "Current IP",
+                "Scope profile",
+                "ADVANCED ASSETS",
+                "Operator Intent still gates actions",
+                "http://127.0.0.1:8650/graphql",
+                "AUTH FAILED",
+                "auth-blocked",
+                "USE TARGET SCOPE",
+                "SAVE CREDENTIALS",
+                "Stored credentials",
+                "aria-label={`Edit ${activeCredentialGroup.n} ${label}`}",
+            ]:
+                self.assertIn(token, text)
+            self.assertNotIn("pirate.htb scope", text)
+            self.assertNotIn("http://127.0.0.1:8080/graphql", text)
+        self.assertNotIn("'integrations', 'credentials'", generated)
         self.assertNotIn("dangerouslySetInnerHTML", generated)
 
     def test_target_registration_endpoint_updates_scope(self) -> None:
@@ -431,9 +718,80 @@ class WebConsoleTests(unittest.TestCase):
         self.assertEqual(payload["result"]["target"]["handle"], "pirate.htb")
         self.assertEqual(payload["result"]["target"]["metadata"]["active_ip"], "10.129.47.117")
         self.assertEqual(payload["result"]["target"]["metadata"]["target_kind"], "htb_lab")
-        self.assertTrue(
-            any(item["target"]["handle"] == "pirate.htb" for item in payload["scope"]["targets"])
+        self.assertNotIn("control_plane", payload)
+        scope = json.loads(self.app.dispatch("GET", "/api/scope").body)
+        self.assertTrue(any(item["target"]["handle"] == "pirate.htb" for item in scope["targets"]))
+
+    def test_target_registration_auto_adds_active_ip_asset(self) -> None:
+        response = self.app.dispatch(
+            "POST",
+            "/api/targets",
+            json.dumps(
+                {
+                    "handle": "helix.htb",
+                    "display_name": "helix.htb",
+                    "profile": "hack_the_box",
+                    "assets": ["helix.htb"],
+                    "active_ip": "10.129.54.140",
+                    "in_scope": True,
+                }
+            ).encode("utf-8"),
         )
+        payload = json.loads(response.body)
+        target = self.runtime.store.get_target_by_handle("helix.htb", ScopeProfile.HACK_THE_BOX)
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload["result"]["target"]["handle"], "helix.htb")
+        self.assertEqual(payload["result"]["target"]["metadata"]["active_ip"], "10.129.54.140")
+        self.assertIsNotNone(target)
+        assert target is not None
+        assets = {item.asset for item in self.runtime.store.list_scope_assets(target.id)}
+        self.assertIn("helix.htb", assets)
+        self.assertIn("10.129.54.140", assets)
+
+    def test_target_registration_can_replace_scope_assets_when_active_ip_changes(self) -> None:
+        first = self.app.dispatch(
+            "POST",
+            "/api/targets",
+            json.dumps(
+                {
+                    "handle": "helix.htb",
+                    "display_name": "helix.htb",
+                    "profile": "hack_the_box",
+                    "assets": ["helix.htb", "10.129.54.140"],
+                    "active_ip": "10.129.54.140",
+                    "in_scope": True,
+                    "replace_scope_assets": True,
+                }
+            ).encode("utf-8"),
+        )
+        second = self.app.dispatch(
+            "POST",
+            "/api/targets",
+            json.dumps(
+                {
+                    "handle": "helix.htb",
+                    "display_name": "helix.htb",
+                    "profile": "hack_the_box",
+                    "assets": ["helix.htb"],
+                    "active_ip": "10.129.99.99",
+                    "in_scope": True,
+                    "replace_scope_assets": True,
+                }
+            ).encode("utf-8"),
+        )
+        target = self.runtime.store.get_target_by_handle("helix.htb", ScopeProfile.HACK_THE_BOX)
+
+        self.assertEqual(first.status, 200)
+        self.assertEqual(second.status, 200)
+        self.assertIsNotNone(target)
+        assert target is not None
+        assets = {item.asset for item in self.runtime.store.list_scope_assets(target.id)}
+        self.assertEqual(assets, {"helix.htb", "10.129.99.99"})
+        self.assertEqual(target.metadata["active_ip"], "10.129.99.99")
+        self.assertEqual(target.metadata["active_ip_generation"], 2)
+        notes = self.runtime.store.list_notes(target_id=target.id, limit=10)
+        self.assertTrue(any(note.metadata.get("previous_ip") == "10.129.54.140" for note in notes))
 
     def test_target_registration_rejects_invalid_active_ip(self) -> None:
         response = self.app.dispatch(
@@ -477,6 +835,22 @@ class WebConsoleTests(unittest.TestCase):
         )
         self.assertEqual(imported["profile"], ScopeProfile.HACK_THE_BOX.value)
 
+        response = self.app.dispatch(
+            "POST",
+            "/api/targets",
+            json.dumps(
+                {
+                    "handle": "preset.htb",
+                    "profile": "htb_windows_ad",
+                    "assets": ["preset.htb"],
+                    "in_scope": True,
+                }
+            ).encode("utf-8"),
+        )
+        payload = json.loads(response.body)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload["result"]["target"]["profile"], ScopeProfile.HACK_THE_BOX.value)
+
         deleted = self.runtime.delete_scope_profile("htb_windows_ad")
         self.assertTrue(deleted["removed"])
         self.assertNotIn("htb_windows_ad", {item["id"] for item in deleted["profiles"]})
@@ -507,7 +881,8 @@ class WebConsoleTests(unittest.TestCase):
         self.assertEqual(payload["action"], "import-scope")
         self.assertEqual(payload["result"]["targets_imported"], 2)
         self.assertEqual(payload["result"]["assets_imported"], 3)
-        handles = {item["target"]["handle"] for item in payload["scope"]["targets"]}
+        scope = json.loads(self.app.dispatch("GET", "/api/scope").body)
+        handles = {item["target"]["handle"] for item in scope["targets"]}
         self.assertIn("alpha.htb", handles)
         self.assertIn("beta.htb", handles)
 
@@ -517,7 +892,8 @@ class WebConsoleTests(unittest.TestCase):
 
         self.assertEqual(response.status, 200)
         self.assertTrue(payload["result"]["removed"])
-        self.assertEqual(payload["scope"]["targets"], [])
+        scope = json.loads(self.app.dispatch("GET", "/api/scope").body)
+        self.assertEqual(scope["targets"], [])
 
     def test_credentials_and_records_endpoints_are_practical(self) -> None:
         notion_response = self.app.dispatch(
@@ -534,14 +910,14 @@ class WebConsoleTests(unittest.TestCase):
         discord_response = self.app.dispatch(
             "POST",
             "/api/credentials/discord",
-            json.dumps({"webhook_url": "https://discord.com/api/webhooks/token"}).encode("utf-8"),
+            json.dumps({"webhook_url": "https://discord.com/api/webhooks/123/token"}).encode("utf-8"),
         )
         caido_response = self.app.dispatch(
             "POST",
             "/api/credentials/caido",
             json.dumps(
                 {
-                    "graphql_url": "http://127.0.0.1:8080/graphql",
+                    "graphql_url": "http://127.0.0.1:8650/graphql",
                     "api_token": "caido-secret-token",
                 }
             ).encode("utf-8"),
@@ -558,7 +934,7 @@ class WebConsoleTests(unittest.TestCase):
         credentials = json.loads(credentials_response.body)
         serialized = json.dumps(credentials)
         self.assertNotIn("secret_notion_token", serialized)
-        self.assertNotIn("discord.com/api/webhooks/token", serialized)
+        self.assertNotIn("discord.com/api/webhooks/123/token", serialized)
         self.assertNotIn("caido-secret-token", serialized)
         self.assertTrue(credentials["services"]["notion"]["api_key"]["configured"])
         self.assertTrue(credentials["services"]["discord"]["webhook_url"]["configured"])
@@ -567,6 +943,213 @@ class WebConsoleTests(unittest.TestCase):
         records = json.loads(records_response.body)
         self.assertIn("evidence", records)
         self.assertIn("primitives", records)
+
+    def test_discord_credential_save_rejects_non_webhook_urls(self) -> None:
+        channel_response = self.app.dispatch(
+            "POST",
+            "/api/credentials/discord",
+            json.dumps({"webhook_url": "https://discord.com/channels/1/2"}).encode("utf-8"),
+        )
+        malformed_response = self.app.dispatch(
+            "POST",
+            "/api/credentials/discord",
+            json.dumps({"webhook_url": "http://discord.com/api/webhooks/123/token"}).encode("utf-8"),
+        )
+
+        self.assertEqual(channel_response.status, 400)
+        self.assertEqual(malformed_response.status, 400)
+        self.assertIn("/api/webhooks", json.loads(channel_response.body)["error"])
+        self.assertIn("HTTPS", json.loads(malformed_response.body)["error"])
+
+    def test_discord_405_marks_webhook_configuration_invalid(self) -> None:
+        self.runtime.set_discord_credentials(webhook_url="https://discord.com/api/webhooks/123/token")
+        first = NotificationRecord(channel=NotificationChannel.DISCORD, event_type="approval_needed", summary="one")
+        second = NotificationRecord(channel=NotificationChannel.DISCORD, event_type="finding_candidate", summary="two")
+        self.runtime.store.insert_notification(first)
+        self.runtime.store.insert_notification(second)
+
+        def method_not_allowed(req, timeout):
+            raise __import__("urllib.error").error.HTTPError(
+                req.full_url,
+                405,
+                "Method Not Allowed",
+                {},
+                io.BytesIO(b"method not allowed"),
+            )
+
+        with patch("primordial.adapters.discord.request.urlopen", side_effect=method_not_allowed):
+            delivered = self.runtime.discord.deliver_pending(limit=10)
+
+        self.assertEqual(delivered, 0)
+        notifications = {item.id: item for item in self.runtime.store.list_notifications(limit=10)}
+        self.assertEqual(notifications[first.id].status, NotificationStatus.FAILED)
+        self.assertEqual(notifications[second.id].status, NotificationStatus.FAILED)
+        events = self.runtime.store.list_events(limit=10)
+        self.assertTrue(any("invalid webhook configuration" in event.summary for event in events))
+
+    def test_connector_api_endpoints_have_route_level_contracts(self) -> None:
+        raw_request = "GET / HTTP/1.1\nHost: pirate.htb\nConnection: close\n\n"
+        raw_sha256 = self.runtime.caido.parse_raw_request(raw_request).raw_sha256
+
+        notion_response = self.app.dispatch(
+            "POST",
+            "/api/credentials/notion",
+            json.dumps(
+                {
+                    "api_key": "secret_notion_token",
+                    "parent_page_id": "parent123",
+                    "version": "2022-06-28",
+                }
+            ).encode("utf-8"),
+        )
+        discord_response = self.app.dispatch(
+            "POST",
+            "/api/credentials/discord",
+            json.dumps({"webhook_url": "https://discord.com/api/webhooks/123/token"}).encode("utf-8"),
+        )
+        known_response = self.app.dispatch(
+            "POST",
+            "/api/credentials/known",
+            json.dumps({"username": "operator", "password": "known-secret", "domain": "LAB"}).encode("utf-8"),
+        )
+        lab_response = self.app.dispatch(
+            "POST",
+            "/api/credentials/lab",
+            json.dumps({"username": "legacy", "password": "legacy-secret", "domain": "LEGACY"}).encode("utf-8"),
+        )
+        caido_response = self.app.dispatch(
+            "POST",
+            "/api/credentials/caido",
+            json.dumps({"api_token": "caido-secret-token"}).encode("utf-8"),
+        )
+        credentials_response = self.app.dispatch("GET", "/api/credentials")
+        credentials = json.loads(credentials_response.body)
+        serialized_credentials = json.dumps(credentials)
+
+        self.assertEqual(notion_response.status, 200)
+        self.assertEqual(discord_response.status, 200)
+        self.assertEqual(known_response.status, 200)
+        self.assertEqual(lab_response.status, 200)
+        self.assertEqual(caido_response.status, 200)
+        self.assertEqual(credentials_response.status, 200)
+        self.assertTrue(credentials["services"]["notion"]["api_key"]["configured"])
+        self.assertTrue(credentials["services"]["discord"]["webhook_url"]["configured"])
+        self.assertTrue(credentials["services"]["known"]["username"]["configured"])
+        self.assertTrue(credentials["services"]["lab"]["username"]["configured"])
+        self.assertTrue(credentials["services"]["caido"]["graphql_url"]["configured"])
+        self.assertEqual(credentials["services"]["known"]["username"]["hint"], "legacy")
+        self.assertEqual(credentials["services"]["lab"]["username"]["hint"], "legacy")
+        self.assertEqual(self.runtime.credentials.get("caido", "graphql_url"), CaidoIntegrationService.DEFAULT_GRAPHQL_URL)
+        for secret in [
+            "secret_notion_token",
+            "discord.com/api/webhooks/123/token",
+            "known-secret",
+            "legacy-secret",
+            "caido-secret-token",
+        ]:
+            self.assertNotIn(secret, serialized_credentials)
+
+        with (
+            patch.object(
+                self.runtime.caido,
+                "search_requests",
+                return_value={"ok": True, "httpql": 'req.host.eq:"pirate.htb"', "requests": []},
+            ) as search,
+            patch.object(
+                self.runtime.caido,
+                "request_detail",
+                return_value={"ok": True, "request": {"id": "42", "host": "pirate.htb"}},
+            ) as detail,
+            patch.object(
+                self.runtime.caido,
+                "create_replay_draft",
+                return_value={
+                    "ok": True,
+                    "parsed": {"host": "pirate.htb", "raw_sha256": raw_sha256},
+                    "session": {"id": "session-1"},
+                },
+            ) as draft,
+            patch.object(self.runtime.caido, "send_replay", return_value={"ok": True, "task": {"id": "task-1"}}) as send,
+        ):
+            search_response = self.app.dispatch(
+                "POST",
+                "/api/integrations/caido/search",
+                json.dumps({"target": "pirate.htb", "httpql": 'req.host.eq:"pirate.htb"', "limit": 25}).encode(
+                    "utf-8"
+                ),
+            )
+            detail_response = self.app.dispatch("GET", "/api/integrations/caido/requests/42")
+            draft_response = self.app.dispatch(
+                "POST",
+                "/api/integrations/caido/replay/draft",
+                json.dumps({"target": "pirate.htb", "raw_request": raw_request}).encode("utf-8"),
+            )
+            send_response = self.app.dispatch(
+                "POST",
+                "/api/integrations/caido/replay/send",
+                json.dumps(
+                    {
+                        "target": "pirate.htb",
+                        "raw_request": raw_request,
+                        "session_id": "session-1",
+                        "confirmation": raw_sha256,
+                    }
+                ).encode("utf-8"),
+            )
+
+        search_payload = json.loads(search_response.body)
+        detail_payload = json.loads(detail_response.body)
+        draft_payload = json.loads(draft_response.body)
+        send_payload = json.loads(send_response.body)
+
+        self.assertEqual(search_response.status, 200)
+        self.assertEqual(detail_response.status, 200)
+        self.assertEqual(draft_response.status, 200)
+        self.assertEqual(send_response.status, 200)
+        self.assertTrue(search_payload["ok"])
+        self.assertTrue(detail_payload["ok"])
+        self.assertTrue(draft_payload["ok"])
+        self.assertTrue(send_payload["ok"])
+        self.assertEqual(send_payload["action"], "caido-replay-send")
+        search.assert_called_once_with('req.host.eq:"pirate.htb"', limit=25, offset=0)
+        detail.assert_called_once_with("42")
+        draft.assert_called_once_with(raw_request)
+        send.assert_called_once_with(raw_request, session_id="session-1")
+
+        bad_search = self.app.dispatch(
+            "POST",
+            "/api/integrations/caido/search",
+            json.dumps({"target": "missing.htb"}).encode("utf-8"),
+        )
+        bad_import = self.app.dispatch(
+            "POST",
+            "/api/integrations/caido/import",
+            json.dumps({"target": "pirate.htb", "request_ids": "42"}).encode("utf-8"),
+        )
+        bad_draft = self.app.dispatch(
+            "POST",
+            "/api/integrations/caido/replay/draft",
+            json.dumps({"raw_request": raw_request}).encode("utf-8"),
+        )
+        invalid_clear = self.app.dispatch("DELETE", "/api/credentials/web")
+
+        self.assertEqual(bad_search.status, 400)
+        self.assertEqual(bad_import.status, 400)
+        self.assertEqual(bad_draft.status, 400)
+        self.assertEqual(invalid_clear.status, 400)
+
+        with (
+            patch.object(self.runtime.notion, "process_pending", return_value=2) as notion_pending,
+            patch.object(self.runtime.discord, "deliver_pending", return_value=3) as discord_pending,
+        ):
+            process_response = self.app.dispatch("POST", "/api/actions/process-queues")
+        process_payload = json.loads(process_response.body)
+
+        self.assertEqual(process_response.status, 200)
+        self.assertEqual(process_payload["action"], "process-queues")
+        self.assertEqual(process_payload["result"], {"notion_completed": 2, "discord_delivered": 3})
+        notion_pending.assert_called_once_with()
+        discord_pending.assert_called_once_with()
 
     def test_operator_chat_uses_local_model_and_persists_messages(self) -> None:
         with patch.object(
@@ -595,6 +1178,41 @@ class WebConsoleTests(unittest.TestCase):
         self.assertIn("Draft a concise operator note.", serialized_logs)
         self.assertIn("Primordial is waiting on recon tasks.", serialized_logs)
         generate.assert_called_once()
+
+    def test_long_operator_chat_does_not_block_fast_runtime_endpoints(self) -> None:
+        started = threading.Event()
+        release = threading.Event()
+        responses = []
+
+        def slow_chat(message, target=None):
+            started.set()
+            release.wait(timeout=2)
+            return {"ok": True, "model": "fixture", "answer": {"body": f"done: {message}"}, "target": target}
+
+        with patch.object(self.runtime, "ask_operator_ai", side_effect=slow_chat):
+            thread = threading.Thread(
+                target=lambda: responses.append(
+                    self.app.dispatch(
+                        "POST",
+                        "/api/chat",
+                        json.dumps({"message": "hold this request", "target": "pirate.htb"}).encode("utf-8"),
+                    )
+                )
+            )
+            thread.start()
+            self.assertTrue(started.wait(timeout=1))
+
+            started_at = time.monotonic()
+            for path in ("/api/work-status", "/api/execution-mode", "/api/runtime-settings"):
+                response = self.app.dispatch("GET", path)
+                self.assertEqual(response.status, 200)
+            elapsed = time.monotonic() - started_at
+
+            release.set()
+            thread.join(timeout=2)
+
+        self.assertLess(elapsed, 0.5)
+        self.assertEqual(responses[0].status, 200)
 
     def test_operator_status_chat_uses_deterministic_state_guard(self) -> None:
         with patch.object(
@@ -682,23 +1300,158 @@ class WebConsoleTests(unittest.TestCase):
         self.assertIn("historical", followup_answer.lower())
         generate.assert_not_called()
 
-    def test_operator_summary_uses_local_model_not_deterministic_renderer(self) -> None:
-        with patch.object(
-            self.runtime.ollama,
-            "generate",
-            return_value=OllamaResponse(model="deepseek-r1:8b", text="Target context summarized from the bounded snapshot."),
-        ) as generate:
+    def test_operator_summary_uses_deterministic_renderer(self) -> None:
+        target = self.runtime.register_target(
+            handle="example.test",
+            profile=ScopeProfile.HACKERONE,
+            assets=["example.test"],
+            emit_event=False,
+        )
+        self.runtime.store.insert_evidence(
+            EvidenceRecord(
+                target_id=target.id,
+                type=EvidenceType.TOOL_OUTPUT,
+                title="Recon: http://example.test/",
+                summary="HTTP probe returned 200 for http://example.test/.",
+                source_ref="fixture://example-summary",
+                verification_status=VerificationStatus.VERIFIED,
+                confidence=0.85,
+                freshness=0.9,
+                metadata={"kind": "recon_scan", "effective_url": "http://example.test/", "status_code": 200},
+            )
+        )
+        with patch.object(self.runtime.ollama, "generate") as generate:
             response = self.app.dispatch(
                 "POST",
                 "/api/chat",
-                json.dumps({"message": "summarize target context", "target": "pirate.htb"}).encode("utf-8"),
+                json.dumps({"message": "summarize example.test"}).encode("utf-8"),
             )
 
         payload = json.loads(response.body)
 
         self.assertEqual(response.status, 200)
-        self.assertEqual(payload["result"]["chat"]["model"], "deepseek-r1:8b")
-        self.assertIn("Target context summarized", payload["result"]["chat"]["answer"]["body"])
+        self.assertEqual(payload["result"]["chat"]["model"], "deterministic-state")
+        self.assertIn("**Facts**", payload["result"]["chat"]["answer"]["body"])
+        generate.assert_not_called()
+
+    def test_operator_inquiry_infers_target_and_answers_ports_auth_and_escalation_from_state(self) -> None:
+        target = self.runtime.register_target(
+            handle="example.test",
+            profile=ScopeProfile.HACKERONE,
+            assets=["example.test", "203.0.113.37"],
+            emit_event=False,
+        )
+        self.runtime.store.insert_evidence(
+            EvidenceRecord(
+                target_id=target.id,
+                type=EvidenceType.TOOL_OUTPUT,
+                title="TCP service discovery: example.test",
+                summary="TCP service discovery observed SSH and HTTP.",
+                source_ref="fixture://example-services",
+                verification_status=VerificationStatus.VERIFIED,
+                confidence=0.9,
+                freshness=0.9,
+                metadata={
+                    "kind": "tcp_service_discovery",
+                    "open_services": [
+                        {"host": "203.0.113.37", "port": 22, "service": "ssh"},
+                        {"host": "203.0.113.37", "port": 80, "service": "http"},
+                    ],
+                },
+            )
+        )
+        self.runtime.store.insert_evidence(
+            EvidenceRecord(
+                target_id=target.id,
+                type=EvidenceType.TOOL_OUTPUT,
+                title="Recon: http://example.test/",
+                summary="HTTP probe returned 200 for http://example.test/ with content-type text/html.",
+                source_ref="fixture://example-http",
+                verification_status=VerificationStatus.VERIFIED,
+                confidence=0.85,
+                freshness=0.9,
+                metadata={
+                    "kind": "recon_scan",
+                    "effective_url": "http://example.test/",
+                    "status_code": 200,
+                    "auth_surfaces": [],
+                    "forms": [],
+                    "paths": ["/"],
+                },
+            )
+        )
+
+        with patch.object(self.runtime.ollama, "generate") as generate:
+            response = self.app.dispatch(
+                "POST",
+                "/api/chat",
+                json.dumps(
+                    {
+                        "message": (
+                            "Are there only 2 open ports on example.test? Is there any login portals "
+                            "on the site? (port 80) can we escalate this to gpt?"
+                        )
+                    }
+                ).encode("utf-8"),
+            )
+
+        payload = json.loads(response.body)
+        answer = payload["result"]["chat"]["answer"]["body"]
+        review_tasks = [
+            task
+            for task in self.runtime.store.list_tasks(target_id=target.id, limit=20)
+            if task.kind == TaskKind.REVIEW_PREMIUM_ESCALATION
+        ]
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload["result"]["chat"]["model"], "deterministic-state")
+        self.assertIn("2 unique open TCP port", answer)
+        self.assertIn("`22/ssh`", answer)
+        self.assertIn("`80/http`", answer)
+        self.assertIn("not proof that no other ports exist", answer)
+        self.assertIn("No stored current evidence identifies a login portal on port 80", answer)
+        self.assertIn("**Premium Review**", answer)
+        self.assertEqual(len(review_tasks), 1)
+        generate.assert_not_called()
+
+    def test_operator_generic_model_greeting_is_replaced_by_state_answer(self) -> None:
+        target = self.runtime.register_target(
+            handle="example.test",
+            profile=ScopeProfile.HACKERONE,
+            assets=["example.test"],
+            emit_event=False,
+        )
+        self.runtime.store.insert_evidence(
+            EvidenceRecord(
+                target_id=target.id,
+                type=EvidenceType.TOOL_OUTPUT,
+                title="Recon: http://example.test/",
+                summary="HTTP probe returned 200 for http://example.test/.",
+                source_ref="fixture://example-greeting",
+                verification_status=VerificationStatus.VERIFIED,
+                confidence=0.85,
+                freshness=0.9,
+                metadata={"kind": "recon_scan", "effective_url": "http://example.test/", "status_code": 200},
+            )
+        )
+        with patch.object(
+            self.runtime.ollama,
+            "generate",
+            return_value=OllamaResponse(model="deepseek-r1:8b", text="Hello! I'm here to help. How can I assist you today?"),
+        ) as generate:
+            response = self.app.dispatch(
+                "POST",
+                "/api/chat",
+                json.dumps({"message": "Draft a concise operator note for example.test."}).encode("utf-8"),
+            )
+
+        payload = json.loads(response.body)
+        chat = payload["result"]["chat"]
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(chat["model"], "deterministic-state")
+        self.assertIn("**Facts**", chat["answer"]["body"])
+        self.assertTrue(chat["answer"]["metadata"]["guardrail_replaced_model_output"])
         generate.assert_called_once()
 
     def test_operator_status_uses_state_derived_potential_paths_and_actions(self) -> None:
@@ -716,6 +1469,22 @@ class WebConsoleTests(unittest.TestCase):
                 confidence=0.7,
                 freshness=0.9,
                 metadata={"kind": "web_content_discovery"},
+            )
+        )
+        self.runtime.store.insert_evidence(
+            EvidenceRecord(
+                target_id=target.id,
+                type=EvidenceType.TOOL_OUTPUT,
+                title="Windows service discovery: pirate.htb",
+                summary="Observed Microsoft Windows SMB service evidence.",
+                source_ref="fixture://windows-service",
+                verification_status=VerificationStatus.VERIFIED,
+                confidence=0.78,
+                freshness=0.9,
+                metadata={
+                    "kind": "tcp_service_discovery",
+                    "open_services": [{"port": 445, "service": "microsoft-ds", "product": "Microsoft Windows Server"}],
+                },
             )
         )
         exploit_evidence = EvidenceRecord(

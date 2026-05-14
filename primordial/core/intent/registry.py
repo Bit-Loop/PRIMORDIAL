@@ -28,7 +28,7 @@ class OperatorIntentRegistry:
         "credential_spraying_allowed",
         "hash_cracking_allowed",
     }
-    LAB_FIELDS = {"lab_flag_collection_allowed", "htb_lab_behavior_allowed"}
+    LAB_FIELDS = {"lab_flag_collection_allowed", "htb_lab_behavior_allowed", "reverse_shell_allowed"}
 
     def __init__(self, directory: Path) -> None:
         self.directory = directory
@@ -119,6 +119,10 @@ class OperatorIntentRegistry:
                 htb_lab_behavior_allowed=expect_bool(
                     lab.get("htb_lab_behavior_allowed"),
                     source=f"{source}.lab_policy.htb_lab_behavior_allowed",
+                ),
+                reverse_shell_allowed=expect_bool(
+                    lab.get("reverse_shell_allowed"),
+                    source=f"{source}.lab_policy.reverse_shell_allowed",
                 ),
             ),
         )

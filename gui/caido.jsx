@@ -16,6 +16,11 @@ function targetHttpql(D, handle) {
   return target?.httpql || (D.savedFilters || [])[0]?.httpql || '';
 }
 
+function currentTargetHttpql(D, handle) {
+  const target = (D.targetOptions || []).find(t => t.handle === handle);
+  return target?.httpql || '';
+}
+
 function shortHash(value) {
   if (!value) return '';
   return `${value.slice(0, 12)}...${value.slice(-8)}`;
@@ -26,6 +31,20 @@ function replayTemplate(req) {
   const path = req.path || '/';
   const host = req.host;
   return `${req.method || 'GET'} ${path} HTTP/1.1\nHost: ${host}\nConnection: close\n\n`;
+}
+
+function caidoAuthFailed(conn) {
+  const errorText = String(conn?.error || '').toLowerCase();
+  return !!conn?.auth_error || conn?.status_code === 401 || conn?.status_code === 403 || errorText.includes('unauthorized') || errorText.includes('forbidden');
+}
+
+function caidoConnectionState(conn) {
+  const authFailed = caidoAuthFailed(conn);
+  if (conn?.ok) return { label: 'LIVE', tone: 'green', stat: 'live', authFailed };
+  if (authFailed) return { label: 'AUTH FAILED', tone: 'red', stat: 'auth failed', authFailed };
+  if (conn?.configured && conn?.checked) return { label: 'ERROR', tone: 'red', stat: 'error', authFailed };
+  if (conn?.configured) return { label: 'READY', tone: 'yellow', stat: 'configured', authFailed };
+  return { label: 'MISSING', tone: 'red', stat: 'offline', authFailed };
 }
 
 function ReqRow({ r, selected, checked, onOpen, onToggle }) {
@@ -117,7 +136,10 @@ function CaidoMode() {
     [results, checkedIds],
   );
   const conn = connection || {};
+  const connectionState = caidoConnectionState(conn);
   const schemaCaps = conn.schema?.capabilities || {};
+  const schemaLabel = connectionState.authFailed ? 'auth-blocked' : (schemaCaps.requests_by_offset || schemaCaps.requests ? 'search' : 'unknown');
+  const replayLabel = connectionState.authFailed ? 'auth-blocked' : (schemaCaps.start_replay_task ? 'send' : 'unknown');
 
   async function runSearch(nextHttpql = httpql) {
     setBusy('search');
@@ -259,7 +281,7 @@ function CaidoMode() {
           { k: 'results', v: results.length },
           { k: 'selected', v: checkedIds.length },
           { k: 'imports', v: (D.requests || []).length },
-          { k: 'status', v: conn.ok ? 'live' : conn.configured ? 'configured' : 'offline' },
+          { k: 'status', v: connectionState.stat },
         ]}
       />
 
@@ -267,15 +289,25 @@ function CaidoMode() {
         <aside style={{ borderRight: '1px solid var(--line)', display: 'flex', flexDirection: 'column', background: 'var(--bg-deep)', minHeight: 0 }}>
           <div style={{ padding: 10, borderBottom: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: 8 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <Dot tone={conn.ok ? 'green' : conn.configured ? 'yellow' : 'red'} />
+              <Dot tone={connectionState.tone} />
               <span className="upper">CAIDO GRAPHQL</span>
-              <Pill tone={conn.ok ? 'green' : conn.configured ? 'yellow' : 'red'} style={{ marginLeft: 'auto' }}>
-                {conn.ok ? 'LIVE' : conn.configured ? 'READY' : 'MISSING'}
+              <Pill tone={connectionState.tone} style={{ marginLeft: 'auto' }}>
+                {connectionState.label}
               </Pill>
             </div>
             <div className="dim mono" style={{ fontSize: 10, overflowWrap: 'anywhere' }}>{conn.graphql_url || 'No GraphQL URL configured'}</div>
+            {conn.graphql_url_migrated_from && (
+              <div className="dim mono" style={{ fontSize: 10, color: 'var(--yellow)', overflowWrap: 'anywhere' }}>
+                migrated from {conn.graphql_url_migrated_from}
+              </div>
+            )}
+            {conn.error && (
+              <div className="mono" style={{ fontSize: 10, color: 'var(--red)', overflowWrap: 'anywhere' }}>
+                {conn.error}
+              </div>
+            )}
             <div className="dim mono" style={{ fontSize: 10 }}>
-              schema {schemaCaps.requests_by_offset || schemaCaps.requests ? 'search' : 'unknown'} | replay {schemaCaps.start_replay_task ? 'send' : 'unknown'}
+              schema {schemaLabel} | replay {replayLabel}
             </div>
           </div>
 
@@ -284,6 +316,9 @@ function CaidoMode() {
             <select className="input" value={target} onChange={e => applyTarget(e.target.value)} style={{ fontFamily: 'var(--mono)', fontSize: 11 }}>
               {(D.targetOptions || []).map(t => <option key={t.id || t.handle} value={t.handle}>{t.handle}</option>)}
             </select>
+            <button className="btn ghost sm" onClick={() => setHttpql(currentTargetHttpql(D, target))} disabled={!currentTargetHttpql(D, target)}>
+              USE TARGET SCOPE
+            </button>
             <button className="btn sm" onClick={() => runSearch()} disabled={busy === 'search'}>SEARCH</button>
           </div>
 
@@ -318,7 +353,7 @@ function CaidoMode() {
               className="input"
               value={httpql}
               onChange={e => setHttpql(e.target.value)}
-              placeholder='req.host.eq:"target.htb" AND resp.code.gte:400'
+              placeholder='req.host.eq:"target.example" AND resp.code.gte:400'
               style={{ flex: 1, fontFamily: 'var(--mono)', fontSize: 11 }}
             />
             <button className="btn sm" onClick={() => setHttpql('')}>CLEAR</button>

@@ -58,7 +58,7 @@ function ApprovalPaneInChat({ approval, onResolve }) {
   );
 }
 
-function ChatPane({ title, kind, messages, setMessages, approval, model, onResolve, onSend }) {
+function ChatPane({ title, kind, messages, setMessages, approval, model, onResolve, onSend, targetLabel }) {
   const API = window.PD_API || {};
   const [input, setInput] = useStateC('');
   const scrollRef = useRefC(null);
@@ -92,7 +92,6 @@ function ChatPane({ title, kind, messages, setMessages, approval, model, onResol
     }]);
   };
 
-  const targetLabel = approval?.target && approval.target !== '*' ? approval.target : (window.PD_DATA?.scope?.[0]?.handle || 'current target');
   const suggestions = kind === 'approval' ? [
     'show me the exact request',
     'reduce scope: only check banner',
@@ -194,13 +193,33 @@ function ChatMode() {
     if (remaining.length) setActiveAp(remaining[0]); else setActiveAp(null);
   };
 
+  // Dynamic target for suggestions and grounded inquiry routing.
+  const activeTarget = activeAp?.target && activeAp.target !== '*'
+    ? activeAp.target
+    : (D.traceMeta?.selectedTarget || D.scope?.[0]?.handle || 'current');
+
   const askRuntime = async (message) => {
-    const payload = await API.post?.('/api/chat', { message });
-    const answer = payload?.result?.chat?.answer?.body || payload?.result?.chat?.error;
+    const request = { message };
+    if (activeTarget && activeTarget !== 'current' && activeTarget !== 'All targets') {
+      request.target = activeTarget;
+    }
+    const payload = await API.post?.('/api/chat', request);
+    let answer = payload?.result?.chat?.answer?.body || payload?.result?.chat?.error;
+    // If answer is a string that looks like JSON, try to extract readable format
+    if (typeof answer === 'string' && answer.startsWith('{')) {
+      try {
+        const json = JSON.parse(answer);
+        // If it has expected fields, extract readable content
+        if (json.body) answer = json.body;
+        else if (json.text) answer = json.text;
+        else if (json.response) answer = json.response;
+      } catch (e) {
+        // Not JSON or parse failed, use as-is
+      }
+    }
     return answer || 'Runtime chat updated.';
   };
 
-  const targetLabel = D.scope?.[0]?.handle || D.traceMeta?.selectedTarget || 'All targets';
   const queue = D.approvals.filter(a => !resolved[a.id]);
 
   return (
@@ -211,7 +230,7 @@ function ChatMode() {
           { k: 'pending appr', v: queue.length },
           { k: 'approval lane', v: 'local-deep' },
           { k: 'inquiry lane', v: 'local-deep' },
-          { k: 'context', v: targetLabel },
+          { k: 'context', v: activeTarget },
         ]}
       />
       <div style={{ flex: 1, minHeight: 0, display: 'flex', gap: 8, padding: 8 }}>
@@ -279,6 +298,7 @@ function ChatMode() {
                 model="local-deep · deepseek-r1:8b"
                 onResolve={resolveApproval}
                 onSend={async (message) => `Approval note recorded locally: ${message}`}
+                targetLabel={activeAp?.target && activeAp.target !== '*' ? activeAp.target : 'approval'}
               />
             </div>
           )}
@@ -299,6 +319,7 @@ function ChatMode() {
                 approval={null}
                 model="local-deep · deepseek-r1:8b"
                 onSend={askRuntime}
+                targetLabel={activeTarget}
               />
             </div>
           )}

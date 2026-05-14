@@ -2,7 +2,7 @@
 
 Target: `same.htb`
 Profile: `hack_the_box`
-Generated: 2026-05-08T17:13:04.716485+00:00
+Generated: 2026-05-14T03:50:37.810155+00:00
 
 ## AI Agent Guidance
 

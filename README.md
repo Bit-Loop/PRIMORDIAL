@@ -41,9 +41,9 @@ python3 cli.py tick
 python3 cli.py run-loop --cycles 3
 python3 cli.py compact
 python3 cli.py process-queues
-python3 cli.py add-target target.htb --profile hack_the_box --asset target.htb --asset 10.10.10.10
+python3 cli.py add-target target.example --profile hackerone --asset target.example --asset 203.0.113.10
 python3 cli.py approve <task_id>
-python3 cli.py ask "status and next step" --target target.htb
+python3 cli.py ask "status and next step" --target target.example
 python3 cli.py tui
 python3 cli.py web --port 1337
 python3 cli.py models warm --keep-alive 8h
@@ -70,6 +70,8 @@ For local development, the bundled bootstrap creates `.venv`, installs Python an
 scripts/bootstrap-v1.sh
 source runtime/primordial.env
 ```
+
+When run from the repository root, `python3 cli.py ...` also loads `runtime/primordial.env` automatically if the shell has not already set `PRIMORDIAL_DATABASE_URL`.
 
 Stop that local cluster with:
 

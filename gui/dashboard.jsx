@@ -1,5 +1,6 @@
 /* global React, Panel, Pill, Dot, StatusPill, Field */
 const { useState: useStateD, useEffect: useEffectD } = React;
+const CAIDO_DEFAULT_GRAPHQL_URL = 'http://127.0.0.1:8650/graphql';
 
 function MeterRow({ label, val, tone }) {
   const cls = val > 0.85 ? 'crit' : val > 0.65 ? 'warn' : '';
@@ -33,6 +34,25 @@ function clampMetric(value) {
   return Math.max(0, Math.min(1, numeric));
 }
 
+function runtimeNumber(value, fallback = 0) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function RuntimeTile({ label, value, detail, tone = '' }) {
+  return (
+    <div className={`runtime-tile ${tone}`}>
+      <span className="runtime-tile-label">{label}</span>
+      <span className="runtime-tile-value">{value}</span>
+      {detail && <span className="runtime-tile-detail">{detail}</span>}
+    </div>
+  );
+}
+
+function RuntimeHint({ children }) {
+  return <span className="runtime-hint">{children}</span>;
+}
+
 function DashboardMode({ tweaks, onApprove, onReject }) {
   const D = window.PD_DATA;
   const API = window.PD_API || {};
@@ -44,9 +64,19 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
   const [interval, setInterval] = useStateD(D.runtime.executionMode?.interval_seconds || 30);
   const [tuning, setTuning] = useStateD(D.runtime.runtimeTuning || {});
   const [credentialDraft, setCredentialDraft] = useStateD({});
+  const [credentialFeedback, setCredentialFeedback] = useStateD(null);
+  const [integrationSelected, setIntegrationSelected] = useStateD('discord');
+  const [selectedCredentialKey, setSelectedCredentialKey] = useStateD('');
   const [modelDraft, setModelDraft] = useStateD({});
   const [processorDraft, setProcessorDraft] = useStateD({});
   const [targetDraft, setTargetDraft] = useStateD({});
+  const [targetAdvancedOpen, setTargetAdvancedOpen] = useStateD(false);
+  const [targetFeedback, setTargetFeedback] = useStateD(null);
+  const [targetSaving, setTargetSaving] = useStateD(false);
+  const [approvalBusy, setApprovalBusy] = useStateD('');
+  const [approvalFeedback, setApprovalFeedback] = useStateD(null);
+  const [runtimeBusy, setRuntimeBusy] = useStateD('');
+  const [runtimeFeedback, setRuntimeFeedback] = useStateD(null);
   const [scopeImport, setScopeImport] = useStateD('{\n  "targets": []\n}');
   const [selfTest, setSelfTest] = useStateD(D.selfTest || null);
 
@@ -88,31 +118,106 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
   ];
 
   const intentOptions = D.runtime.operatorIntent?.intents || [];
+  const activeIntent = D.runtime.operatorIntent?.active || {};
+  const intentLabel = activeIntent.label || activeIntent.id || intent;
+  const workStatus = D.runtime.workStatus || {};
+  const workCounts = workStatus.counts || {};
+  const activeWork = runtimeNumber(workCounts.active, D.runtime.activeTasks || 0);
+  const queuedWork = runtimeNumber(workCounts.queued, D.runtime.queued || 0);
+  const waitingWork = runtimeNumber(workCounts.waiting, 0);
+  const webActionCount = runtimeNumber(workCounts.web_actions, (workStatus.web_actions || []).length);
+  const staleWebActionCount = runtimeNumber(workCounts.stale_web_actions, 0);
+  const executionMode = contMode ? 'continuous' : 'tick';
+  const runtimeTone = activeWork ? 'cyan' : waitingWork ? 'yellow' : queuedWork ? 'gray' : 'green';
+  const runtimeStatus = activeWork ? 'working' : waitingWork ? 'waiting' : queuedWork ? 'queued' : 'idle';
+  const blockerRows = (Array.isArray(workStatus.blockers) ? workStatus.blockers : [])
+    .map(item => ({
+      summary: item.summary || item.reason || item.code || 'Runtime blocker',
+      detail: item.detail || item.target || '',
+    }))
+    .concat((Array.isArray(workStatus.waiting) ? workStatus.waiting : []).map(item => ({
+      summary: item.title || item.summary || 'Waiting task',
+      detail: item.target || item.status || '',
+    })))
+    .slice(0, 4);
+  const policy = activeIntent.policy && typeof activeIntent.policy === 'object' ? activeIntent.policy : {};
+  const policyFlags = Object.entries(policy)
+    .filter(([, value]) => value === true)
+    .map(([key]) => key.replaceAll('_', ' '))
+    .slice(0, 3);
+  const tuningDefaults = tuning.defaults || D.runtime.runtimeTuning?.defaults || {};
+  const tuningMinimums = tuning.minimums || D.runtime.runtimeTuning?.minimums || {};
   const updateTuning = (key, value) => setTuning(t => ({ ...t, [key]: Number(value) || 0 }));
   const modelRoles = D.modelPayload?.roles || [];
   const availableModels = D.modelPayload?.available_models || [];
   const roleMetric = (role) => D.modelPayload?.role_metrics?.[role] || modelRoles.find(r => r.role === role)?.metrics || {};
   const saveModels = () => API.post?.('/api/models', { roles: modelDraft, processors: processorDraft });
   const resetModels = () => { setModelDraft({}); setProcessorDraft({}); };
-  const saveTarget = () => {
-    const assets = String(targetDraft.assets || '').split(/\n|,/).map(v => v.trim()).filter(Boolean);
-    return API.post?.('/api/targets', {
-      handle: targetDraft.handle,
-      display_name: targetDraft.display_name,
-      profile: targetDraft.profile || 'hack_the_box',
-      active_ip: targetDraft.active_ip,
-      in_scope: targetDraft.in_scope !== false,
-      assets,
-    });
+  const scopeProfileOptions = (D.scopeProfiles?.profiles || []).length
+    ? D.scopeProfiles.profiles
+    : [{ id: 'hack_the_box', label: 'Hack The Box', base_profile: 'hack_the_box', description: 'Lab scope profile.' }];
+  const targetProfile = targetDraft.profile || scopeProfileOptions[0]?.id || 'hack_the_box';
+  const selectedScopeProfile = scopeProfileOptions.find(p => p.id === targetProfile) || scopeProfileOptions[0] || {};
+  const splitTargetAssets = (value) => String(value || '').split(/\n|,/).map(v => v.trim()).filter(Boolean);
+  const saveTarget = async () => {
+    const handle = String(targetDraft.handle || '').trim();
+    const activeIp = String(targetDraft.active_ip || '').trim();
+    const displayName = String(targetDraft.display_name || '').trim() || handle;
+    const profile = String(targetProfile || 'hack_the_box').trim();
+    const assets = splitTargetAssets(targetDraft.assets);
+    for (const asset of [handle, activeIp]) {
+      if (asset && !assets.includes(asset)) assets.push(asset);
+    }
+    setTargetFeedback(null);
+    if (!handle) {
+      setTargetFeedback({ tone: 'red', message: 'Target / domain is required.' });
+      return null;
+    }
+    setTargetSaving(true);
+    try {
+      const payload = await API.post?.('/api/targets', {
+        handle,
+        display_name: displayName,
+        profile,
+        active_ip: activeIp,
+        in_scope: targetDraft.in_scope !== false,
+        assets,
+        replace_scope_assets: true,
+      });
+      setTargetDraft(d => ({
+        ...d,
+        handle,
+        display_name: displayName,
+        profile,
+        active_ip: activeIp,
+        assets: assets.filter(asset => asset !== handle && asset !== activeIp).join('\n'),
+      }));
+      setTargetFeedback({
+        tone: 'green',
+        message: activeIp ? `Saved ${handle} with active IP ${activeIp}.` : `Saved ${handle}.`,
+      });
+      return payload;
+    } catch (err) {
+      setTargetFeedback({ tone: 'red', message: err.message || String(err) });
+      return null;
+    } finally {
+      setTargetSaving(false);
+    }
   };
-  const editTarget = (row) => setTargetDraft({
-    handle: row.handle,
-    display_name: row.handle,
-    profile: row.profile,
-    active_ip: row.ip,
-    in_scope: row.status === 'active',
-    assets: (D.scopePayload?.targets || []).find(item => item.target?.handle === row.handle)?.assets?.map(a => a.asset).join('\n') || '',
-  });
+  const editTarget = (row) => {
+    const detail = (D.scopePayload?.targets || []).find(item => item.target?.handle === row.handle && item.target?.profile === row.profile);
+    const target = detail?.target || {};
+    setTargetDraft({
+      handle: row.handle,
+      display_name: target.display_name || row.handle,
+      profile: row.profile,
+      active_ip: row.ip,
+      in_scope: row.status === 'active',
+      assets: (detail?.assets || []).map(a => a.asset).filter(asset => asset !== row.handle && asset !== row.ip).join('\n'),
+    });
+    setTargetAdvancedOpen(true);
+    setTargetFeedback({ tone: 'yellow', message: `Editing ${row.handle}.` });
+  };
   const importScope = () => {
     let parsed = {};
     try { parsed = JSON.parse(scopeImport || '{}'); } catch (err) { return Promise.reject(err); }
@@ -127,60 +232,178 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
     setCredentialDraft(d => ({ ...d, [service]: { ...(d[service] || {}), [key]: value } }));
   };
   const credentialStatus = (service, key) => D.credentials?.services?.[service]?.[key] || {};
-  const saveCredentials = (service) => API.post?.(`/api/credentials/${service}`, credentialDraft[service] || {});
-  const clearCredentials = (service) => API.delete?.(`/api/credentials/${service}`);
-  const applyControlSettings = async () => {
-    await API.post?.('/api/execution-mode', { mode: contMode ? 'continuous' : 'tick', interval_seconds: interval });
-    await API.post?.('/api/operator-intent', { intent_id: intent });
-    await API.post?.('/api/runtime-settings', tuning);
+  const credentialGroups = [
+    { service: 'notion', n: 'Notion', fields: [['api_key', 'API Key'], ['parent_page_id', 'Parent Page ID'], ['version', 'API Version']] },
+    { service: 'discord', n: 'Discord', fields: [['webhook_url', 'Webhook URL']] },
+    { service: 'caido', n: 'Caido', fields: [['graphql_url', 'GraphQL URL', CAIDO_DEFAULT_GRAPHQL_URL], ['api_token', 'API Token']] },
+    { service: 'known', n: 'Known Credentials', fields: [['username', 'Username'], ['password', 'Password'], ['domain', 'Domain']] },
+  ];
+  const credentialGroup = (service) => credentialGroups.find(group => group.service === service);
+  const credentialInputType = (key) => (key.includes('password') || key.includes('token') || key.includes('key') || key.includes('webhook') ? 'password' : 'text');
+  const credentialFieldHint = (service, key, placeholder = '') => credentialStatus(service, key).hint || placeholder || 'missing';
+  const credentialSourceLabel = (source) => {
+    if (!source || source === 'missing') return 'not stored';
+    const [base, alias] = String(source).split('_alias:');
+    const label = base === 'local_store' ? 'secure local store' : base === 'environment' ? 'environment' : base.replaceAll('_', ' ');
+    return alias ? `${label} · ${alias} alias` : label;
   };
-  const resolveApproval = (approval, verdict) => {
-    if (verdict === 'approve') {
-      onApprove?.(approval);
-      return API.post?.('/api/actions/approve', { task_id: approval.task || approval.id });
+  const credentialGroupConfigured = (service) => {
+    const group = credentialGroup(service);
+    return !!group?.fields.some(([key]) => credentialStatus(service, key).configured);
+  };
+  const credentialSummary = (service, keys) => keys
+    .map(key => {
+      const status = credentialStatus(service, key);
+      return status.configured && status.hint ? status.hint : '';
+    })
+    .filter(Boolean)
+    .join(' · ');
+  const saveCredentials = async (service) => {
+    setCredentialFeedback(null);
+    try {
+      const payload = await API.post?.(`/api/credentials/${service}`, credentialDraft[service] || {});
+      setCredentialDraft(d => ({ ...d, [service]: {} }));
+      setCredentialFeedback({ tone: 'green', message: `Saved ${credentialGroup(service)?.n || service} credentials.` });
+      return payload;
+    } catch (err) {
+      setCredentialFeedback({ tone: 'red', message: err.message || String(err) });
+      return null;
     }
-    onReject?.(approval);
-    return API.post?.('/api/actions/deny', { task_id: approval.task || approval.id });
+  };
+  const clearCredentials = async (service) => {
+    setCredentialFeedback(null);
+    try {
+      const payload = await API.delete?.(`/api/credentials/${service}`);
+      setCredentialDraft(d => ({ ...d, [service]: {} }));
+      setCredentialFeedback({ tone: 'green', message: `Cleared ${credentialGroup(service)?.n || service} credentials.` });
+      return payload;
+    } catch (err) {
+      setCredentialFeedback({ tone: 'red', message: err.message || String(err) });
+      return null;
+    }
+  };
+  const withRuntimeAction = async (busyKey, worker, successMessage) => {
+    if (runtimeBusy) return null;
+    setRuntimeBusy(busyKey);
+    setRuntimeFeedback(null);
+    try {
+      const payload = await worker();
+      const message = typeof successMessage === 'function' ? successMessage(payload) : successMessage;
+      setRuntimeFeedback({ tone: 'green', message });
+      return payload;
+    } catch (err) {
+      setRuntimeFeedback({ tone: 'red', message: err.message || String(err) });
+      return null;
+    } finally {
+      setRuntimeBusy('');
+    }
+  };
+  const boundedMaxExec = () => Math.max(1, Math.floor(runtimeNumber(maxExec, 1)));
+  const boundedInterval = () => Math.max(2, Math.floor(runtimeNumber(interval, 30)));
+  const runTickNow = () => withRuntimeAction(
+    'tick',
+    () => API.action?.('tick', { max_executions: boundedMaxExec() }),
+    payload => {
+      const summary = payload?.result?.report?.summary;
+      return summary ? `Tick complete: ${summary}` : 'Tick complete.';
+    },
+  );
+  const stopActiveWork = () => withRuntimeAction(
+    'stop-work',
+    () => API.action?.('stop-work'),
+    'Stop request sent.',
+  );
+  const saveModeAndIntent = () => withRuntimeAction(
+    'mode-intent',
+    async () => {
+      await API.post?.('/api/execution-mode', { mode: executionMode, interval_seconds: boundedInterval() });
+      await API.post?.('/api/operator-intent', { intent_id: intent });
+    },
+    'Saved runtime mode and operator intent.',
+  );
+  const saveRuntimeSettings = () => withRuntimeAction(
+    'runtime-settings',
+    () => API.post?.('/api/runtime-settings', tuning),
+    'Saved resource limits.',
+  );
+  const runMaintenance = (action, body, message) => withRuntimeAction(
+    action,
+    () => API.action?.(action, body),
+    message,
+  );
+  const tuningHint = (key, unit) => {
+    const bits = [];
+    if (tuningMinimums[key] != null) bits.push(`min ${tuningMinimums[key]}${unit}`);
+    if (tuningDefaults[key] != null) bits.push(`default ${tuningDefaults[key]}${unit}`);
+    return bits.join(' / ');
+  };
+  const resolveApproval = async (approval, verdict) => {
+    const taskId = approval?.task || approval?.id;
+    if (!taskId || approvalBusy) return null;
+    const approving = verdict === 'approve';
+    setApprovalBusy(taskId);
+    setApprovalFeedback(null);
+    try {
+      if (approving) onApprove?.(approval); else onReject?.(approval);
+      const payload = await API.post?.(approving ? '/api/actions/approve' : '/api/actions/deny', { task_id: taskId });
+      setApprovalFeedback({
+        tone: approving ? 'green' : 'red',
+        message: `${approving ? 'Approved' : 'Denied'} ${approval.title || taskId}.`,
+      });
+      return payload;
+    } catch (err) {
+      setApprovalFeedback({ tone: 'red', message: err.message || String(err) });
+      return null;
+    } finally {
+      setApprovalBusy('');
+    }
   };
   const integrationRows = [
     {
+      service: 'notion',
       n: 'Notion',
-      d: D.notes?.syncStatus?.configured ? 'credentials configured' : 'local findings export only',
-      s: D.notes?.syncStatus?.configured ? 'configured' : 'missing',
-      tone: D.notes?.syncStatus?.configured ? 'green' : 'gray',
+      d: credentialSummary('notion', ['api_key', 'parent_page_id']) || 'local findings export only',
+      s: credentialGroupConfigured('notion') || D.notes?.syncStatus?.configured ? 'configured' : 'missing',
+      tone: credentialGroupConfigured('notion') || D.notes?.syncStatus?.configured ? 'green' : 'gray',
+      detail: 'Notes and evidence sync destination.',
     },
     {
+      service: 'discord',
       n: 'Discord',
       d: credentialStatus('discord', 'webhook_url').hint || 'webhook not configured',
       s: credentialStatus('discord', 'webhook_url').configured ? 'configured' : 'missing',
       tone: credentialStatus('discord', 'webhook_url').configured ? 'green' : 'gray',
+      detail: 'Operator notification webhook.',
     },
     {
+      service: 'caido',
       n: 'Caido',
-      d: D.caido?.connection?.graphql_url || 'GraphQL credentials missing',
+      d: credentialSummary('caido', ['graphql_url', 'api_token']) || D.caido?.connection?.graphql_url || 'GraphQL credentials missing',
       s: D.caido?.connection?.ok ? 'live' : D.caido?.connection?.configured ? 'configured' : 'missing',
       tone: D.caido?.connection?.ok ? 'green' : D.caido?.connection?.configured ? 'cyan' : 'gray',
+      detail: 'HTTPQL search, request import, and replay approvals.',
     },
     {
+      service: 'known',
       n: 'Known Credentials',
-      d: credentialStatus('known', 'username').hint || 'known credentials not configured',
+      d: credentialSummary('known', ['username', 'domain', 'password']) || 'known credentials not configured',
       s: credentialStatus('known', 'username').configured ? 'set' : 'missing',
       tone: credentialStatus('known', 'username').configured ? 'cyan' : 'gray',
+      detail: 'Durable known username and password record; execution still needs intent and approval.',
     },
     {
+      service: 'ollama',
       n: 'Ollama',
       d: D.modelPayload?.ollama?.base_url || 'localhost',
       s: D.modelPayload?.ollama?.ok ? 'live' : 'offline',
       tone: D.modelPayload?.ollama?.ok ? 'cyan' : 'gray',
+      detail: 'Local model backend status.',
     },
-    { n: 'Premium', d: 'remote_premium', s: 'disabled', tone: 'gray' },
+    { service: 'premium', n: 'Premium', d: 'remote_premium', s: 'disabled', tone: 'gray', detail: 'Remote premium escalation status.' },
   ];
-  const credentialGroups = [
-    { service: 'notion', n: 'Notion', fields: [['api_key', 'API Key'], ['parent_page_id', 'Parent Page ID'], ['version', 'API Version']] },
-    { service: 'discord', n: 'Discord', fields: [['webhook_url', 'Webhook URL']] },
-    { service: 'caido', n: 'Caido', fields: [['graphql_url', 'GraphQL URL'], ['api_token', 'API Token']] },
-    { service: 'known', n: 'Known Credentials', fields: [['username', 'Username'], ['password', 'Password'], ['domain', 'Domain']] },
-  ];
+  const activeIntegration = integrationRows.find(row => row.service === integrationSelected) || integrationRows[0];
+  const activeCredentialGroup = activeIntegration ? credentialGroup(activeIntegration.service) : null;
+  const selectedCredentialField = selectedCredentialKey || activeCredentialGroup?.fields?.[0]?.[0] || '';
   const firstTarget = D.scope[0]?.handle || D.traceMeta?.selectedTarget || 'All targets';
 
   return (
@@ -215,65 +438,161 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
             actions={
               <>
                 <button className="btn ghost sm" onClick={() => API.refresh?.()}>REFRESH</button>
-                <button className="btn primary sm" onClick={() => API.action?.('tick', { max_executions: maxExec })}>RUN TICK</button>
-                <button className="btn danger sm" onClick={() => API.action?.('stop-work')}>STOP WORK</button>
               </>
             }
             className="fill"
           >
             <div className="tabs" style={{ marginBottom: 10 }}>
-              {['controls', 'models', 'targets', 'scope', 'self test', 'integrations', 'credentials'].map(t => (
+              {['controls', 'models', 'targets', 'scope', 'self test', 'integrations'].map(t => (
                 <button key={t} className={`tab ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)}>{t}</button>
               ))}
             </div>
             {tab === 'controls' && (
-              <div className="grid" style={{ gridTemplateColumns: 'repeat(4, minmax(0,1fr))', gap: 10 }}>
-                <Field label="autonomy mode">
-                  <select className="input" value={autonomy} onChange={e => setAutonomy(e.target.value)}>
-                    <option>assisted</option>
-                    <option>supervised</option>
-                    <option>supervised_auto</option>
-                    <option>high_autonomy</option>
-                  </select>
-                </Field>
-                <Field label="operator intent">
-                  <select className="input" value={intent} onChange={e => setIntent(e.target.value)}>
-                    {intentOptions.length ? intentOptions.map(item => (
-                      <option key={item.id} value={item.id}>{item.label || item.id}</option>
-                    )) : <option value={intent}>{intent}</option>}
-                  </select>
-                </Field>
-                <Field label="execution mode">
-                  <select className="input" value={contMode ? 'cont' : 'tick'} onChange={e => setContMode(e.target.value === 'cont')}>
-                    <option value="tick">Tick mode</option>
-                    <option value="cont">Continuous (autonomous)</option>
-                  </select>
-                </Field>
-                <Field label="max executions">
-                  <input className="input" type="number" value={maxExec} onChange={e => setMaxExec(+e.target.value)} />
-                </Field>
-                <Field label="continuous interval (s)">
-                  <input className="input" type="number" value={interval} onChange={e => setInterval(+e.target.value)} />
-                </Field>
-                <Field label="GPU AI timeout (s)">
-                  <input className="input" type="number" value={tuning.gpu_ai_timeout_seconds || 120} onChange={e => updateTuning('gpu_ai_timeout_seconds', e.target.value)} />
-                </Field>
-                <Field label="CPU AI timeout (s)">
-                  <input className="input" type="number" value={tuning.cpu_ai_timeout_seconds || 300} onChange={e => updateTuning('cpu_ai_timeout_seconds', e.target.value)} />
-                </Field>
-                <Field label="stale run timeout (s)">
-                  <input className="input" type="number" value={tuning.stale_run_timeout_seconds || 3600} onChange={e => updateTuning('stale_run_timeout_seconds', e.target.value)} />
-                </Field>
-                <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                  <button className="btn" onClick={() => API.action?.('compact')}>COMPACT MEMORY</button>
-                  <button className="btn" onClick={() => API.action?.('process-queues')}>PROCESS QUEUES</button>
-                  <button className="btn ghost" onClick={() => API.action?.('warm-models', { keep_alive: '8h' })}>WARM MODELS</button>
-                  <button className="btn ghost" onClick={() => API.action?.('clear-models')}>CLEAR MODELS</button>
-                  <button className="btn ghost" onClick={applyControlSettings}>APPLY TUNING</button>
-                  <span style={{ flex: 1 }}></span>
-                  <span className="banner green" style={{ alignSelf: 'center' }}>
-                    <Dot tone="green" /> POLICY: PoC EXEC GATED · DDOS FORBIDDEN
-                  </span>
+              <div className="runtime-pane">
+                {runtimeFeedback && (
+                  <div className={`banner ${runtimeFeedback.tone === 'red' ? 'red' : 'green'} runtime-feedback`}>
+                    <Dot tone={runtimeFeedback.tone === 'red' ? 'red' : 'green'} />
+                    <span>{runtimeFeedback.message}</span>
+                    <button className="btn ghost sm" onClick={() => setRuntimeFeedback(null)}>CLEAR</button>
+                  </div>
+                )}
+
+                <div className="runtime-section">
+                  <div className="runtime-section-head">
+                    <div>
+                      <span className="runtime-section-title">Runtime State</span>
+                      <span className="runtime-section-sub">{workStatus.summary || 'No runtime status.'}</span>
+                    </div>
+                    <Pill tone={runtimeTone}>{runtimeStatus}</Pill>
+                  </div>
+                  <div className="runtime-state-grid">
+                    <RuntimeTile label="autonomy" value={autonomy || 'assisted'} detail="current config" tone="cyan" />
+                    <RuntimeTile label="intent" value={intentLabel} detail={intent} tone="green" />
+                    <RuntimeTile label="mode" value={executionMode} detail={contMode ? `${interval}s interval` : 'manual ticks'} tone={contMode ? 'yellow' : 'gray'} />
+                    <RuntimeTile label="work" value={activeWork} detail={`${queuedWork} queued / ${waitingWork} waiting`} tone={waitingWork ? 'warn' : ''} />
+                    <RuntimeTile label="approvals" value={D.approvals.length} detail="pending" tone={D.approvals.length ? 'crit' : ''} />
+                    {webActionCount ? <RuntimeTile label="web actions" value={webActionCount} detail={staleWebActionCount ? `${staleWebActionCount} stale` : 'running'} tone="warn" /> : null}
+                  </div>
+                  <div className="runtime-policy-row">
+                    <span className="runtime-policy-label">policy</span>
+                    {policyFlags.length ? policyFlags.map(flag => <Pill key={flag} tone="cyan">{flag}</Pill>) : <Pill tone="green">recon default</Pill>}
+                    <Pill tone="yellow">PoC gated</Pill>
+                    <Pill tone="red">DoS forbidden</Pill>
+                  </div>
+                  {blockerRows.length ? (
+                    <div className="runtime-blockers">
+                      {blockerRows.map((item, index) => (
+                        <div key={`${item.summary}:${index}`} className="runtime-blocker">
+                          <span className="runtime-blocker-title">{item.summary}</span>
+                          {item.detail && <span className="runtime-blocker-detail">{item.detail}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="runtime-section">
+                  <div className="runtime-section-head">
+                    <div>
+                      <span className="runtime-section-title">Run Now</span>
+                      <span className="runtime-section-sub">One bounded orchestration tick.</span>
+                    </div>
+                  </div>
+                  <div className="runtime-command-grid">
+                    <Field label="max executions">
+                      <input className="input" type="number" min="1" value={maxExec} onChange={e => setMaxExec(Math.max(1, Number(e.target.value) || 1))} />
+                    </Field>
+                    <button className="btn primary runtime-command" onClick={runTickNow} disabled={!!runtimeBusy}>
+                      {runtimeBusy === 'tick' ? 'RUNNING TICK' : 'RUN TICK NOW'}
+                    </button>
+                    <button className="btn danger runtime-command" onClick={stopActiveWork} disabled={!!runtimeBusy}>
+                      {runtimeBusy === 'stop-work' ? 'STOPPING WORK' : 'STOP ACTIVE WORK'}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="runtime-section">
+                  <div className="runtime-section-head">
+                    <div>
+                      <span className="runtime-section-title">Mode & Intent</span>
+                      <span className="runtime-section-sub">Scheduler cadence and active Operator Intent.</span>
+                    </div>
+                  </div>
+                  <div className="runtime-settings-grid">
+                    <Field label="operator intent">
+                      <select className="input" value={intent} onChange={e => setIntent(e.target.value)}>
+                        {intentOptions.length ? intentOptions.map(item => (
+                          <option key={item.id} value={item.id}>{item.label || item.id}</option>
+                        )) : <option value={intent}>{intent}</option>}
+                      </select>
+                    </Field>
+                    <Field label="execution mode">
+                      <select className="input" value={contMode ? 'cont' : 'tick'} onChange={e => setContMode(e.target.value === 'cont')}>
+                        <option value="tick">Tick mode</option>
+                        <option value="cont">Continuous ticks</option>
+                      </select>
+                    </Field>
+                    <Field label="continuous interval (s)">
+                      <input className="input" type="number" min="2" value={interval} disabled={!contMode} onChange={e => setInterval(Math.max(2, Number(e.target.value) || 2))} />
+                    </Field>
+                  </div>
+                  <div className="runtime-actions">
+                    <button className="btn primary sm" onClick={saveModeAndIntent} disabled={!!runtimeBusy}>
+                      {runtimeBusy === 'mode-intent' ? 'SAVING MODE' : 'SAVE MODE AND INTENT'}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="runtime-section">
+                  <div className="runtime-section-head">
+                    <div>
+                      <span className="runtime-section-title">Resource Limits</span>
+                      <span className="runtime-section-sub">Worker timeouts and memory reserves.</span>
+                    </div>
+                  </div>
+                  <div className="runtime-settings-grid">
+                    <Field label="GPU AI timeout (s)">
+                      <input className="input" type="number" min={tuningMinimums.gpu_ai_timeout_seconds || 1} value={tuning.gpu_ai_timeout_seconds || 120} onChange={e => updateTuning('gpu_ai_timeout_seconds', e.target.value)} />
+                      <RuntimeHint>{tuningHint('gpu_ai_timeout_seconds', 's')}</RuntimeHint>
+                    </Field>
+                    <Field label="CPU AI timeout (s)">
+                      <input className="input" type="number" min={tuningMinimums.cpu_ai_timeout_seconds || 1} value={tuning.cpu_ai_timeout_seconds || 300} onChange={e => updateTuning('cpu_ai_timeout_seconds', e.target.value)} />
+                      <RuntimeHint>{tuningHint('cpu_ai_timeout_seconds', 's')}</RuntimeHint>
+                    </Field>
+                    <Field label="stale run timeout (s)">
+                      <input className="input" type="number" min={tuningMinimums.stale_run_timeout_seconds || 1} value={tuning.stale_run_timeout_seconds || 3600} onChange={e => updateTuning('stale_run_timeout_seconds', e.target.value)} />
+                      <RuntimeHint>{tuningHint('stale_run_timeout_seconds', 's')}</RuntimeHint>
+                    </Field>
+                    <Field label="CPU RAM reserve (MB)">
+                      <input className="input" type="number" min={tuningMinimums.min_free_cpu_ram_mb || 0} value={tuning.min_free_cpu_ram_mb || 2048} onChange={e => updateTuning('min_free_cpu_ram_mb', e.target.value)} />
+                      <RuntimeHint>{tuningHint('min_free_cpu_ram_mb', 'MB')}</RuntimeHint>
+                    </Field>
+                    <Field label="GPU RAM reserve (MB)">
+                      <input className="input" type="number" min={tuningMinimums.min_free_gpu_ram_mb || 0} value={tuning.min_free_gpu_ram_mb || 368} onChange={e => updateTuning('min_free_gpu_ram_mb', e.target.value)} />
+                      <RuntimeHint>{tuningHint('min_free_gpu_ram_mb', 'MB')}</RuntimeHint>
+                    </Field>
+                  </div>
+                  <div className="runtime-actions">
+                    <button className="btn primary sm" onClick={saveRuntimeSettings} disabled={!!runtimeBusy}>
+                      {runtimeBusy === 'runtime-settings' ? 'SAVING LIMITS' : 'SAVE RESOURCE LIMITS'}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="runtime-section">
+                  <div className="runtime-section-head">
+                    <div>
+                      <span className="runtime-section-title">Maintenance</span>
+                      <span className="runtime-section-sub">Runtime housekeeping actions.</span>
+                    </div>
+                  </div>
+                  <div className="runtime-action-grid">
+                    <button className="btn sm" onClick={() => runMaintenance('compact', {}, 'Memory compaction complete.')} disabled={!!runtimeBusy}>COMPACT MEMORY</button>
+                    <button className="btn sm" onClick={() => runMaintenance('process-queues', {}, 'External queues processed.')} disabled={!!runtimeBusy}>PROCESS QUEUES</button>
+                    <button className="btn ghost sm" onClick={() => runMaintenance('warm-models', { keep_alive: '8h' }, 'Model lanes warmed.')} disabled={!!runtimeBusy}>WARM MODELS</button>
+                    <button className="btn ghost sm" onClick={() => runMaintenance('clear-models', {}, 'Model lanes cleared.')} disabled={!!runtimeBusy}>CLEAR MODELS</button>
+                    <button className="btn ghost sm" onClick={() => runMaintenance('clear-stale-web-actions', {}, 'Stale web action records cleared.')} disabled={!!runtimeBusy}>CLEAR STALE WEB ACTIONS</button>
+                  </div>
                 </div>
               </div>
             )}
@@ -319,7 +638,7 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
                 <table className="t">
                   <thead><tr><th>Target</th><th>Profile</th><th>IP</th><th>Assets</th><th>Records</th><th></th></tr></thead>
                   <tbody>{D.scope.map(row => (
-                    <tr key={row.handle}>
+                    <tr key={`${row.profile}:${row.handle}`}>
                       <td><span className="strong">{row.handle}</span><div className="dim mono">{row.status}</div></td>
                       <td>{row.profile}</td><td>{row.ip || '—'}</td><td>{row.assets}</td>
                       <td className="dim">{row.evidence} ev · {row.findings} fnd</td>
@@ -328,13 +647,55 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
                   ))}</tbody>
                 </table>
                 <div className="col gap-8" style={{ padding: 10, border: '1px solid var(--line)', borderRadius: 4, background: 'var(--bg-deep)' }}>
-                  <Field label="handle"><input className="input" value={targetDraft.handle || ''} onChange={e => setTargetDraft(d => ({ ...d, handle: e.target.value }))} /></Field>
-                  <Field label="display name"><input className="input" value={targetDraft.display_name || ''} onChange={e => setTargetDraft(d => ({ ...d, display_name: e.target.value }))} /></Field>
-                  <Field label="profile"><input className="input" value={targetDraft.profile || 'hack_the_box'} onChange={e => setTargetDraft(d => ({ ...d, profile: e.target.value }))} /></Field>
-                  <Field label="active ip"><input className="input" value={targetDraft.active_ip || ''} onChange={e => setTargetDraft(d => ({ ...d, active_ip: e.target.value }))} /></Field>
-                  <Field label="assets"><textarea className="input" rows="4" value={targetDraft.assets || ''} onChange={e => setTargetDraft(d => ({ ...d, assets: e.target.value }))} /></Field>
-                  <label className="row gap-6 mono" style={{ fontSize: 11 }}><input type="checkbox" checked={targetDraft.in_scope !== false} onChange={e => setTargetDraft(d => ({ ...d, in_scope: e.target.checked }))} /> in scope</label>
-                  <button className="btn primary sm" onClick={saveTarget}>SAVE TARGET</button>
+                  <div>
+                    <div className="upper" style={{ color: 'var(--txt-strong)', marginBottom: 4 }}>Target scope editor</div>
+                    <div className="dim mono" style={{ fontSize: 10.5 }}>The target record anchors evidence, tasks, notes, guidance, and active IP history.</div>
+                  </div>
+                  {targetFeedback && (
+                    <div className={`banner ${targetFeedback.tone === 'red' ? 'red' : targetFeedback.tone === 'green' ? 'green' : ''}`}>
+                      {targetFeedback.message}
+                    </div>
+                  )}
+                  <Field label="Target / domain">
+                    <input className="input" placeholder="target.example" value={targetDraft.handle || ''} onChange={e => setTargetDraft(d => ({ ...d, handle: e.target.value }))} />
+                    <span className="dim mono" style={{ fontSize: 10.5 }}>Durable target key. Use the hostname when it exists.</span>
+                  </Field>
+                  <Field label="Current IP">
+                    <input className="input" placeholder="203.0.113.10" value={targetDraft.active_ip || ''} onChange={e => setTargetDraft(d => ({ ...d, active_ip: e.target.value }))} />
+                    <span className="dim mono" style={{ fontSize: 10.5 }}>Operator-confirmed live address. Saving it also adds an IP scope asset.</span>
+                  </Field>
+                  <Field label="Scope profile">
+                    <select className="input" value={targetProfile} onChange={e => setTargetDraft(d => ({ ...d, profile: e.target.value }))}>
+                      {scopeProfileOptions.map(profile => (
+                        <option key={profile.id} value={profile.id}>{profile.label || profile.id}</option>
+                      ))}
+                    </select>
+                    <span className="dim mono" style={{ fontSize: 10.5 }}>
+                      {(selectedScopeProfile.description || 'Scope defaults for this target.')} Operator Intent still gates actions.
+                    </span>
+                  </Field>
+                  <Field label="Display name">
+                    <input className="input" placeholder={targetDraft.handle || 'target.example'} value={targetDraft.display_name || ''} onChange={e => setTargetDraft(d => ({ ...d, display_name: e.target.value }))} />
+                    <span className="dim mono" style={{ fontSize: 10.5 }}>Optional label. Blank uses the target / domain.</span>
+                  </Field>
+                  <label className="row gap-6 mono" style={{ fontSize: 11, alignItems: 'center' }}>
+                    <input type="checkbox" checked={targetDraft.in_scope !== false} onChange={e => setTargetDraft(d => ({ ...d, in_scope: e.target.checked }))} />
+                    in scope for active runtime planning
+                  </label>
+                  <div className="col gap-6" style={{ borderTop: '1px dashed var(--line)', paddingTop: 8 }}>
+                    <button className="btn ghost sm" type="button" onClick={() => setTargetAdvancedOpen(v => !v)} style={{ alignSelf: 'flex-start' }}>
+                      {targetAdvancedOpen ? 'HIDE ADVANCED ASSETS' : 'ADVANCED ASSETS'}
+                    </button>
+                    {targetAdvancedOpen && (
+                      <Field label="Extra scope assets">
+                        <textarea className="input" rows="4" placeholder="https://target.example/\ntarget.example" value={targetDraft.assets || ''} onChange={e => setTargetDraft(d => ({ ...d, assets: e.target.value }))} />
+                        <span className="dim mono" style={{ fontSize: 10.5 }}>Optional hostnames, URLs, or IPs beyond the target and current IP.</span>
+                      </Field>
+                    )}
+                  </div>
+                  <button className="btn primary sm" onClick={saveTarget} disabled={targetSaving}>
+                    {targetSaving ? 'SAVING' : 'SAVE TARGET'}
+                  </button>
                 </div>
               </div>
             )}
@@ -365,47 +726,131 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
               </div>
             )}
             {tab === 'integrations' && (
-              <div className="grid" style={{ gridTemplateColumns: 'repeat(2, 1fr)', gap: 10 }}>
-                {integrationRows.map(i => (
-                  <div key={i.n} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', border: '1px solid var(--line)', borderRadius: 4, background: 'var(--bg-deep)' }}>
-                    <div>
-                      <div className="strong" style={{ fontWeight: 600 }}>{i.n}</div>
-                      <div className="dim mono" style={{ fontSize: 10.5 }}>{i.d}</div>
+              <div className="grid" style={{ gridTemplateColumns: 'minmax(240px, 0.85fr) minmax(0, 1.15fr)', gap: 10 }}>
+                <div className="col gap-8">
+                  {integrationRows.map(i => {
+                    const selected = activeIntegration?.service === i.service;
+                    return (
+                      <button
+                        key={i.service}
+                        type="button"
+                        aria-pressed={selected}
+                        onClick={() => {
+                          setIntegrationSelected(i.service);
+                          setSelectedCredentialKey(credentialGroup(i.service)?.fields?.[0]?.[0] || '');
+                          setCredentialFeedback(null);
+                        }}
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          gap: 10,
+                          padding: '8px 10px',
+                          border: `1px solid ${selected ? 'var(--cyan)' : 'var(--line)'}`,
+                          borderRadius: 4,
+                          background: selected ? 'var(--elev-1)' : 'var(--bg-deep)',
+                          color: 'var(--txt)',
+                          cursor: 'pointer',
+                          font: 'inherit',
+                          textAlign: 'left',
+                          width: '100%',
+                        }}
+                      >
+                        <div style={{ minWidth: 0 }}>
+                          <div className="strong" style={{ fontWeight: 600 }}>{i.n}</div>
+                          <div className="dim mono" style={{ fontSize: 10.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{i.d}</div>
+                        </div>
+                        <Pill tone={i.tone}>{i.s.toUpperCase()}</Pill>
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="col gap-8" style={{ padding: 10, border: '1px solid var(--line)', borderRadius: 4, background: 'var(--bg-deep)', minWidth: 0 }}>
+                  <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div className="strong" style={{ fontWeight: 700 }}>{activeIntegration?.n}</div>
+                      <div className="dim" style={{ fontSize: 11 }}>{activeIntegration?.detail}</div>
                     </div>
-                    <Pill tone={i.tone}>{i.s.toUpperCase()}</Pill>
+                    <Pill tone={activeIntegration?.tone || 'gray'}>{(activeIntegration?.s || 'missing').toUpperCase()}</Pill>
                   </div>
-                ))}
-              </div>
-            )}
-            {tab === 'credentials' && (
-              <div className="grid" style={{ gridTemplateColumns: 'repeat(2, 1fr)', gap: 10 }}>
-                {credentialGroups.map(g => (
-                  <div key={g.n} style={{ padding: 10, border: '1px solid var(--line)', borderRadius: 4, background: 'var(--bg-deep)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, alignItems: 'center' }}>
-                      <span className="strong" style={{ fontWeight: 600 }}>{g.n}</span>
-                      <Pill tone={g.fields.some(([key]) => credentialStatus(g.service, key).configured) ? 'green' : 'gray'}>
-                        {g.fields.some(([key]) => credentialStatus(g.service, key).configured) ? 'SAVED' : 'MISSING'}
-                      </Pill>
+                  {credentialFeedback && (
+                    <div className={`banner ${credentialFeedback.tone === 'red' ? 'red' : 'green'}`}>
+                      <Dot tone={credentialFeedback.tone === 'red' ? 'red' : 'green'} />
+                      <span>{credentialFeedback.message}</span>
                     </div>
-                    <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                      {g.fields.map(([key, label]) => (
-                        <Field key={key} label={label}>
-                          <input
-                            className="input"
-                            type={key.includes('password') || key.includes('token') || key.includes('key') ? 'password' : 'text'}
-                            placeholder={credentialStatus(g.service, key).hint || 'missing'}
-                            value={credentialDraft[g.service]?.[key] || ''}
-                            onChange={e => setCredentialValue(g.service, key, e.target.value)}
-                          />
-                        </Field>
-                      ))}
+                  )}
+                  {activeCredentialGroup ? (
+                    <>
+                      <div className="grid" style={{ gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
+                        {activeCredentialGroup.fields.map(([key, label, placeholder]) => {
+                          const status = credentialStatus(activeCredentialGroup.service, key);
+                          const selected = selectedCredentialField === key;
+                          return (
+                            <button
+                              key={key}
+                              type="button"
+                              aria-label={`Edit ${activeCredentialGroup.n} ${label}`}
+                              onClick={() => setSelectedCredentialKey(key)}
+                              style={{
+                                padding: '7px 8px',
+                                border: `1px solid ${selected ? 'var(--cyan)' : 'var(--line)'}`,
+                                borderRadius: 4,
+                                minWidth: 0,
+                                background: selected ? 'var(--elev-1)' : 'var(--bg)',
+                                color: 'var(--txt)',
+                                cursor: 'pointer',
+                                font: 'inherit',
+                                textAlign: 'left',
+                              }}
+                            >
+                              <div className="row" style={{ justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
+                                <span className="dim" style={{ fontSize: 10 }}>{label}</span>
+                                <Pill tone={status.configured ? 'green' : 'gray'}>{status.configured ? 'SAVED' : 'MISSING'}</Pill>
+                              </div>
+                              <div className="mono strong" style={{ marginTop: 4, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {status.configured ? credentialFieldHint(activeCredentialGroup.service, key, placeholder) : 'missing'}
+                              </div>
+                              {status.source && <div className="dim mono" style={{ marginTop: 3, fontSize: 9.5 }}>{credentialSourceLabel(status.source)}</div>}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <div className="grid" style={{ gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
+                        {activeCredentialGroup.fields.map(([key, label, placeholder]) => (
+                          <Field key={key} label={label}>
+                            <input
+                              className="input"
+                              type={credentialInputType(key)}
+                              placeholder={credentialFieldHint(activeCredentialGroup.service, key, placeholder)}
+                              value={credentialDraft[activeCredentialGroup.service]?.[key] || ''}
+                              onChange={e => setCredentialValue(activeCredentialGroup.service, key, e.target.value)}
+                              onFocus={() => setSelectedCredentialKey(key)}
+                              style={{
+                                borderColor: selectedCredentialField === key ? 'var(--cyan)' : undefined,
+                                boxShadow: selectedCredentialField === key ? '0 0 0 1px var(--cyan-soft)' : undefined,
+                              }}
+                            />
+                          </Field>
+                        ))}
+                      </div>
+                      <div className="row gap-4">
+                        <button className="btn primary sm" onClick={() => saveCredentials(activeCredentialGroup.service)}>SAVE CREDENTIALS</button>
+                        <button className="btn ghost sm" onClick={() => clearCredentials(activeCredentialGroup.service)}>CLEAR</button>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="grid" style={{ gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
+                      <div style={{ padding: '7px 8px', border: '1px solid var(--line)', borderRadius: 4 }}>
+                        <div className="dim" style={{ fontSize: 10 }}>Endpoint</div>
+                        <div className="mono strong" style={{ marginTop: 4 }}>{activeIntegration?.d}</div>
+                      </div>
+                      <div style={{ padding: '7px 8px', border: '1px solid var(--line)', borderRadius: 4 }}>
+                        <div className="dim" style={{ fontSize: 10 }}>Stored credentials</div>
+                        <div className="mono strong" style={{ marginTop: 4 }}>not required</div>
+                      </div>
                     </div>
-                    <div className="row gap-4" style={{ marginTop: 8 }}>
-                      <button className="btn primary sm" onClick={() => saveCredentials(g.service)}>SAVE</button>
-                      <button className="btn ghost sm" onClick={() => clearCredentials(g.service)}>CLEAR</button>
-                    </div>
-                  </div>
-                ))}
+                  )}
+                </div>
               </div>
             )}
           </Panel>
@@ -423,8 +868,8 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
                 {D.tasks.map(t => (
                   <tr key={t.id} className={t.status === 'running' ? 'running' : ''}>
                     <td><StatusPill status={t.status} /></td>
-                    <td><span className="strong">{t.kind}</span></td>
-                    <td>{t.title}</td>
+                    <td><span className="strong">{t.kind}</span>{t.grouped_count ? <div className="dim mono">{t.grouped_count} grouped</div> : null}</td>
+                    <td>{t.title}{t.hint ? <div className="dim mono" style={{ marginTop: 3 }}>{t.hint}</div> : null}</td>
                     <td>{t.target}</td>
                     <td className="dim">{t.route} · {t.model}</td>
                     <td className="dim">{t.ms ? `${(t.ms / 1000).toFixed(1)}s` : '—'}</td>
@@ -470,6 +915,11 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
             className="fill"
           >
             <div className="col" style={{ gap: 8 }}>
+              {approvalFeedback && (
+                <div className={`banner ${approvalFeedback.tone === 'red' ? 'red' : approvalFeedback.tone === 'green' ? 'green' : ''}`}>
+                  {approvalFeedback.message}
+                </div>
+              )}
               {D.approvals.map((a, i) => (
                 <div key={a.id} className={`approval ${a.risk} ${i === 0 ? 'urgent' : ''}`}>
                   <div className="approval-head">
@@ -481,8 +931,12 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
                   <div style={{ color: 'var(--txt)', fontSize: 11.5 }}>{a.detail}</div>
                   <div className="dim" style={{ fontSize: 11, fontStyle: 'italic' }}>{a.reason}</div>
                   <div className="approval-actions">
-                    <button className="btn primary sm" onClick={() => resolveApproval(a, 'approve')}>APPROVE</button>
-                    <button className="btn danger sm" onClick={() => resolveApproval(a, 'reject')}>REJECT</button>
+                    <button className="btn primary sm" disabled={approvalBusy === (a.task || a.id)} onClick={() => resolveApproval(a, 'approve')}>
+                      {approvalBusy === (a.task || a.id) ? 'WORKING' : 'APPROVE'}
+                    </button>
+                    <button className="btn danger sm" disabled={approvalBusy === (a.task || a.id)} onClick={() => resolveApproval(a, 'reject')}>
+                      {approvalBusy === (a.task || a.id) ? 'WORKING' : 'DENY'}
+                    </button>
                     <button className="btn ghost sm" onClick={() => API.command?.('defer-approval', { task_id: a.task || a.id, target: a.target, title: `Defer ${a.title}` })}>DEFER</button>
                     <button className="btn ghost sm" style={{ marginLeft: 'auto' }} onClick={() => API.command?.('open-approval-chat', { task_id: a.task || a.id, target: a.target, title: `Open chat for ${a.title}` })}>OPEN IN CHAT →</button>
                   </div>

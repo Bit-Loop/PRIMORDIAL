@@ -259,6 +259,15 @@ class PrimitiveExecutor:
 
     def resolve_primitives(self, task: Task) -> list[PrimitiveManifest]:
         selected: dict[str, PrimitiveManifest] = {}
+        primitive_hint = str(task.metadata.get("primitive_hint") or "").strip().lower()
+        if primitive_hint:
+            hinted = [
+                manifest
+                for manifest in self.catalog.all()
+                if manifest.name.lower() == primitive_hint
+            ]
+            if hinted:
+                return hinted
         for capability in task.required_capabilities:
             for manifest in self.catalog.by_capability(capability):
                 selected.setdefault(manifest.name, manifest)
@@ -1102,6 +1111,11 @@ class PrimitiveExecutor:
             result.success = False
             result.error = "no host or IP asset is available for credentialed access checks"
             return result
+        surface = task.metadata.get("credentialed_access_surface", {})
+        if isinstance(surface, dict) and surface.get("eligible") is False:
+            result.success = False
+            result.error = str(surface.get("blocked_reason") or "credentialed access surface is not eligible")
+            return result
 
         command_results, auth_results, flag_hits = self._run_credentialed_access_commands(
             task,
@@ -1110,6 +1124,7 @@ class PrimitiveExecutor:
             username,
             password,
             domain,
+            protocols=self._credentialed_access_protocols(task),
         )
         artifact = self._write_artifact(
             task,
@@ -1151,6 +1166,7 @@ class PrimitiveExecutor:
                 "auth_results": auth_results,
                 "flag_hits": flag_hits,
                 "credential_namespace": "known",
+                "protocols": sorted(self._credentialed_access_protocols(task)),
             },
         )
         result.evidence.append(evidence)
@@ -3909,6 +3925,8 @@ class PrimitiveExecutor:
         username: str,
         password: str,
         domain: str,
+        *,
+        protocols: set[str] | None = None,
     ) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
         auth_file = self._write_smb_auth_file(username, password, domain)
         command_results: list[dict[str, object]] = []
@@ -3916,32 +3934,46 @@ class PrimitiveExecutor:
         flag_hits: list[dict[str, object]] = []
         policy = self._active_intent_policy()
         flag_collection_allowed = bool(policy and policy.lab_policy.lab_flag_collection_allowed)
-        smb_result = self._run_secret_host_command(
-            tool="smbclient",
-            argv=["smbclient", "-A", auth_file, "-L", f"//{host}/", "-g", "-m", "SMB3"],
-            redacted_argv=["smbclient", "-A", "<credential-file>", "-L", f"//{host}/", "-g", "-m", "SMB3"],
-            timeout_seconds=25,
-        )
-        command_results.append(smb_result)
-        smb_returncode = smb_result.get("returncode")
-        smb_valid = bool(smb_result.get("executed")) and smb_returncode is not None and int(smb_returncode) == 0
-        auth_results.append({"protocol": "smb", "valid": smb_valid, "tool": "smbclient"})
-        if smb_valid and flag_collection_allowed:
-            flag_hits.extend(self._collect_smb_flags(task, target_id, host, auth_file, username))
-        elif smb_valid:
+        protocols = protocols or {"smb", "winrm"}
+        if "smb" in protocols:
+            smb_result = self._run_secret_host_command(
+                tool="smbclient",
+                argv=["smbclient", "-A", auth_file, "-L", f"//{host}/", "-g", "-m", "SMB3"],
+                redacted_argv=["smbclient", "-A", "<credential-file>", "-L", f"//{host}/", "-g", "-m", "SMB3"],
+                timeout_seconds=25,
+            )
+            command_results.append(smb_result)
+            smb_returncode = smb_result.get("returncode")
+            smb_valid = bool(smb_result.get("executed")) and smb_returncode is not None and int(smb_returncode) == 0
+            auth_results.append({"protocol": "smb", "valid": smb_valid, "tool": "smbclient"})
+            if smb_valid and flag_collection_allowed:
+                flag_hits.extend(self._collect_smb_flags(task, target_id, host, auth_file, username))
+            elif smb_valid:
+                command_results.append(
+                    {
+                        "tool": "smbclient",
+                        "argv": ["smbclient", "-A", "<credential-file>", f"//{host}/C$", "-c", "<flag-collection>"],
+                        "executed": False,
+                        "returncode": None,
+                        "stdout": "",
+                        "stderr": "disabled: active operator intent does not allow lab flag collection",
+                        "timeout": False,
+                    }
+                )
+        else:
             command_results.append(
                 {
                     "tool": "smbclient",
-                    "argv": ["smbclient", "-A", "<credential-file>", f"//{host}/C$", "-c", "<flag-collection>"],
+                    "argv": ["smbclient", "-A", "<credential-file>", "-L", f"//{host}/"],
                     "executed": False,
                     "returncode": None,
                     "stdout": "",
-                    "stderr": "disabled: active operator intent does not allow lab flag collection",
+                    "stderr": "disabled: current credentialed-access surface did not admit SMB",
                     "timeout": False,
                 }
             )
 
-        if os.getenv("PRIMORDIAL_ALLOW_PASSWORD_ARG_TOOLS", "").strip() == "1":
+        if "winrm" in protocols and os.getenv("PRIMORDIAL_ALLOW_PASSWORD_ARG_TOOLS", "").strip() == "1":
             winrm_result = self._run_secret_host_command(
                 tool="netexec",
                 argv=["netexec", "winrm", host, "-u", username, "-p", password, *self._domain_args(domain)],
@@ -3957,7 +3989,7 @@ class PrimitiveExecutor:
                 and (int(winrm_rc) == 0 or "[+]" in stdout or "pwn3d" in stdout.lower())
             )
             auth_results.append({"protocol": "winrm", "valid": valid, "tool": "netexec"})
-        else:
+        elif "winrm" in protocols:
             command_results.append(
                 {
                     "tool": "netexec",
@@ -3970,6 +4002,23 @@ class PrimitiveExecutor:
                 }
             )
         return command_results, auth_results, flag_hits
+
+    def _credentialed_access_protocols(self, task: Task) -> set[str]:
+        raw = task.metadata.get("protocols")
+        if isinstance(raw, list):
+            protocols = {str(item).strip().lower() for item in raw if str(item).strip()}
+            protocols = protocols.intersection({"smb", "winrm"})
+            if protocols:
+                return protocols
+        surface = task.metadata.get("credentialed_access_surface", {})
+        if isinstance(surface, dict):
+            raw_surface = surface.get("protocols")
+            if isinstance(raw_surface, list):
+                protocols = {str(item).strip().lower() for item in raw_surface if str(item).strip()}
+                protocols = protocols.intersection({"smb", "winrm"})
+                if protocols:
+                    return protocols
+        return {"smb", "winrm"}
 
     def _domain_args(self, domain: str) -> list[str]:
         return ["-d", domain] if domain else []

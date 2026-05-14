@@ -9,7 +9,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from primordial.app.runtime import PrimordialRuntime
-from primordial.core.domain.enums import ScopeProfile
+from primordial.core.domain.enums import ScopeProfile, TaskKind
 
 
 @dataclass(slots=True)
@@ -21,6 +21,8 @@ class WebResponse:
 
 
 class PrimordialWebApp:
+    STALE_WEB_ACTION_SECONDS = 900
+
     def __init__(self, runtime: PrimordialRuntime) -> None:
         self.runtime = runtime
         self._lock = RLock()
@@ -49,8 +51,11 @@ class PrimordialWebApp:
             return self._json_response(self.runtime.health_payload())
         if method == "GET" and path == "/api/control-plane":
             target = self._optional_query_string(query, "target")
+            live_metrics = self._bool_param(query, "live_metrics", False)
             with self._lock:
-                return self._json_response(self._control_plane_payload(target=target))
+                return self._json_response(self._control_plane_payload(target=target, live_metrics=live_metrics))
+        if method == "GET" and path == "/api/system-metrics":
+            return self._json_response(self._system_metrics_payload())
         if method == "GET" and path == "/api/self-test":
             with self._lock:
                 return self._json_response(self.runtime.self_test_payload())
@@ -249,6 +254,14 @@ class PrimordialWebApp:
                 "stop-work",
                 self.runtime.stop_active_work,
             )
+        if method == "POST" and path == "/api/actions/clear-stale-web-actions":
+            payload = self._parse_json_body(body)
+            max_age_seconds = self._optional_int(payload, "max_age_seconds") or self.STALE_WEB_ACTION_SECONDS
+            cleared = self._clear_stale_actions(max_age_seconds=max_age_seconds)
+            return self._action_response(
+                "clear-stale-web-actions",
+                {"cleared": cleared, "max_age_seconds": max_age_seconds},
+            )
         if method == "POST" and path == "/api/ui/commands":
             payload = self._parse_json_body(body)
             command = str(payload.get("command", "")).strip()
@@ -345,9 +358,12 @@ class PrimordialWebApp:
         if method == "POST" and path == "/api/credentials/discord":
             payload = self._parse_json_body(body)
             with self._lock:
-                credentials = self.runtime.set_discord_credentials(
-                    webhook_url=self._optional_string(payload, "webhook_url"),
-                )
+                try:
+                    credentials = self.runtime.set_discord_credentials(
+                        webhook_url=self._optional_string(payload, "webhook_url"),
+                    )
+                except ValueError as exc:
+                    return self._json_response({"error": str(exc)}, status=400)
                 return self._action_response("set-discord-credentials", {"credentials": credentials})
         if method == "POST" and path == "/api/credentials/known":
             payload = self._parse_json_body(body)
@@ -385,6 +401,7 @@ class PrimordialWebApp:
                 "Ask operator AI",
                 "operator-chat",
                 lambda: {"chat": self.runtime.ask_operator_ai(message, target=target)},
+                use_runtime_lock=False,
             )
         if method == "DELETE" and path.startswith("/api/credentials/"):
             service = unquote(path.rsplit("/", 1)[-1])
@@ -406,21 +423,32 @@ class PrimordialWebApp:
             if not isinstance(assets, list):
                 return self._json_response({"error": "assets must be a list"}, status=400)
             active_ip = self._optional_string(payload, "active_ip")
+            replace_scope_assets = bool(payload.get("replace_scope_assets", False))
             try:
-                parsed_profile = ScopeProfile(profile)
+                parsed_profile = self.runtime.resolve_scope_profile(profile)
             except ValueError:
                 return self._json_response({"error": "invalid profile"}, status=400)
             with self._lock:
                 try:
-                    target = self.runtime.update_target_fields(
-                        handle=handle,
-                        display_name=payload.get("display_name") and str(payload["display_name"]),
-                        profile=parsed_profile,
-                        assets=assets or [handle],
-                        active_ip=active_ip,
-                        in_scope=bool(payload.get("in_scope", True)),
-                        metadata=dict(payload.get("metadata", {})) if isinstance(payload.get("metadata", {}), dict) else {},
-                    )
+                    if replace_scope_assets:
+                        target = self.runtime.replace_target_scope_assets(
+                            handle=handle,
+                            display_name=payload.get("display_name") and str(payload["display_name"]) or handle,
+                            profile=parsed_profile,
+                            in_scope=bool(payload.get("in_scope", True)),
+                            active_ip=active_ip,
+                            asset_rows=self._target_asset_rows(handle, active_ip, assets),
+                        )
+                    else:
+                        target = self.runtime.update_target_fields(
+                            handle=handle,
+                            display_name=payload.get("display_name") and str(payload["display_name"]),
+                            profile=parsed_profile,
+                            assets=assets or [handle],
+                            active_ip=active_ip,
+                            in_scope=bool(payload.get("in_scope", True)),
+                            metadata=dict(payload.get("metadata", {})) if isinstance(payload.get("metadata", {}), dict) else {},
+                        )
                 except ValueError as exc:
                     return self._json_response({"error": str(exc)}, status=400)
                 return self._action_response("register-target", {"target": target.as_payload()})
@@ -429,7 +457,7 @@ class PrimordialWebApp:
             scope_payload = payload.get("scope", payload)
             profile = payload.get("profile")
             try:
-                parsed_profile = ScopeProfile(str(profile)) if profile else None
+                parsed_profile = self.runtime.resolve_scope_profile(str(profile)) if profile else None
                 if not isinstance(scope_payload, dict):
                     return self._json_response({"error": "scope must be an object"}, status=400)
                 with self._lock:
@@ -461,24 +489,29 @@ class PrimordialWebApp:
         report = self.runtime.run_tick(max_executions=max_executions)
         return {"report": {"summary": report.summary, "completed_runs": len(report.completed_runs)}}
 
-    def _run_tracked_action(self, label: str, action: str, worker) -> WebResponse:
+    def _run_tracked_action(self, label: str, action: str, worker, *, use_runtime_lock: bool = True) -> WebResponse:
         action_id = self._begin_action(label)
         try:
-            with self._lock:
+            if use_runtime_lock:
+                with self._lock:
+                    result = worker()
+            else:
                 result = worker()
             return self._action_response(action, result)
         finally:
             self._finish_action(action_id)
 
     def _begin_action(self, label: str) -> str:
-        action_id = f"web_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')}"
+        started = datetime.now(timezone.utc)
+        action_id = f"web_{started.strftime('%Y%m%dT%H%M%S%fZ')}"
         with self._actions_lock:
             self._active_actions[action_id] = {
                 "id": action_id,
                 "kind": "web_action",
                 "label": label,
                 "status": "running",
-                "started_at": datetime.now(timezone.utc).isoformat(),
+                "started_at": started.isoformat(),
+                "started_at_epoch": started.timestamp(),
             }
         return action_id
 
@@ -487,8 +520,33 @@ class PrimordialWebApp:
             self._active_actions.pop(action_id, None)
 
     def _active_web_actions(self) -> list[dict[str, Any]]:
+        now = datetime.now(timezone.utc).timestamp()
         with self._actions_lock:
-            return list(self._active_actions.values())
+            actions = []
+            for action in self._active_actions.values():
+                item = {key: value for key, value in action.items() if key != "started_at_epoch"}
+                started_at_epoch = action.get("started_at_epoch")
+                age_seconds = int(max(0, now - float(started_at_epoch))) if started_at_epoch is not None else 0
+                item["age_seconds"] = age_seconds
+                item["stale_after_seconds"] = self.STALE_WEB_ACTION_SECONDS
+                item["stale"] = age_seconds >= self.STALE_WEB_ACTION_SECONDS
+                if item["stale"]:
+                    item["status"] = "stale"
+                actions.append(item)
+            return actions
+
+    def _clear_stale_actions(self, *, max_age_seconds: int) -> int:
+        now = datetime.now(timezone.utc).timestamp()
+        cleared = 0
+        with self._actions_lock:
+            for action_id, action in list(self._active_actions.items()):
+                started_at_epoch = action.get("started_at_epoch")
+                if started_at_epoch is None:
+                    continue
+                if now - float(started_at_epoch) >= max(1, max_age_seconds):
+                    self._active_actions.pop(action_id, None)
+                    cleared += 1
+        return cleared
 
     def _dashboard_payload(self) -> dict[str, Any]:
         payload = self.runtime.dashboard_payload()
@@ -502,9 +560,16 @@ class PrimordialWebApp:
             payload = dict(payload)
             payload["web_actions"] = web_actions
             payload["is_busy"] = True
-            payload["summary"] = f"Web console is running {len(web_actions)} action(s)."
+            stale_count = sum(1 for action in web_actions if action.get("stale"))
+            if stale_count:
+                payload["summary"] = (
+                    f"Web console has {stale_count} stale action(s); runtime work may have continued in the background."
+                )
+            else:
+                payload["summary"] = f"Web console is running {len(web_actions)} action(s)."
             counts = dict(payload.get("counts", {}))
             counts["web_actions"] = len(web_actions)
+            counts["stale_web_actions"] = stale_count
             payload["counts"] = counts
         else:
             payload["web_actions"] = []
@@ -519,25 +584,59 @@ class PrimordialWebApp:
             return {"ran": True, "interval_seconds": mode.get("interval_seconds", 30), "summary": report.summary}
 
     def _action_response(self, action: str, result: dict[str, Any]) -> WebResponse:
-        return self._json_response(
-            {
-                "ok": True,
-                "action": action,
-                "result": result,
-                "dashboard": self._dashboard_payload(),
-                "scope": self.runtime.scope_payload(),
-                "audit": self.runtime.audit_payload(limit=12),
-                "credentials": self.runtime.credentials_payload(),
-                "skills": self.runtime.skills_payload(include_body=False),
-                "caido": self.runtime.caido_status_payload(check_health=False),
-                "findings_context": self.runtime.findings_context_payload(include_guidance=False),
-                "models": self.runtime.models_payload(),
-                "execution_mode": self.runtime.execution_mode_payload(),
-                "operator_intent": self.runtime.operator_intent_payload(),
-                "work_status": self.work_status_payload(),
-                "control_plane": self._control_plane_payload(),
-            }
-        )
+        payload: dict[str, Any] = {
+            "ok": True,
+            "action": action,
+            "result": result,
+            "work_status": self.work_status_payload(),
+        }
+        if isinstance(result, dict):
+            for key in (
+                "execution_mode",
+                "runtime_tuning",
+                "operator_intent",
+                "credentials",
+                "target",
+                "models",
+                "caido",
+                "findings_context",
+            ):
+                if key in result:
+                    payload[key] = result[key]
+        return self._json_response(payload)
+
+    def _target_asset_rows(
+        self,
+        handle: str,
+        active_ip: str | None,
+        assets: list[Any],
+    ) -> list[dict[str, object]]:
+        rows: list[dict[str, object]] = []
+        seen: set[str] = set()
+
+        def add(asset: str, asset_type: str | None = None, metadata: dict[str, object] | None = None) -> None:
+            raw_asset = str(asset or "").strip()
+            if not raw_asset or raw_asset in seen:
+                return
+            seen.add(raw_asset)
+            row: dict[str, object] = {"asset": raw_asset, "asset_type": asset_type or self.runtime._infer_asset_type(raw_asset)}
+            if metadata:
+                row["metadata"] = metadata
+            rows.append(row)
+
+        add(handle, "hostname")
+        for item in assets:
+            if isinstance(item, dict):
+                add(
+                    str(item.get("asset") or ""),
+                    str(item.get("asset_type") or "") or None,
+                    dict(item.get("metadata", {})) if isinstance(item.get("metadata"), dict) else None,
+                )
+            else:
+                add(str(item or ""))
+        if active_ip:
+            add(active_ip, "ip", {"active": True, "operator_confirmed": True})
+        return rows or [{"asset": handle, "asset_type": "hostname"}]
 
     def _static_asset_response(self, raw_path: str) -> WebResponse | None:
         asset = unquote(raw_path.lstrip("/"))
@@ -638,8 +737,11 @@ class PrimordialWebApp:
             return None
         return values[0].strip() or None
 
-    def _control_plane_payload(self, *, target: str | None = None) -> dict[str, Any]:
+    def _control_plane_payload(self, *, target: str | None = None, live_metrics: bool = False) -> dict[str, Any]:
         dashboard = self.runtime.dashboard_payload()
+        if live_metrics:
+            dashboard = dict(dashboard)
+            dashboard["system_metrics"] = self.runtime.system_metrics_payload(force_refresh=True)
         work_status = self.work_status_payload()
         scope = self.runtime.scope_payload()
         scope_profiles = self.runtime.scope_profiles_payload()
@@ -738,6 +840,22 @@ class PrimordialWebApp:
                     "clearModels": "/api/actions/clear-models",
                     "uiCommands": "/api/ui/commands",
                 },
+            },
+        }
+
+    def _system_metrics_payload(self) -> dict[str, Any]:
+        metrics = self.runtime.system_metrics_payload(force_refresh=True)
+        network = metrics.get("network", {}) if isinstance(metrics.get("network"), dict) else {}
+        gpu_metrics = metrics.get("gpu", {}) if isinstance(metrics.get("gpu"), dict) else {}
+        return {
+            "systemMetrics": metrics,
+            "runtime": {
+                "cpu": self._metric_ratio(metrics, "cpu"),
+                "gpu": self._metric_ratio(metrics, "gpu"),
+                "mem": self._memory_ratio(metrics),
+                "netIn": str(network.get("rx_label") or "0 B/s"),
+                "netOut": str(network.get("tx_label") or "0 B/s"),
+                "gpuMemory": self._gpu_memory_payload(gpu_metrics),
             },
         }
 
@@ -858,7 +976,80 @@ class PrimordialWebApp:
                     "raw": task,
                 },
             )
-        return list(by_id.values())[:100]
+        items = [item for item in by_id.values() if not self._hide_task_item(item)]
+        for item in items:
+            hint = self._task_hint(item)
+            if hint:
+                item["hint"] = hint
+        return self._group_task_items(items)[:100]
+
+    def _hide_task_item(self, item: dict[str, Any]) -> bool:
+        raw = item.get("raw", {}) if isinstance(item.get("raw"), dict) else {}
+        metadata = raw.get("metadata", {}) if isinstance(raw.get("metadata"), dict) else {}
+        if raw.get("invalid_target") or metadata.get("invalid_target"):
+            return True
+        if (
+            item.get("target") in {"", "*"}
+            and item.get("kind") == TaskKind.RECON_SCAN.value
+            and item.get("status") in {"blocked", "failed"}
+        ):
+            return True
+        return False
+
+    def _task_hint(self, item: dict[str, Any]) -> str:
+        if (
+            item.get("status") == "queued"
+            and item.get("route") == "local_compact"
+            and item.get("model") == "phi4-reasoning"
+        ):
+            return "Missing local model hint: phi4-reasoning is selected for local_compact; warm/install it or change the role."
+        return ""
+
+    def _group_task_items(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        grouped: dict[tuple[str, str, str, str], list[dict[str, Any]]] = {}
+        for item in items:
+            if item.get("status") != "done":
+                continue
+            key = self._task_group_key(item)
+            grouped.setdefault(key, []).append(item)
+
+        result: list[dict[str, Any]] = []
+        emitted: set[tuple[str, str, str, str]] = set()
+        for item in items:
+            if item.get("status") != "done":
+                result.append(item)
+                continue
+            key = self._task_group_key(item)
+            members = grouped.get(key, [])
+            if len(members) <= 1:
+                result.append(item)
+                continue
+            if key in emitted:
+                continue
+            emitted.add(key)
+            first = members[0]
+            result.append(
+                {
+                    **first,
+                    "id": f"group:{key[0]}:{key[1]}:{key[2]}:{key[3]}",
+                    "title": f"{first.get('kind', 'task')} completed {len(members)} times",
+                    "grouped": True,
+                    "grouped_count": len(members),
+                    "raw": {"grouped_task_ids": [member.get("id") for member in members], "sample": first.get("raw", {})},
+                }
+            )
+        return result
+
+    def _task_group_key(self, item: dict[str, Any]) -> tuple[str, str, str, str]:
+        raw = item.get("raw", {}) if isinstance(item.get("raw"), dict) else {}
+        metadata = raw.get("metadata", {}) if isinstance(raw.get("metadata"), dict) else {}
+        generation = str(raw.get("active_ip_generation") or metadata.get("active_ip_generation") or "")
+        return (
+            str(item.get("target") or "*"),
+            str(item.get("kind") or "task"),
+            str(item.get("route") or ""),
+            generation,
+        )
 
     def _approvals_view(self, work_status: dict[str, Any], tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
         pending = []
@@ -1262,7 +1453,7 @@ class PrimordialWebApp:
     def _caido_view(self, status: dict[str, Any], records: dict[str, Any], targets: list[dict[str, Any]]) -> dict[str, Any]:
         scope_rows = self._scope_view(targets)
         host = scope_rows[0]["handle"] if scope_rows else ""
-        presets_payload = self.runtime.caido_httpql_presets(host if host else None)
+        presets_payload = self.runtime.caido_httpql_presets()
         requests = [
             {
                 "id": str(item.get("id") or f"req_{index}"),

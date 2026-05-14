@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import tempfile
 import unittest
@@ -33,7 +34,7 @@ class CaidoAndSkillTests(unittest.TestCase):
             store.update_service(
                 "caido",
                 {
-                    "graphql_url": "http://127.0.0.1:8080/graphql",
+                    "graphql_url": CaidoIntegrationService.DEFAULT_GRAPHQL_URL,
                     "api_token": "secret-token",
                 },
             )
@@ -63,8 +64,51 @@ class CaidoAndSkillTests(unittest.TestCase):
                 health = service.health()
 
             self.assertTrue(health["ok"])
-            self.assertEqual(captured["url"], "http://127.0.0.1:8080/graphql")
+            self.assertEqual(captured["url"], CaidoIntegrationService.DEFAULT_GRAPHQL_URL)
             self.assertEqual(captured["headers"]["Authorization"], "Bearer secret-token")
+
+    def test_caido_legacy_default_url_is_normalized_to_8650(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            legacy_url = "http://127.0.0.1:8080/graphql"
+            store = CredentialStore(Path(temp_dir) / "secrets" / "credentials.json")
+            store.initialize()
+            store.update_service(
+                "caido",
+                {
+                    "graphql_url": legacy_url,
+                    "api_token": "secret-token",
+                },
+            )
+            service = CaidoIntegrationService(store)
+
+            status = service.status()
+
+            self.assertEqual(status["graphql_url"], CaidoIntegrationService.DEFAULT_GRAPHQL_URL)
+            self.assertEqual(status["graphql_url_migrated_from"], legacy_url)
+
+            class FakeResponse:
+                status = 200
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *_args):
+                    return False
+
+                def read(self):
+                    return json.dumps({"data": {"__typename": "Query"}}).encode("utf-8")
+
+            captured = {}
+
+            def fake_urlopen(req, timeout):
+                captured["url"] = req.full_url
+                return FakeResponse()
+
+            with patch("primordial.adapters.caido.request.urlopen", side_effect=fake_urlopen):
+                health = service.health()
+
+            self.assertTrue(health["ok"])
+            self.assertEqual(captured["url"], CaidoIntegrationService.DEFAULT_GRAPHQL_URL)
 
     def test_caido_search_and_detail_are_normalized_and_redacted(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -195,12 +239,51 @@ class CaidoAndSkillTests(unittest.TestCase):
                 {},
                 None,
             )
-            err.fp = type("Body", (), {"read": lambda _self: b"bad secret-token"})()
+            err.fp = io.BytesIO(b"bad secret-token")
             with patch("primordial.adapters.caido.request.urlopen", side_effect=err):
                 result = service.graphql("query { __typename }")
 
             self.assertFalse(result["ok"])
+            self.assertTrue(result["auth_error"])
             self.assertNotIn("secret-token", json.dumps(result))
+
+    def test_caido_status_marks_unauthorized_as_auth_failed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = CredentialStore(Path(temp_dir) / "secrets" / "credentials.json")
+            store.initialize()
+            store.update_service(
+                "caido",
+                {
+                    "graphql_url": CaidoIntegrationService.DEFAULT_GRAPHQL_URL,
+                    "api_token": "secret-token",
+                },
+            )
+            service = CaidoIntegrationService(store)
+            calls = []
+
+            def unauthorized(*_args, **_kwargs):
+                calls.append("call")
+                err = __import__("urllib.error").error.HTTPError(
+                    CaidoIntegrationService.DEFAULT_GRAPHQL_URL,
+                    401,
+                    "Unauthorized",
+                    {},
+                    None,
+                )
+                err.fp = io.BytesIO(b'{"error":"Unauthorized","token":"secret-token"}')
+                raise err
+
+            with patch("primordial.adapters.caido.request.urlopen", side_effect=unauthorized):
+                status = service.status(check_health=True)
+
+            serialized = json.dumps(status)
+            self.assertFalse(status["ok"])
+            self.assertTrue(status["auth_error"])
+            self.assertEqual(status["status_code"], 401)
+            self.assertFalse(status["schema"]["ok"])
+            self.assertEqual(len(calls), 1)
+            self.assertIn("Unauthorized", serialized)
+            self.assertNotIn("secret-token", serialized)
 
     def test_skills_are_loaded_into_runtime_payload(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -10,6 +10,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from primordial.app.runtime import PrimordialRuntime
+from primordial.adapters.caido import CaidoIntegrationService
 from primordial.core.doctor import dumps_doctor_json, format_doctor_report, run_doctor
 from primordial.core.domain.enums import MethodologyName, ScopeProfile
 from primordial.core.startup import StartupPreflightError, run_startup_preflight
@@ -128,6 +129,53 @@ def build_parser() -> argparse.ArgumentParser:
     findings_show.add_argument("--json", action="store_true")
     findings_sync = findings_subparsers.add_parser("sync", help="Regenerate local Notion export mirrors from runtime state.")
     findings_sync.add_argument("--json", action="store_true")
+
+    rag = subparsers.add_parser("rag", help="Import selected local documents and search cited RAG chunks.")
+    rag_subparsers = rag.add_subparsers(dest="rag_command")
+    rag_ingest = rag_subparsers.add_parser("ingest", help="Import one selected local document for a scoped target.")
+    rag_ingest.add_argument("path")
+    rag_ingest.add_argument("--target", required=True, help="Target handle or ID.")
+    rag_ingest.add_argument(
+        "--corpus-type",
+        default="operator_note",
+        choices=["operator_note", "cve_advisory", "exploit_note", "htb_writeup"],
+        help="How Primordial should treat the imported RAG material.",
+    )
+    rag_ingest.add_argument("--source-trust", help="Optional source trust label stored with chunks.")
+    rag_ingest.add_argument(
+        "--hint-policy",
+        choices=["advisory", "direct_task_hints", "disabled"],
+        help="Whether tagged RAG material may produce planner task hints.",
+    )
+    rag_ingest.add_argument(
+        "--approve-url",
+        action="store_true",
+        help="Explicitly approve fetching and ingesting an http(s) URL.",
+    )
+    rag_ingest.add_argument("--no-docling", action="store_true", help="Disable optional Docling conversion.")
+    rag_ingest.add_argument("--no-embed", action="store_true", help="Store chunks without creating embeddings.")
+    rag_ingest.add_argument("--json", action="store_true")
+    rag_search = rag_subparsers.add_parser("search", help="Search imported document chunks for a target.")
+    rag_search.add_argument("query", nargs="+")
+    rag_search.add_argument("--target", required=True, help="Target handle or ID.")
+    rag_search.add_argument("--limit", type=int, default=5)
+    rag_search.add_argument(
+        "--corpus-type",
+        action="append",
+        choices=["operator_note", "cve_advisory", "exploit_note", "htb_writeup"],
+        help="Filter by corpus type. Repeat for multiple types.",
+    )
+    rag_search.add_argument("--json", action="store_true")
+    rag_cve_search = rag_subparsers.add_parser("cve-search", help="Search CVE advisory and exploit-note RAG chunks.")
+    rag_cve_search.add_argument("query", nargs="+")
+    rag_cve_search.add_argument("--target", required=True, help="Target handle or ID.")
+    rag_cve_search.add_argument("--limit", type=int, default=5)
+    rag_cve_search.add_argument("--json", action="store_true")
+    rag_hints = rag_subparsers.add_parser("hints", help="Show policy-gated direct task hints from tagged RAG chunks.")
+    rag_hints.add_argument("query", nargs="*")
+    rag_hints.add_argument("--target", required=True, help="Target handle or ID.")
+    rag_hints.add_argument("--limit", type=int, default=8)
+    rag_hints.add_argument("--json", action="store_true")
 
     ask = subparsers.add_parser("ask", help="Ask the bounded operator AI about current Primordial state.")
     ask.add_argument("message", nargs="+")
@@ -362,10 +410,11 @@ def main(argv: list[str] | None = None) -> int:
                 print(_format_credentials_status(runtime.credentials_payload()))
                 return 0
             if credentials_command == "set-caido":
+                default_graphql_url = CaidoIntegrationService.DEFAULT_GRAPHQL_URL
                 graphql_url = (
                     args.graphql_url
                     if args.graphql_url is not None
-                    else input("Caido GraphQL URL: ").strip()
+                    else input(f"Caido GraphQL URL [{default_graphql_url}]: ").strip()
                 )
                 api_token = (
                     args.api_token
@@ -415,6 +464,52 @@ def main(argv: list[str] | None = None) -> int:
                     for item in payload["synced"]:
                         workspace = item["workspace"]
                         print(f"{item['target']}: {workspace['notion_export_path']}")
+                return 0
+        if command == "rag":
+            rag_command = args.rag_command
+            if rag_command is None:
+                parser.error("rag requires a subcommand: ingest, search, cve-search, or hints")
+            if rag_command == "ingest":
+                payload = runtime.rag_ingest_document(
+                    args.path,
+                    target=args.target,
+                    use_docling=not args.no_docling,
+                    embed=not args.no_embed,
+                    corpus_type=args.corpus_type,
+                    source_trust=args.source_trust,
+                    hint_policy=args.hint_policy,
+                    allow_remote_url=args.approve_url,
+                )
+                if args.json:
+                    print(json.dumps(payload, indent=2, sort_keys=True))
+                else:
+                    print(_format_rag_ingest(payload))
+                return 0
+            if rag_command == "search":
+                payload = runtime.rag_search(
+                    " ".join(args.query),
+                    target=args.target,
+                    limit=args.limit,
+                    corpus_types=args.corpus_type,
+                )
+                if args.json:
+                    print(json.dumps(payload, indent=2, sort_keys=True))
+                else:
+                    print(_format_rag_search(payload))
+                return 0
+            if rag_command == "cve-search":
+                payload = runtime.rag_cve_search(" ".join(args.query), target=args.target, limit=args.limit)
+                if args.json:
+                    print(json.dumps(payload, indent=2, sort_keys=True))
+                else:
+                    print(_format_rag_search(payload))
+                return 0
+            if rag_command == "hints":
+                payload = runtime.rag_hints(" ".join(args.query), target=args.target, limit=args.limit)
+                if args.json:
+                    print(json.dumps(payload, indent=2, sort_keys=True))
+                else:
+                    print(_format_rag_hints(payload))
                 return 0
         if command == "ask":
             payload = runtime.ask_operator_ai(" ".join(args.message), target=args.target)
@@ -539,6 +634,82 @@ def _format_findings_context(payload: dict[str, object]) -> str:
             workspace = item.get("workspace", {})
             if isinstance(target, dict) and isinstance(workspace, dict):
                 lines.append(f"{target.get('handle')}: {workspace.get('target_dir')}")
+    return "\n".join(lines)
+
+
+def _format_rag_ingest(payload: dict[str, object]) -> str:
+    evidence = payload.get("evidence", {})
+    evidence_id = evidence.get("id") if isinstance(evidence, dict) else "none"
+    lines = [
+        f"source={payload.get('source_path')}",
+        f"source_ref={payload.get('source_ref')}",
+        f"sha256={payload.get('source_sha256')}",
+        f"corpus_type={payload.get('corpus_type')}",
+        f"source_trust={payload.get('source_trust')}",
+        f"hint_policy={payload.get('hint_policy')}",
+        f"converter={payload.get('converter')}",
+        f"evidence={evidence_id}",
+        f"chunks={payload.get('chunk_count')}",
+        f"embeddings={payload.get('embedding_count')} model={payload.get('embedding_model') or 'none'}",
+        f"redactions={payload.get('redaction_count')}",
+    ]
+    artifacts = payload.get("artifacts", [])
+    if isinstance(artifacts, list):
+        for artifact in artifacts:
+            if isinstance(artifact, dict):
+                lines.append(f"artifact={artifact.get('id')} {artifact.get('path')}")
+    return "\n".join(lines)
+
+
+def _format_rag_search(payload: dict[str, object]) -> str:
+    lines = [f"query={payload.get('query')}"]
+    results = payload.get("results", [])
+    if not isinstance(results, list) or not results:
+        lines.append("No RAG chunks matched.")
+        return "\n".join(lines)
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        evidence_refs = result.get("evidence_refs", [])
+        evidence = ",".join(str(item) for item in evidence_refs) if isinstance(evidence_refs, list) else ""
+        text = str(result.get("text") or "").replace("\n", " ")
+        if len(text) > 220:
+            text = text[:220].rstrip() + "..."
+        classification = result.get("applicability_classification")
+        classification_part = f" applicability={classification}" if classification else ""
+        lines.append(
+            f"{result.get('chunk_id')} score={result.get('score')} "
+            f"evidence={evidence or 'none'}{classification_part} title={result.get('title')}"
+        )
+        lines.append(f"  {text}")
+    return "\n".join(lines)
+
+
+def _format_rag_hints(payload: dict[str, object]) -> str:
+    lines = [f"query={payload.get('query')}"]
+    actions = payload.get("candidate_actions", [])
+    hints = payload.get("hints", {})
+    if isinstance(actions, list) and actions:
+        lines.append("Accepted candidate actions:")
+        for action in actions:
+            if not isinstance(action, dict):
+                continue
+            metadata = action.get("metadata", {})
+            chunk_ids = metadata.get("supporting_rag_chunk_ids", []) if isinstance(metadata, dict) else []
+            chunk_text = ",".join(str(item) for item in chunk_ids) if isinstance(chunk_ids, list) else ""
+            classification = metadata.get("rag_applicability_classification") if isinstance(metadata, dict) else ""
+            lines.append(
+                f"- {action.get('kind')} {action.get('title')} "
+                f"classification={classification or 'unknown'} rag={chunk_text or 'none'}"
+            )
+    else:
+        lines.append("No RAG task hints were admitted.")
+    rejected = hints.get("rejected", []) if isinstance(hints, dict) else []
+    if isinstance(rejected, list) and rejected:
+        lines.append("Rejected hints:")
+        for item in rejected[:8]:
+            if isinstance(item, dict):
+                lines.append(f"- {item.get('title')} ({item.get('reason')})")
     return "\n".join(lines)
 
 

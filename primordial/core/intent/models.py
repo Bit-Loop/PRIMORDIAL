@@ -36,11 +36,13 @@ class CredentialPolicy:
 class LabPolicy:
     lab_flag_collection_allowed: bool = False
     htb_lab_behavior_allowed: bool = False
+    reverse_shell_allowed: bool = False
 
     def as_payload(self) -> dict[str, bool]:
         return {
             "lab_flag_collection_allowed": self.lab_flag_collection_allowed,
             "htb_lab_behavior_allowed": self.htb_lab_behavior_allowed,
+            "reverse_shell_allowed": self.reverse_shell_allowed,
         }
 
 

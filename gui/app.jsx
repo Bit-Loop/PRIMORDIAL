@@ -1,5 +1,10 @@
 /* global React, ReactDOM, DashboardMode, TraceMode, ChatMode, PlanMode, NotesMode, InterestsMode, CaidoMode, Rail */
 const { useState: useStateApp, useEffect: useEffectApp, useMemo: useMemoApp, useCallback: useCallbackApp } = React;
+const LIVE_REFRESH_MS = 2000;
+const FULL_REFRESH_MS = 8000;
+const REQUEST_TIMEOUT_MS = 60000;
+const REFRESH_TIMEOUT_MS = 6000;
+const WORK_STATUS_TIMEOUT_MS = 3000;
 
 const TWEAKS = /*EDITMODE-BEGIN*/{
   "accent": "cyan",
@@ -78,19 +83,32 @@ function mergePDData(payload) {
 }
 
 async function apiRequest(path, options = {}) {
+  const { timeoutMs = REQUEST_TIMEOUT_MS, ...fetchOptions } = options;
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   const init = {
-    ...options,
+    ...fetchOptions,
+    signal: controller.signal,
     headers: {
       'Content-Type': 'application/json',
-      ...(options.headers || {}),
+      ...(fetchOptions.headers || {}),
     },
   };
   if (init.body && typeof init.body !== 'string') init.body = JSON.stringify(init.body);
-  const response = await fetch(path, init);
-  const text = await response.text();
-  const payload = text ? JSON.parse(text) : {};
-  if (!response.ok) throw new Error(payload.error || `${response.status} ${response.statusText}`);
-  return payload;
+  try {
+    const response = await fetch(path, init);
+    const text = await response.text();
+    const payload = text ? JSON.parse(text) : {};
+    if (!response.ok) throw new Error(payload.error || `${response.status} ${response.statusText}`);
+    return payload;
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      throw new Error(`Request timed out for ${path}; the server may still be running it.`);
+    }
+    throw err;
+  } finally {
+    window.clearTimeout(timer);
+  }
 }
 
 function App() {
@@ -99,36 +117,144 @@ function App() {
   const [data, setData] = useStateApp(() => mergePDData(window.__PD_BOOTSTRAP));
   const [error, setError] = useStateApp('');
   const [busy, setBusy] = useStateApp('');
+  const activeRefreshes = React.useRef(0);
+  const activeMetricRefreshes = React.useRef(0);
 
-  const loadReal = useCallbackApp(async () => {
-    setBusy('refresh');
+  const applyActionPayload = useCallbackApp((payload) => {
+    if (!payload || typeof payload !== 'object') return;
+    setData(previous => {
+      const next = mergePDData(previous);
+      if (payload.work_status) {
+        const counts = payload.work_status.counts || {};
+        next.runtime = {
+          ...next.runtime,
+          workStatus: payload.work_status,
+          activeTasks: Number(counts.active ?? next.runtime.activeTasks) || 0,
+          queued: Number(counts.queued ?? next.runtime.queued) || 0,
+        };
+      }
+      if (payload.execution_mode) next.runtime.executionMode = payload.execution_mode;
+      if (payload.runtime_tuning) next.runtime.runtimeTuning = payload.runtime_tuning;
+      if (payload.operator_intent) {
+        next.runtime.operatorIntent = payload.operator_intent;
+        next.runtime.intent = payload.operator_intent?.active?.id || payload.operator_intent?.default || next.runtime.intent;
+      }
+      if (payload.credentials) next.credentials = payload.credentials;
+      if (payload.models) next.modelPayload = payload.models;
+      window.PD_DATA = next;
+      return next;
+    });
+  }, []);
+
+  const applyMetricsPayload = useCallbackApp((payload) => {
+    if (!payload || typeof payload !== 'object' || !payload.runtime) return;
+    setData(previous => {
+      const next = mergePDData({
+        ...previous,
+        runtime: {
+          ...previous.runtime,
+          ...payload.runtime,
+          systemMetrics: payload.systemMetrics || previous.runtime.systemMetrics,
+        },
+      });
+      window.PD_DATA = next;
+      return next;
+    });
+  }, []);
+
+  const loadReal = useCallbackApp(async (options = {}) => {
+    const silent = !!options.silent;
+    if (silent && activeRefreshes.current > 0) return;
+    activeRefreshes.current += 1;
+    if (!silent) setBusy('refresh');
     try {
-      const payload = await apiRequest('/api/control-plane');
+      const payload = await apiRequest('/api/control-plane?live_metrics=1', {
+        timeoutMs: options.timeoutMs || (silent ? REFRESH_TIMEOUT_MS : REQUEST_TIMEOUT_MS),
+      });
       const merged = mergePDData(payload);
       window.PD_DATA = merged;
       setData(merged);
       setError('');
+      return merged;
     } catch (err) {
       setError(err.message || String(err));
+      throw err;
     } finally {
-      setBusy('');
+      activeRefreshes.current = Math.max(0, activeRefreshes.current - 1);
+      if (!silent) setBusy('');
     }
   }, []);
 
+  const loadMetrics = useCallbackApp(async () => {
+    if (activeMetricRefreshes.current > 0) return;
+    activeMetricRefreshes.current += 1;
+    try {
+      const payload = await apiRequest('/api/system-metrics', { timeoutMs: WORK_STATUS_TIMEOUT_MS });
+      applyMetricsPayload(payload);
+      return payload;
+    } catch (err) {
+      if (!document.hidden) setError(err.message || String(err));
+      return null;
+    } finally {
+      activeMetricRefreshes.current = Math.max(0, activeMetricRefreshes.current - 1);
+    }
+  }, [applyMetricsPayload]);
+
   useEffectApp(() => {
-    loadReal();
-  }, [loadReal]);
+    loadReal({ silent: true, timeoutMs: REQUEST_TIMEOUT_MS }).catch(() => {});
+    loadMetrics();
+    const metricsTimer = window.setInterval(() => loadMetrics(), LIVE_REFRESH_MS);
+    const fullTimer = window.setInterval(() => loadReal({ silent: true }).catch(() => {}), FULL_REFRESH_MS);
+    const refreshOnFocus = () => {
+      if (!document.hidden) {
+        loadMetrics();
+        loadReal({ silent: true }).catch(() => {});
+      }
+    };
+    document.addEventListener('visibilitychange', refreshOnFocus);
+    return () => {
+      window.clearInterval(metricsTimer);
+      window.clearInterval(fullTimer);
+      document.removeEventListener('visibilitychange', refreshOnFocus);
+    };
+  }, [loadMetrics, loadReal]);
+
+  const refreshWorkStatus = useCallbackApp(async () => {
+    const payload = await apiRequest('/api/work-status', { timeoutMs: WORK_STATUS_TIMEOUT_MS });
+    applyActionPayload({ work_status: payload });
+    setError('');
+    return payload;
+  }, [applyActionPayload]);
+
+  const refreshInBackground = useCallbackApp((kind = 'full') => {
+    const worker = kind === 'work'
+      ? refreshWorkStatus()
+      : loadReal({ silent: true, timeoutMs: REFRESH_TIMEOUT_MS });
+    worker.catch(err => setError(err.message || String(err)));
+  }, [loadReal, refreshWorkStatus]);
+
+  const refreshKindForPath = (path) => (
+    path === '/api/execution-mode'
+    || path === '/api/runtime-settings'
+    || path === '/api/operator-intent'
+    || path.startsWith('/api/actions/')
+  ) ? 'work' : 'full';
 
   const api = useMemoApp(() => ({
     busy,
-    refresh: () => loadReal(),
+    refresh: () => loadReal().catch(() => null),
     request: apiRequest,
     action: async (name, body = {}) => {
       setBusy(name);
       try {
         const payload = await apiRequest(`/api/actions/${name}`, { method: 'POST', body });
-        await loadReal();
+        applyActionPayload(payload);
+        refreshInBackground('work');
+        setError('');
         return payload;
+      } catch (err) {
+        setError(err.message || String(err));
+        throw err;
       } finally {
         setBusy('');
       }
@@ -136,9 +262,18 @@ function App() {
     post: async (path, body = {}) => {
       setBusy(path);
       try {
-        const payload = await apiRequest(path, { method: 'POST', body });
-        await loadReal();
+        const payload = await apiRequest(path, {
+          method: 'POST',
+          body,
+          timeoutMs: path === '/api/chat' ? 120000 : REQUEST_TIMEOUT_MS,
+        });
+        applyActionPayload(payload);
+        refreshInBackground(refreshKindForPath(path));
+        setError('');
         return payload;
+      } catch (err) {
+        setError(err.message || String(err));
+        throw err;
       } finally {
         setBusy('');
       }
@@ -147,8 +282,13 @@ function App() {
       setBusy(path);
       try {
         const payload = await apiRequest(path, { method: 'DELETE' });
-        await loadReal();
+        applyActionPayload(payload);
+        refreshInBackground('full');
+        setError('');
         return payload;
+      } catch (err) {
+        setError(err.message || String(err));
+        throw err;
       } finally {
         setBusy('');
       }
@@ -157,16 +297,22 @@ function App() {
       setBusy(command);
       try {
         const payload = await apiRequest('/api/ui/commands', { method: 'POST', body: { ...body, command } });
-        await loadReal();
+        applyActionPayload(payload);
+        refreshInBackground('full');
+        setError('');
         return payload;
+      } catch (err) {
+        setError(err.message || String(err));
+        throw err;
       } finally {
         setBusy('');
       }
     },
-  }), [busy, loadReal]);
+  }), [busy, loadReal, applyActionPayload, refreshInBackground]);
 
   window.PD_DATA = data;
   window.PD_API = api;
+  window.PD_STATUS = { busy, error };
 
   // apply accent live
   React.useEffect(() => {
@@ -210,10 +356,15 @@ function App() {
     <>
       <Rail mode={mode} setMode={setMode} />
       <div className="mode" data-screen-label={mode}>
-        <div className="pd-live-switch">
-          <button className="btn ghost sm" onClick={() => api.refresh()} disabled={!!busy}>{busy ? 'WORKING' : 'REFRESH'}</button>
-          {error && <span className="pd-error mono">{error}</span>}
-        </div>
+        {(busy || error) && (
+          <div className="pd-live-switch">
+            {busy && <span className="mono dim">{busy}</span>}
+            {error && <span className="pd-error mono">{error}</span>}
+            <button className="btn ghost sm" onClick={() => api.refresh()} disabled={busy === 'refresh'}>
+              {busy === 'refresh' ? 'REFRESHING' : 'REFRESH'}
+            </button>
+          </div>
+        )}
         {mode === 'dashboard' && <DashboardMode tweaks={tweaks} />}
         {mode === 'trace'     && <TraceMode     tweaks={tweaks} />}
         {mode === 'chat'      && <ChatMode      tweaks={tweaks} />}

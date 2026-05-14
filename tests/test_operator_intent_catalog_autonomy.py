@@ -34,7 +34,12 @@ class OperatorIntentCatalogAutonomyTests(unittest.TestCase):
         intents = registry.load()
         self.assertIn("recon_only", {item.id for item in intents})
         self.assertFalse(registry.get("recon_only").policy.public_poc_research)
-        self.assertTrue(registry.get("htb_lab").policy.lab_policy.lab_flag_collection_allowed)
+        htb_lab = registry.get("htb_lab").policy
+        self.assertTrue(htb_lab.exploit_code_generation)
+        self.assertTrue(htb_lab.poc_execution)
+        self.assertTrue(htb_lab.credential_policy.credential_validation_allowed)
+        self.assertTrue(htb_lab.lab_policy.lab_flag_collection_allowed)
+        self.assertTrue(htb_lab.lab_policy.reverse_shell_allowed)
         ad_intent = registry.get("ad_lab")
         self.assertIn("In-House AD Attack Path", ad_intent.label)
         self.assertTrue(ad_intent.policy.kerberos_policy.asrep_roast_check_allowed)

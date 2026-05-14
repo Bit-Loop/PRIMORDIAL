@@ -1,0 +1,11 @@
+{
+  "body": "summarize target.htb",
+  "created_at": "2026-05-14T03:10:35.133497+00:00",
+  "id": "opmsg_268fc37ca36c",
+  "metadata": {
+    "target_reference": null
+  },
+  "model": null,
+  "role": "operator",
+  "target": null
+}

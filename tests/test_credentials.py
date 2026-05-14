@@ -26,6 +26,8 @@ class CredentialStoreTests(unittest.TestCase):
             field = status["services"]["discord"]["webhook_url"]
             self.assertTrue(field["configured"])
             self.assertEqual(field["source"], "local_store")
+            self.assertTrue(field["hint"].startswith("http"))
+            self.assertTrue(field["hint"].endswith("cret"))
             self.assertNotEqual(field["hint"], "https://discord.com/api/webhooks/super-secret")
             self.assertNotIn("super-secret", field["hint"])
 
@@ -60,13 +62,13 @@ class CredentialStoreTests(unittest.TestCase):
             store.update_service(
                 "caido",
                 {
-                    "graphql_url": "http://127.0.0.1:8080/graphql",
+                    "graphql_url": "http://127.0.0.1:8650/graphql",
                     "api_token": "caido-secret-token",
                 },
             )
 
             status = store.status()
-            self.assertEqual(store.get("caido", "graphql_url"), "http://127.0.0.1:8080/graphql")
+            self.assertEqual(store.get("caido", "graphql_url"), "http://127.0.0.1:8650/graphql")
             self.assertEqual(store.get("caido", "api_token"), "caido-secret-token")
             self.assertTrue(status["services"]["caido"]["graphql_url"]["configured"])
             self.assertTrue(status["services"]["caido"]["api_token"]["configured"])
@@ -83,11 +85,15 @@ class CredentialStoreTests(unittest.TestCase):
             self.assertEqual(store.get("known", "username"), "legacy-user")
             self.assertTrue(status["services"]["known"]["username"]["configured"])
             self.assertIn("alias:lab", status["services"]["known"]["username"]["source"])
+            self.assertEqual(status["services"]["known"]["username"]["hint"], "legacy-user")
 
             store.update_service("known", {"username": "known-user", "password": "known-pass", "domain": "EXAMPLE"})
+            status = store.status()
             self.assertEqual(store.get("known", "username"), "known-user")
             self.assertEqual(store.get("lab", "username"), "known-user")
             self.assertEqual(store.get("known", "domain"), "EXAMPLE")
+            self.assertEqual(status["services"]["known"]["username"]["hint"], "known-user")
+            self.assertNotIn("known-pass", status["services"]["known"]["password"]["hint"])
 
 
 if __name__ == "__main__":

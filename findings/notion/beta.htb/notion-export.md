@@ -2,7 +2,7 @@
 
 Target: `beta.htb`
 Profile: `hack_the_box`
-Generated: 2026-05-08T17:13:04.728319+00:00
+Generated: 2026-05-14T03:50:46.005135+00:00
 
 ## AI Agent Guidance
 

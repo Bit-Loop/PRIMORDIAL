@@ -356,6 +356,40 @@ class ArtifactRecord:
 
 
 @dataclass(slots=True)
+class DocumentChunk:
+    target_id: str
+    source_artifact_id: str
+    source_sha256: str
+    chunk_index: int
+    title: str
+    text: str
+    token_count: int
+    evidence_refs: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+    id: str = field(default_factory=lambda: new_id("chunk"))
+    created_at: datetime = field(default_factory=utc_now)
+
+    def as_payload(self) -> dict[str, Any]:
+        return json_ready(self)
+
+
+@dataclass(slots=True)
+class RecordEmbedding:
+    record_type: str
+    record_id: str
+    embedding_model: str
+    embedding_dim: int
+    embedding: list[float]
+    target_id: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+    id: str = field(default_factory=lambda: new_id("embed"))
+    created_at: datetime = field(default_factory=utc_now)
+
+    def as_payload(self) -> dict[str, Any]:
+        return json_ready(self)
+
+
+@dataclass(slots=True)
 class NotificationRecord:
     channel: NotificationChannel
     event_type: str

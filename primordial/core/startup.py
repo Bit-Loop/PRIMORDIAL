@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from primordial.core.config import redact_database_url
+from primordial.core.local_runtime import load_project_env, maybe_start_bootstrap_postgres, resolve_project_root
 
 
 @dataclass(slots=True)
@@ -22,6 +23,8 @@ class StartupPreflightError(RuntimeError):
 
 
 def run_startup_preflight() -> None:
+    root = resolve_project_root()
+    load_project_env(root)
     issues: list[StartupIssue] = []
     database_url = os.getenv("PRIMORDIAL_DATABASE_URL", "").strip()
     test_database_url = os.getenv("PRIMORDIAL_TEST_DATABASE_URL", "").strip()
@@ -54,22 +57,32 @@ def run_startup_preflight() -> None:
     assert psycopg_module is not None
     assert effective_url
     try:
-        with psycopg_module.connect(effective_url, connect_timeout=3) as connection:
-            connection.execute("CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public")
-            row = connection.execute("SELECT extname FROM pg_extension WHERE extname = 'vector'").fetchone()
-            if row is None:
-                issues.append(
-                    StartupIssue(
-                        summary="pgvector extension is not enabled",
-                        detail=f"Connected to {redact_database_url(effective_url)}, but the vector extension is absent.",
-                        fix="Enable it once for the database: psql \"$PRIMORDIAL_DATABASE_URL\" -c 'CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;'",
-                    )
-                )
+        _check_postgres(psycopg_module, effective_url, issues)
     except Exception as exc:  # noqa: BLE001 - startup preflight returns operator-facing diagnostics
-        issues.append(_postgres_issue(effective_url, exc))
+        if maybe_start_bootstrap_postgres(root):
+            try:
+                _check_postgres(psycopg_module, effective_url, issues)
+            except Exception as retry_exc:  # noqa: BLE001 - startup preflight returns operator-facing diagnostics
+                issues.append(_postgres_issue(effective_url, retry_exc))
+        else:
+            issues.append(_postgres_issue(effective_url, exc))
 
     if issues:
         raise StartupPreflightError(issues)
+
+
+def _check_postgres(psycopg_module: Any, effective_url: str, issues: list[StartupIssue]) -> None:
+    with psycopg_module.connect(effective_url, connect_timeout=3) as connection:
+        connection.execute("CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public")
+        row = connection.execute("SELECT extname FROM pg_extension WHERE extname = 'vector'").fetchone()
+        if row is None:
+            issues.append(
+                StartupIssue(
+                    summary="pgvector extension is not enabled",
+                    detail=f"Connected to {redact_database_url(effective_url)}, but the vector extension is absent.",
+                    fix="Enable it once for the database: psql \"$PRIMORDIAL_DATABASE_URL\" -c 'CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;'",
+                )
+            )
 
 
 def format_startup_issues(issues: list[StartupIssue]) -> str:

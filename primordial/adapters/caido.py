@@ -19,6 +19,7 @@ from primordial.core.events.bus import EventBus
 class CaidoConnection:
     graphql_url: str
     api_token: str
+    migrated_from: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +60,10 @@ class ParsedRawRequest:
 
 class CaidoIntegrationService:
     DEFAULT_GRAPHQL_URL = "http://127.0.0.1:8650/graphql"
+    LEGACY_DEFAULT_GRAPHQL_URLS = {
+        "http://127.0.0.1:8080/graphql",
+        "http://localhost:8080/graphql",
+    }
     REQUEST_SUMMARY_FIELDS = """
         id
         host
@@ -105,9 +110,10 @@ class CaidoIntegrationService:
         payload: dict[str, object] = {
             "configured": configured,
             "graphql_url": connection.graphql_url if connection else "",
+            "graphql_url_migrated_from": connection.migrated_from if connection else "",
             "api_token_configured": bool(connection.api_token) if connection else False,
             "httpql_reference": {
-                "host_filter_example": 'req.host.eq:"target.htb"',
+                "host_filter_example": 'req.host.eq:"target.example"',
                 "status_filter_example": "resp.code.gte:400",
                 "token_hunt_example": 'resp.raw.cont:"api_key" OR resp.raw.cont:"secret" OR resp.raw.cont:"token"',
             },
@@ -123,9 +129,15 @@ class CaidoIntegrationService:
             payload["error"] = validation_error
             return payload
         payload["ok"] = True
+        payload["checked"] = False
         if check_health:
-            payload.update(self.health())
-            payload["schema"] = self.schema_probe()
+            health = self.health()
+            payload.update(health)
+            payload["checked"] = True
+            if health.get("ok"):
+                payload["schema"] = self.schema_probe()
+            else:
+                payload["schema"] = self._empty_schema(error=str(health.get("error") or "Caido health check failed."))
         return payload
 
     def health(self) -> dict[str, object]:
@@ -135,6 +147,7 @@ class CaidoIntegrationService:
             "ok": result["ok"],
             "status_code": result.get("status_code"),
             "error": result.get("error"),
+            "auth_error": bool(result.get("auth_error")),
             "graphql_typename": (result.get("data") or {}).get("__typename")
             if isinstance(result.get("data"), dict)
             else None,
@@ -214,15 +227,26 @@ class CaidoIntegrationService:
                 body = response.read()
                 parsed = json.loads(body.decode("utf-8")) if body else {}
                 errors = self._sanitize_graphql_errors(parsed.get("errors", []), connection.api_token)
+                auth_error = self._contains_auth_error(errors)
                 return {
                     "ok": not bool(errors),
                     "status_code": response.status,
                     "data": parsed.get("data"),
                     "errors": errors,
+                    "auth_error": auth_error,
                 }
         except error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
-            return {"ok": False, "status_code": exc.code, "error": self._redact_secret(body or str(exc), connection.api_token)}
+            try:
+                body = exc.read().decode("utf-8", errors="replace")
+            finally:
+                exc.close()
+            message = self._redact_secret(body or str(exc), connection.api_token)
+            return {
+                "ok": False,
+                "status_code": exc.code,
+                "error": message,
+                "auth_error": exc.code in {401, 403} or self._contains_auth_text(message),
+            }
         except (OSError, TimeoutError, json.JSONDecodeError) as exc:
             return {"ok": False, "error": self._redact_secret(str(exc), connection.api_token)}
 
@@ -553,7 +577,16 @@ class CaidoIntegrationService:
         api_token = self.credentials.get("caido", "api_token")
         if not graphql_url or not api_token:
             return None
-        return CaidoConnection(graphql_url=graphql_url, api_token=api_token)
+        normalized_url = self.normalize_graphql_url(graphql_url)
+        migrated_from = graphql_url if normalized_url != graphql_url else ""
+        return CaidoConnection(graphql_url=normalized_url, api_token=api_token, migrated_from=migrated_from)
+
+    @classmethod
+    def normalize_graphql_url(cls, value: str) -> str:
+        cleaned = str(value or "").strip()
+        if cleaned in cls.LEGACY_DEFAULT_GRAPHQL_URLS:
+            return cls.DEFAULT_GRAPHQL_URL
+        return cleaned
 
     def _validate_graphql_url(self, value: str) -> str | None:
         parsed = parse.urlsplit(value)
@@ -697,6 +730,29 @@ class CaidoIntegrationService:
         if not isinstance(errors, list):
             return []
         return [self._sanitize_json(item, secret) for item in errors]
+
+    def _empty_schema(self, *, error: str = "") -> dict[str, object]:
+        return {
+            "ok": False,
+            "error": error,
+            "capabilities": {
+                "requests_by_offset": False,
+                "requests": False,
+                "request_detail": False,
+                "create_replay_session": False,
+                "start_replay_task": False,
+                "replay_entry": False,
+            },
+            "query_fields": [],
+            "mutation_fields": [],
+        }
+
+    def _contains_auth_error(self, errors: list[object]) -> bool:
+        return any(self._contains_auth_text(json.dumps(item, sort_keys=True)) for item in errors)
+
+    def _contains_auth_text(self, value: str) -> bool:
+        lowered = value.lower()
+        return "unauthorized" in lowered or "forbidden" in lowered or "invalid token" in lowered
 
     def _sanitize_json(self, value: object, secret: str) -> object:
         if isinstance(value, dict):

@@ -82,6 +82,7 @@ class EvidenceType(StrEnum):
     OPERATOR_NOTE = "operator_note"
     MODEL_REVIEW = "model_review"
     FINDING_ATTACHMENT = "finding_attachment"
+    DOCUMENT_IMPORT = "document_import"
 
 
 class VerificationStatus(StrEnum):
@@ -252,6 +253,7 @@ class ArtifactKind(StrEnum):
     EXPORT = "export"
     CAIDO_CAPTURE = "caido_capture"
     REPORT = "report"
+    RAG_DOCUMENT = "rag_document"
 
 
 class HandoffStatus(StrEnum):

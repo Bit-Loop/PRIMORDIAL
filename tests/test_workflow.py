@@ -14,6 +14,7 @@ from primordial.core.domain.enums import (
     EventType,
     InterestStatus,
     MethodologyPhase,
+    ProviderRoute,
     RiskTier,
     ScopeProfile,
     TaskKind,
@@ -165,6 +166,46 @@ class WorkflowTests(unittest.TestCase):
 
         self.assertEqual(resumed, 1)
         self.assertEqual(self.runtime.store.get_task(task.id).status, TaskStatus.PENDING)
+
+    def test_task_approval_records_operator_approval_metadata(self) -> None:
+        task = Task(
+            target_id=self.target.id,
+            phase=MethodologyPhase.EXPLOITATION,
+            kind=TaskKind.VERIFY_HYPOTHESIS,
+            title="Approve gated verification",
+            summary="Read-only verification planning needs explicit operator approval.",
+            role=AgentRole.EXPLOITATION_WORKER,
+            risk_tier=RiskTier.HIGH,
+            status=TaskStatus.NEEDS_APPROVAL,
+            requires_approval=True,
+        )
+        self.runtime.store.insert_task(task)
+
+        approved = self.runtime.workflow.approve_task(task.id, approved=True)
+
+        self.assertIsNotNone(approved)
+        self.assertEqual(approved.status, TaskStatus.PENDING)
+        self.assertTrue(approved.metadata["operator_approved"])
+        self.assertIn("operator_approved_at", approved.metadata)
+
+    def test_primitive_hint_narrows_validation_and_execution_primitives(self) -> None:
+        task = Task(
+            target_id=self.target.id,
+            phase=MethodologyPhase.EXPLOITATION,
+            kind=TaskKind.VERIFY_HYPOTHESIS,
+            title="Verify finding candidates",
+            summary="Use the explicit primitive hint instead of broad auth-analysis tags.",
+            role=AgentRole.EXPLOITATION_WORKER,
+            risk_tier=RiskTier.HIGH,
+            required_capabilities=["auth-analysis", "finding-verification"],
+            metadata={"primitive_hint": "finding-verification"},
+        )
+
+        validation_primitives = self.runtime.workflow._stored_primitives_for_task(task)
+        execution_primitives = self.runtime.security.primitive_executor.resolve_primitives(task)
+
+        self.assertEqual([primitive.name for primitive in validation_primitives], ["finding-verification"])
+        self.assertEqual([primitive.name for primitive in execution_primitives], ["finding-verification"])
 
     def test_validation_blocks_tasks_without_primitive_coverage(self) -> None:
         task = Task(
@@ -344,6 +385,252 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(event.metadata["resource_reserve_guard"], True)
         self.assertIn("CPU RAM available", event.summary)
         self.assertIn("GPU VRAM free", event.summary)
+
+    def test_ssh_http_linux_evidence_blocks_credentialed_windows_prompt_and_stale_approval(self) -> None:
+        self.runtime.set_operator_intent("credential_validation")
+        self.runtime.set_known_credentials(username="anne", password="secret", domain="PIRATE")
+        self.runtime.store.insert_evidence(
+            EvidenceRecord(
+                target_id=self.target.id,
+                type=EvidenceType.TOOL_OUTPUT,
+                title="TCP service discovery",
+                summary="Observed OpenSSH and nginx on Ubuntu.",
+                source_ref="fixture://helix-linux-services",
+                verification_status=VerificationStatus.VERIFIED,
+                confidence=0.86,
+                freshness=0.9,
+                metadata={
+                    "kind": "tcp_service_discovery",
+                    "open_services": [
+                        {"port": 22, "service": "ssh", "product": "OpenSSH", "version": "8.9p1 Ubuntu"},
+                        {"port": 80, "service": "http", "product": "nginx", "banner": "Ubuntu"},
+                    ],
+                },
+            )
+        )
+        stale_approval = Task(
+            target_id=self.target.id,
+            phase=MethodologyPhase.EXPLOITATION,
+            kind=TaskKind.CREDENTIALED_ACCESS_CHECK,
+            title="Verify credentialed SMB/WinRM access",
+            summary="Stale Windows credential prompt.",
+            role=AgentRole.EXPLOITATION_WORKER,
+            risk_tier=RiskTier.HIGH,
+            status=TaskStatus.NEEDS_APPROVAL,
+            requires_approval=True,
+        )
+        self.runtime.store.insert_task(stale_approval)
+
+        report = self.runtime.run_tick(max_executions=0)
+        refreshed = self.runtime.store.get_task(stale_approval.id)
+
+        self.assertFalse(any(task.kind == TaskKind.CREDENTIALED_ACCESS_CHECK for task in report.created_tasks))
+        self.assertIsNotNone(refreshed)
+        assert refreshed is not None
+        self.assertEqual(refreshed.status, TaskStatus.BLOCKED)
+        self.assertIn("Linux/Unix", refreshed.metadata["invalidation_reason"])
+
+    def test_linux_samba_on_445_does_not_plan_windows_credentialed_access(self) -> None:
+        self.runtime.set_operator_intent("credential_validation")
+        self.runtime.set_known_credentials(username="anne", password="secret", domain="")
+        self.runtime.store.insert_evidence(
+            EvidenceRecord(
+                target_id=self.target.id,
+                type=EvidenceType.TOOL_OUTPUT,
+                title="TCP service discovery",
+                summary="Observed Samba file sharing on Linux.",
+                source_ref="fixture://linux-samba",
+                verification_status=VerificationStatus.VERIFIED,
+                confidence=0.84,
+                freshness=0.9,
+                metadata={
+                    "kind": "tcp_service_discovery",
+                    "open_services": [
+                        {"port": 445, "service": "netbios-ssn", "product": "Samba smbd", "banner": "Samba 4.15 Ubuntu"},
+                    ],
+                },
+            )
+        )
+
+        report = self.runtime.run_tick(max_executions=0)
+        state = self.runtime.workflow.preview_target_state(self.target)
+
+        self.assertFalse(any(task.kind == TaskKind.CREDENTIALED_ACCESS_CHECK for task in report.created_tasks))
+        self.assertFalse(
+            any(
+                action["kind"] == TaskKind.CREDENTIALED_ACCESS_CHECK.value
+                for action in state.as_payload()["candidate_actions"]
+            )
+        )
+
+    def test_windows_credentialed_access_requires_intent_and_windows_surface_evidence(self) -> None:
+        self.runtime.set_known_credentials(username="anne", password="secret", domain="PIRATE")
+        service_evidence = EvidenceRecord(
+            target_id=self.target.id,
+            type=EvidenceType.TOOL_OUTPUT,
+            title="TCP service discovery",
+            summary="Observed Microsoft Windows SMB and WinRM.",
+            source_ref="fixture://windows-services",
+            verification_status=VerificationStatus.VERIFIED,
+            confidence=0.88,
+            freshness=0.9,
+            metadata={
+                "kind": "tcp_service_discovery",
+                "open_services": [
+                    {"port": 445, "service": "microsoft-ds", "product": "Microsoft Windows Server 2019"},
+                    {"port": 5985, "service": "winrm", "product": "Microsoft HTTPAPI httpd"},
+                ],
+            },
+        )
+        self.runtime.store.insert_evidence(service_evidence)
+
+        blocked_report = self.runtime.run_tick(max_executions=0)
+        self.assertFalse(any(task.kind == TaskKind.CREDENTIALED_ACCESS_CHECK for task in blocked_report.created_tasks))
+
+        self.runtime.set_operator_intent("credential_validation")
+        allowed_report = self.runtime.run_tick(max_executions=0)
+        credential_tasks = [task for task in allowed_report.created_tasks if task.kind == TaskKind.CREDENTIALED_ACCESS_CHECK]
+
+        self.assertEqual(len(credential_tasks), 1)
+        self.assertEqual(credential_tasks[0].status, TaskStatus.NEEDS_APPROVAL)
+        self.assertIn(service_evidence.id, credential_tasks[0].evidence_refs)
+        self.assertEqual(credential_tasks[0].metadata["credentialed_access_surface"]["os_family"], "windows")
+        self.assertIn("winrm", credential_tasks[0].metadata["protocols"])
+
+    def test_stuck_planner_auto_approves_agent_chat_premium_review_packet(self) -> None:
+        evidence = EvidenceRecord(
+            target_id=self.target.id,
+            type=EvidenceType.OPERATOR_NOTE,
+            title="Manual evidence note",
+            summary="Operator supplied live evidence, but no primitive-backed next action is obvious.",
+            source_ref="fixture://manual-note",
+            verification_status=VerificationStatus.PARTIAL,
+            confidence=0.6,
+            freshness=0.8,
+            metadata={"kind": "tcp_service_discovery", "open_services": []},
+        )
+        self.runtime.store.insert_evidence(evidence)
+        signature = self.runtime.workflow._target_analysis_signature(self.target)
+        analysis = Task(
+            target_id=self.target.id,
+            phase=MethodologyPhase.ANALYSIS,
+            kind=TaskKind.ANALYZE_EVIDENCE,
+            title="Analyze accumulated evidence",
+            summary="Already analyzed.",
+            role=AgentRole.ANALYSIS_WORKER,
+            status=TaskStatus.SUCCEEDED,
+            metadata={"analysis_signature": signature},
+        )
+        self.runtime.store.insert_task(analysis)
+
+        report = self.runtime.run_tick(max_executions=0)
+        review_tasks = [task for task in report.created_tasks if task.kind == TaskKind.REVIEW_PREMIUM_ESCALATION]
+
+        self.assertEqual(len(review_tasks), 1)
+        self.assertEqual(review_tasks[0].provider_route, ProviderRoute.REMOTE_PREMIUM)
+        self.assertEqual(review_tasks[0].status, TaskStatus.PENDING)
+        self.assertTrue(review_tasks[0].metadata["remote_premium_operator_approved"])
+        self.assertTrue(review_tasks[0].metadata["operator_approved"])
+        self.assertEqual(review_tasks[0].metadata["auto_approval_source"], "agent_chat_api_wrapper")
+        packet = review_tasks[0].metadata["escalation_package"]["metadata"]["packet"]
+        self.assertEqual(packet["operator_intent"], "recon_only")
+        self.assertEqual(packet["required_output"]["recommended_next_actions"], "array<object>")
+        self.assertTrue(
+            any(
+                event.task_id == review_tasks[0].id and event.metadata.get("auto_approved")
+                for event in self.runtime.store.list_events(limit=10)
+            )
+        )
+
+    def test_agent_chat_premium_auto_approval_does_not_apply_to_credential_tasks(self) -> None:
+        task = Task(
+            target_id=self.target.id,
+            phase=MethodologyPhase.EXPLOITATION,
+            kind=TaskKind.CREDENTIALED_ACCESS_CHECK,
+            title="Credential check should not auto-approve",
+            summary="Remote premium route is not allowed to approve credential validation.",
+            role=AgentRole.CLAUDE_REVIEWER,
+            status=TaskStatus.PENDING,
+            provider_route=ProviderRoute.REMOTE_PREMIUM,
+            metadata={"remote_premium_policy_approval_required": True},
+        )
+        report = OrchestrationReport()
+
+        self.runtime.workflow._register_task(task, self.target, report)
+        stored = self.runtime.store.get_task(task.id)
+
+        self.assertIsNotNone(stored)
+        assert stored is not None
+        self.assertEqual(stored.status, TaskStatus.BLOCKED)
+        self.assertFalse(stored.metadata.get("remote_premium_operator_approved", False))
+
+    def test_remote_review_actions_are_admitted_only_with_evidence_scope_and_policy(self) -> None:
+        service_evidence = EvidenceRecord(
+            target_id=self.target.id,
+            type=EvidenceType.TOOL_OUTPUT,
+            title="HTTP service evidence",
+            summary="HTTP service responds and supports bounded content discovery.",
+            source_ref="fixture://http-service",
+            verification_status=VerificationStatus.VERIFIED,
+            confidence=0.8,
+            freshness=0.9,
+            metadata={
+                "kind": "tcp_service_discovery",
+                "open_services": [{"port": 80, "service": "http", "product": "nginx"}],
+            },
+        )
+        self.runtime.store.insert_evidence(service_evidence)
+        review_evidence = EvidenceRecord(
+            target_id=self.target.id,
+            type=EvidenceType.MODEL_REVIEW,
+            title="Premium planner review",
+            summary="Remote premium review returned structured planner recommendations.",
+            source_ref="fixture://premium-review",
+            verification_status=VerificationStatus.PARTIAL,
+            confidence=0.7,
+            freshness=0.9,
+            metadata={
+                "kind": "premium_review_result",
+                "review": {
+                    "recommended_next_actions": [
+                        {
+                            "title": "Run bounded web content discovery from remote review",
+                            "primitive_hint": "content-discovery",
+                            "evidence_refs": [service_evidence.id],
+                            "confidence": 0.7,
+                        },
+                        {"title": "Missing refs", "primitive_hint": "dns-enumeration"},
+                        {
+                            "title": "Scope drift",
+                            "primitive_hint": "content-discovery",
+                            "target": "other.htb",
+                            "evidence_refs": [service_evidence.id],
+                        },
+                        {
+                            "title": "Approve credential use",
+                            "primitive_hint": "credentialed-access-check",
+                            "evidence_refs": [service_evidence.id],
+                            "credential_use_approved": True,
+                        },
+                    ],
+                    "missing_evidence": [],
+                    "invalid_existing_tasks": [],
+                    "primitive_gaps": [],
+                    "confidence": 0.72,
+                    "rationale_with_evidence_refs": [],
+                },
+            },
+        )
+        self.runtime.store.insert_evidence(review_evidence)
+
+        state = self.runtime.workflow.preview_target_state(self.target)
+        admission = state.metadata["remote_review_admission"]
+
+        self.assertTrue(any(item["title"].startswith("Run bounded web content") for item in admission["accepted"]))
+        reasons = " ".join(item["reason"] for item in admission["rejected"])
+        self.assertIn("no evidence refs", reasons)
+        self.assertIn("different scope", reasons)
+        self.assertIn("attempted to approve", reasons)
 
 
 if __name__ == "__main__":

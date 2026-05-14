@@ -16,6 +16,7 @@ dependencies = ["PyYAML>=6.0", "psycopg[binary]>=3.2"]
 
 [project.optional-dependencies]
 tui = ["textual>=0.61.0"]
+rag = ["docling>=2.70.0"]
 
 [project.scripts]
 primordial = "primordial.cli:main"

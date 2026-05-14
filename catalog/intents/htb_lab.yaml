@@ -6,8 +6,8 @@ policy:
   searchsploit_allowed: true
   read_poc_examples: true
   poc_applicability_validation: true
-  exploit_code_generation: false
-  poc_execution: false
+  exploit_code_generation: true
+  poc_execution: true
   kerberos_policy:
     asrep_roast_check_allowed: true
     kerberoast_check_allowed: true
@@ -19,3 +19,4 @@ policy:
   lab_policy:
     lab_flag_collection_allowed: true
     htb_lab_behavior_allowed: true
+    reverse_shell_allowed: true

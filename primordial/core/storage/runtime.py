@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from json import JSONDecodeError
 from contextlib import closing
+import re
 from typing import Any, Iterable
 
 try:
@@ -53,6 +54,7 @@ from primordial.core.domain.models import (
     new_id as _new_id,
     CheckpointRecord,
     DiscordDelivery,
+    DocumentChunk,
     EventRecord,
     EvidenceRecord,
     ExternalSyncJob,
@@ -65,6 +67,7 @@ from primordial.core.domain.models import (
     OperatorMessage,
     PolicyDecision,
     PrimitiveManifest,
+    RecordEmbedding,
     ScopeAsset,
     Session,
     Target,
@@ -99,6 +102,20 @@ def _load(value: Any | None, default: Any) -> Any:
         return json.loads(value)
     except (JSONDecodeError, TypeError):
         return value
+
+
+def _vector_literal(values: list[float]) -> str:
+    if not values:
+        raise ValueError("embedding vector cannot be empty")
+    return "[" + ",".join(f"{float(value):.8f}" for value in values) + "]"
+
+
+def _token_terms(value: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[A-Za-z0-9_.:/-]+", value.lower())
+        if len(token) > 2
+    }
 
 
 _SCHEMA_VERSION = 1
@@ -930,6 +947,133 @@ class RuntimeStore:
             rows = self._query("SELECT * FROM artifacts ORDER BY created_at DESC LIMIT %s", (limit,))
         return [self._artifact_from_row(row) for row in rows]
 
+    def insert_document_chunk(self, chunk: DocumentChunk) -> None:
+        self._execute(
+            """
+            INSERT INTO document_chunks
+            (id, target_id, source_artifact_id, source_sha256, chunk_index, title, text, token_count,
+                evidence_refs, metadata, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (source_artifact_id, chunk_index) DO UPDATE SET target_id = EXCLUDED.target_id, source_sha256 = EXCLUDED.source_sha256, title = EXCLUDED.title, text = EXCLUDED.text, token_count = EXCLUDED.token_count, evidence_refs = EXCLUDED.evidence_refs, metadata = EXCLUDED.metadata, created_at = EXCLUDED.created_at
+            """,
+            (
+                chunk.id,
+                chunk.target_id,
+                chunk.source_artifact_id,
+                chunk.source_sha256,
+                chunk.chunk_index,
+                chunk.title,
+                chunk.text,
+                chunk.token_count,
+                _dump(chunk.evidence_refs),
+                _dump(chunk.metadata),
+                chunk.created_at.isoformat(),
+            ),
+        )
+
+    def list_document_chunks(
+        self,
+        *,
+        target_id: str | None = None,
+        source_artifact_id: str | None = None,
+        limit: int = 100,
+    ) -> list[DocumentChunk]:
+        where: list[str] = []
+        params: list[Any] = []
+        if target_id:
+            where.append("target_id = %s")
+            params.append(target_id)
+        if source_artifact_id:
+            where.append("source_artifact_id = %s")
+            params.append(source_artifact_id)
+        clause = f"WHERE {' AND '.join(where)}" if where else ""
+        rows = self._query(
+            f"SELECT * FROM document_chunks {clause} ORDER BY created_at DESC, chunk_index ASC LIMIT %s",
+            (*params, limit),
+        )
+        return [self._document_chunk_from_row(row) for row in rows]
+
+    def search_document_chunks_text(
+        self,
+        query: str,
+        *,
+        target_id: str | None = None,
+        limit: int = 8,
+    ) -> list[dict[str, Any]]:
+        terms = _token_terms(query)
+        if not terms:
+            return []
+        candidates = self.list_document_chunks(target_id=target_id, limit=500)
+        ranked: list[dict[str, Any]] = []
+        for chunk in candidates:
+            chunk_terms = _token_terms(f"{chunk.title}\n{chunk.text}")
+            if not chunk_terms:
+                continue
+            overlap = terms & chunk_terms
+            if not overlap:
+                continue
+            score = len(overlap) / max(1, len(terms))
+            ranked.append({"chunk": chunk, "score": round(score, 4), "matched_terms": sorted(overlap)})
+        ranked.sort(key=lambda item: (-float(item["score"]), item["chunk"].created_at, item["chunk"].chunk_index))
+        return ranked[:limit]
+
+    def insert_record_embedding(self, embedding: RecordEmbedding) -> None:
+        self._execute(
+            """
+            INSERT INTO record_embeddings
+            (id, target_id, record_type, record_id, embedding_model, embedding_dim, embedding, metadata, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s::vector, %s, %s)
+            ON CONFLICT (record_type, record_id, embedding_model) DO UPDATE SET target_id = EXCLUDED.target_id, embedding_dim = EXCLUDED.embedding_dim, embedding = EXCLUDED.embedding, metadata = EXCLUDED.metadata, created_at = EXCLUDED.created_at
+            """,
+            (
+                embedding.id,
+                embedding.target_id,
+                embedding.record_type,
+                embedding.record_id,
+                embedding.embedding_model,
+                embedding.embedding_dim,
+                _vector_literal(embedding.embedding),
+                _dump(embedding.metadata),
+                embedding.created_at.isoformat(),
+            ),
+        )
+
+    def search_document_chunks_by_embedding(
+        self,
+        query_embedding: list[float],
+        *,
+        embedding_model: str,
+        target_id: str | None = None,
+        limit: int = 8,
+    ) -> list[dict[str, Any]]:
+        where = ["e.record_type = %s", "e.embedding_model = %s"]
+        params: list[Any] = [_vector_literal(query_embedding), "document_chunk", embedding_model]
+        if target_id:
+            where.append("c.target_id = %s")
+            params.append(target_id)
+        rows = self._query(
+            f"""
+            WITH query_embedding AS (SELECT %s::vector AS embedding)
+            SELECT c.*, e.embedding <=> query_embedding.embedding AS distance
+            FROM record_embeddings e
+            JOIN document_chunks c ON c.id = e.record_id
+            CROSS JOIN query_embedding
+            WHERE {' AND '.join(where)}
+            ORDER BY e.embedding <=> query_embedding.embedding ASC
+            LIMIT %s
+            """,
+            (*params, limit),
+        )
+        return [
+            {
+                "chunk": self._document_chunk_from_row(row),
+                "score": round(1.0 / (1.0 + float(row["distance"] or 0.0)), 4),
+                "distance": float(row["distance"] or 0.0),
+                "embedding_model": embedding_model,
+            }
+            for row in rows
+        ]
+
     def insert_notification(self, notification: NotificationRecord) -> None:
         self._execute(
             """
@@ -1505,6 +1649,8 @@ class RuntimeStore:
             "operator_messages",
             "model_eval_runs",
             "model_eval_role_metrics",
+            "record_embeddings",
+            "document_chunks",
         )
         counts: dict[str, int] = {}
         for table in tables:
@@ -1526,6 +1672,8 @@ class RuntimeStore:
                 "task_runs": self._delete_ids(connection, "task_runs", "task_id", task_ids),
                 "checkpoints": self._delete_checkpoints(connection, task_ids, run_ids),
                 "agent_traces": self._delete_ids(connection, "agent_traces", "task_id", task_ids),
+                "document_chunks": self._delete_target_rows(connection, "document_chunks", target_id),
+                "record_embeddings": self._delete_target_rows(connection, "record_embeddings", target_id),
                 "policy_decisions": self._delete_target_or_task_rows(connection, "policy_decisions", target_id, task_ids),
                 "artifacts": self._delete_target_or_task_rows(connection, "artifacts", target_id, task_ids),
                 "notifications": self._delete_target_or_task_rows(connection, "notifications", target_id, task_ids),
@@ -1928,6 +2076,21 @@ class RuntimeStore:
             path=row["path"],
             sha256=row["sha256"],
             size_bytes=int(row["size_bytes"]),
+            metadata=_load(row["metadata"], {}),
+            created_at=parse_datetime(row["created_at"]),
+        )
+
+    def _document_chunk_from_row(self, row: Any) -> DocumentChunk:
+        return DocumentChunk(
+            id=row["id"],
+            target_id=row["target_id"],
+            source_artifact_id=row["source_artifact_id"],
+            source_sha256=row["source_sha256"],
+            chunk_index=int(row["chunk_index"]),
+            title=row["title"],
+            text=row["text"],
+            token_count=int(row["token_count"]),
+            evidence_refs=_load(row["evidence_refs"], []),
             metadata=_load(row["metadata"], {}),
             created_at=parse_datetime(row["created_at"]),
         )

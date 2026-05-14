@@ -13,7 +13,7 @@ import time
 from urllib import parse as urlparse
 
 from primordial.adapters.caido import CaidoIntegrationService
-from primordial.adapters.discord import DiscordNotificationService
+from primordial.adapters.discord import DiscordNotificationService, validate_discord_webhook_url
 from primordial.adapters.notion import NotionSyncService
 from primordial.core.config import AppConfig
 from primordial.core.credentials import CredentialStore
@@ -50,6 +50,7 @@ from primordial.core.domain.models import (
     utc_now,
 )
 from primordial.core.events.bus import EventBus, RuntimeSignal
+from primordial.core.evidence import CredentialedAccessSurface, classify_credentialed_access_surface
 from primordial.core.findings_context import FindingsContextService
 from primordial.core.intent import OperatorIntentRegistry
 from primordial.core.intent.models import OperatorIntentPolicy
@@ -59,10 +60,12 @@ from primordial.core.orchestration.verifier import BehaviorVerifier
 from primordial.core.orchestration.workflow import WorkflowOrchestrator
 from primordial.core.primitives.catalog import PrimitiveCatalog
 from primordial.core.providers.router import ProviderRouter
+from primordial.core.providers.agent_chat import AgentChatClient, AgentChatPremiumReviewRunner, AgentChatSettings
 from primordial.core.providers.lmstudio import LMStudioClient
 from primordial.core.providers.lmstudio_tuning import LMStudioPerformanceTuner
 from primordial.core.providers.ollama import OllamaClient
 from primordial.core.providers.model_eval import ModelEvaluationService
+from primordial.core.rag import DocumentIngestionService
 from primordial.core.recovery.crash_journal import CrashJournal
 from primordial.core.recovery.resume_tracker import ResumeTracker
 from primordial.core.providers.scheduler import ModelScheduler
@@ -140,12 +143,26 @@ class PrimordialRuntime:
             daily_remote_cost_loader=self.store.get_daily_remote_cost_usd,
         )
         self.router = ProviderRouter(config.topology)
+        self.agent_chat = AgentChatClient(
+            AgentChatSettings(
+                base_url=config.agent_chat_base_url,
+                api_key=config.agent_chat_api_key,
+                provider=config.agent_chat_provider,
+                model=config.agent_chat_model,
+                timeout_seconds=config.agent_chat_timeout_seconds,
+                cwd=config.agent_chat_cwd,
+                safe_guard=config.agent_chat_safe_guard,
+                codex_sandbox=config.agent_chat_codex_sandbox,
+                claude_permission_mode=config.agent_chat_claude_permission_mode,
+            )
+        )
         self.ollama = OllamaClient()
         self.model_scheduler = ModelScheduler(config.autonomy)
         self.verifier = BehaviorVerifier()
         self.validation = build_default_validation_registry()
         self.skills = RuntimeSkillRegistry(config.skills_dir)
         self.findings_context = FindingsContextService(config.findings_dir, config.notion_exports_dir)
+        self.rag = DocumentIngestionService(self.store, config.artifacts_dir)
         self.resume_tracker = ResumeTracker(self.store, self.event_bus)
         self.worker_broker = WorkerBroker(self.event_bus)
         self._metrics_lock = RLock()
@@ -1105,6 +1122,9 @@ class PrimordialRuntime:
                 "model": task.provider_model,
                 "worker_contract": task.metadata.get("worker_contract"),
                 "target": target_label(task.target_id),
+                "metadata": json_ready(task.metadata),
+                "active_ip_generation": task.metadata.get("active_ip_generation"),
+                "invalid_target": bool(task.metadata.get("invalid_target")),
                 "updated_at": task.updated_at.isoformat(),
             }
 
@@ -1124,6 +1144,9 @@ class PrimordialRuntime:
                 "worker_contract": run.metadata.get("worker_contract"),
                 "suitability_score": run.metadata.get("suitability_score"),
                 "target": target_label(task.target_id if task else None),
+                "metadata": json_ready(task.metadata) if task else {},
+                "active_ip_generation": task.metadata.get("active_ip_generation") if task else None,
+                "invalid_target": bool(task.metadata.get("invalid_target")) if task else False,
                 "started_at": run.started_at.isoformat(),
                 "heartbeat_at": run.heartbeat_at.isoformat() if run.heartbeat_at else None,
                 "finished_at": run.finished_at.isoformat() if run.finished_at else None,
@@ -1204,6 +1227,12 @@ class PrimordialRuntime:
         lab_credentials_configured = self._lab_credentials_configured()
         for target in self.store.list_targets():
             evidence = self.store.list_evidence(target_id=target.id, limit=100)
+            active_generation = self._target_active_generation(target)
+            current_evidence = [
+                item
+                for item in evidence
+                if self._record_matches_active_generation(item, active_generation)
+            ]
             interests = self.store.list_interests(target_id=target.id, limit=100)
             findings = self.store.list_findings(target_id=target.id, limit=20)
             if target.metadata.get("active_ip"):
@@ -1254,13 +1283,14 @@ class PrimordialRuntime:
                 "smb-session",
                 "winrm",
             )
-            if has_credentialed_capability and not lab_credentials_configured and self._target_has_remote_admin_surface(evidence):
+            credential_surface = classify_credentialed_access_surface(current_evidence)
+            if has_credentialed_capability and not lab_credentials_configured and credential_surface.eligible:
                 blockers.append(
                     {
                         "target": target.handle,
                         "kind": "missing_known_credentials",
                         "summary": (
-                            f"`{target.handle}` has SMB/WinRM-like services, but known username/password are not configured."
+                            f"`{target.handle}` has evidence-supported Windows SMB/WinRM services, but known username/password are not configured."
                         ),
                     }
                 )
@@ -1276,7 +1306,7 @@ class PrimordialRuntime:
         return blockers[:8]
 
     def _target_has_remote_admin_surface(self, evidence: list[EvidenceRecord]) -> bool:
-        return any(self._evidence_has_port(evidence, port) for port in (445, 5985, 5986))
+        return classify_credentialed_access_surface(evidence).eligible
 
     def scope_payload(self) -> dict[str, object]:
         targets = self.store.list_targets()
@@ -1372,12 +1402,110 @@ class PrimordialRuntime:
             ],
         }
 
+    def rag_ingest_document(
+        self,
+        path: str | Path,
+        *,
+        target: str,
+        use_docling: bool = True,
+        embed: bool = True,
+        corpus_type: str = "operator_note",
+        source_trust: str | None = None,
+        hint_policy: str | None = None,
+        allow_remote_url: bool = False,
+    ) -> dict[str, object]:
+        target_record = self._resolve_operator_chat_target(target, question)
+        if target_record is None:
+            raise ValueError(f"target not found: {target}")
+        return self.rag.ingest_path(
+            path,
+            target=target_record,
+            use_docling=use_docling,
+            embed=embed,
+            corpus_type=corpus_type,
+            source_trust=source_trust,
+            hint_policy=hint_policy,
+            allow_remote_url=allow_remote_url,
+        )
+
+    def rag_search(
+        self,
+        query: str,
+        *,
+        target: str,
+        limit: int = 5,
+        corpus_types: list[str] | None = None,
+    ) -> dict[str, object]:
+        target_record = self._resolve_target_reference(target)
+        if target_record is None:
+            raise ValueError(f"target not found: {target}")
+        results = self.rag.retrieve(query, target_id=target_record.id, limit=limit, corpus_types=corpus_types)
+        return {
+            "target": target_record.as_payload(),
+            "query": query,
+            "corpus_types": corpus_types or [],
+            "results": [item.as_payload() for item in results],
+        }
+
+    def rag_cve_search(self, query: str, *, target: str, limit: int = 5) -> dict[str, object]:
+        target_record = self._resolve_target_reference(target)
+        if target_record is None:
+            raise ValueError(f"target not found: {target}")
+        results = self.rag.retrieve(
+            query,
+            target_id=target_record.id,
+            limit=limit,
+            corpus_types=["cve_advisory", "exploit_note"],
+        )
+        evidence = self.workflow._current_generation_evidence(target_record, limit=200)
+        payload_results: list[dict[str, object]] = []
+        for item in results:
+            payload = item.as_payload()
+            payload["applicability_classification"] = self.workflow._rag_applicability_classification(item.chunk, evidence)
+            payload["cve_ids"] = list(item.chunk.metadata.get("cve_ids", [])) if isinstance(item.chunk.metadata.get("cve_ids"), list) else []
+            payload["source_trust"] = item.chunk.metadata.get("source_trust")
+            payload_results.append(payload)
+        return {
+            "target": target_record.as_payload(),
+            "query": query,
+            "corpus_types": ["cve_advisory", "exploit_note"],
+            "results": payload_results,
+        }
+
+    def rag_hints(self, query: str, *, target: str, limit: int = 8) -> dict[str, object]:
+        target_record = self._resolve_target_reference(target)
+        if target_record is None:
+            raise ValueError(f"target not found: {target}")
+        hints = self.workflow.build_rag_task_hints(target_record, query=query, limit=limit)
+        return {
+            "target": target_record.as_payload(),
+            "query": query,
+            "hints": {
+                "accepted": hints.get("accepted", []),
+                "rejected": hints.get("rejected", []),
+            },
+            "candidate_actions": [
+                {
+                    "kind": action.kind.value,
+                    "title": action.title,
+                    "summary": action.summary,
+                    "confidence": action.confidence,
+                    "phase": action.phase_label,
+                    "subphase": action.subphase,
+                    "transition_reason": action.transition_reason,
+                    "prerequisite": action.prerequisite,
+                    "metadata": dict(action.metadata),
+                }
+                for action in hints.get("actions", [])
+            ],
+        }
+
     def ask_operator_ai(self, message: str, *, target: str | None = None) -> dict[str, object]:
         self.repair_execution_state()
         question = message.strip()
         if not question:
             raise ValueError("message is required")
-        target_record = self._resolve_target_reference(target)
+        target_record = self._resolve_operator_chat_target(target, question)
         route_model = self.config.topology.local_deep
         route_num_gpu = self._role_num_gpu("local_deep")
         model = route_model
@@ -1407,6 +1535,7 @@ class PrimordialRuntime:
             "generic security disclaimers or generic pentest playbooks; this console is for an "
             "authorized local runtime and needs concrete state-aware answers."
         )
+        rag_context_for_answer = self._rag_context_payload(question, target_record.id if target_record else None)
         prompt = self._build_operator_prompt(question, target_record.id if target_record else None)
         direct_state_answer = self._operator_state_update_or_direct_answer(question, target_record)
         if direct_state_answer is not None:
@@ -1419,19 +1548,22 @@ class PrimordialRuntime:
             deterministic_body = self._deterministic_operator_answer(question, target_record.id if target_record else None)
             assistant_body = deterministic_body
             model = "deterministic-state"
+            deterministic_only = self._operator_question_requires_deterministic_only(question)
             metadata = {
                 "ok": True,
                 "mode": "deterministic_state_answer",
                 "route_model": route_model,
-                "ai_review_attempted": True,
+                "ai_review_attempted": not deterministic_only,
             }
-            ai_review = self._operator_state_ai_review(
-                question=question,
-                deterministic_body=deterministic_body,
-                target_id=target_record.id if target_record else None,
-                route_model=route_model,
-                route_num_gpu=route_num_gpu,
-            )
+            ai_review = None
+            if not deterministic_only:
+                ai_review = self._operator_state_ai_review(
+                    question=question,
+                    deterministic_body=deterministic_body,
+                    target_id=target_record.id if target_record else None,
+                    route_model=route_model,
+                    route_num_gpu=route_num_gpu,
+                )
             if ai_review:
                 assistant_body = f"{deterministic_body}\n\n**AI Review**\n{ai_review['text']}"
                 model = str(ai_review["model"])
@@ -1459,8 +1591,22 @@ class PrimordialRuntime:
                     "ok": True,
                     "mode": "local_model",
                     "route_num_gpu": route_num_gpu,
+                    "rag_context_ids": self._rag_context_ids(rag_context_for_answer),
                 }
-                if self._operator_answer_violates_contract(assistant_body):
+                if rag_context_for_answer and not self._operator_answer_cites_rag_context(
+                    assistant_body,
+                    rag_context_for_answer,
+                ):
+                    assistant_body = self._deterministic_rag_citation_answer(
+                        question,
+                        target_record.id if target_record else None,
+                        rag_context_for_answer,
+                    )
+                    model = "deterministic-state"
+                    metadata["guardrail_replaced_uncited_rag_output"] = True
+                    metadata["mode"] = "deterministic_rag_citation_answer"
+                    metadata["route_model"] = route_model
+                elif self._operator_answer_violates_contract(assistant_body):
                     assistant_body = self._deterministic_operator_answer(
                         question,
                         target_record.id if target_record else None,
@@ -1476,6 +1622,25 @@ class PrimordialRuntime:
                 metadata = {"ok": False, "error": str(exc)}
                 ok = False
                 error = str(exc)
+
+        escalation_reason = self._operator_uncertainty_escalation_reason(question, assistant_body, metadata, target_record)
+        if escalation_reason and target_record is not None:
+            escalation_task = self.workflow.create_planner_uncertainty_escalation(
+                target_record,
+                reason_code=escalation_reason,
+                question=question,
+                blockers=[],
+                session_id=self.store.get_active_session().id if self.store.get_active_session() else None,
+            )
+            if escalation_task is not None:
+                metadata["planner_uncertainty_escalation_task_id"] = escalation_task.id
+                metadata["planner_uncertainty_escalation_reason"] = escalation_reason
+            assistant_body = self._append_operator_escalation_status(
+                assistant_body,
+                target_record,
+                escalation_task=escalation_task,
+                reason=escalation_reason,
+            )
 
         assistant_message = OperatorMessage(
             role="assistant",
@@ -1769,8 +1934,6 @@ class PrimordialRuntime:
                     "terms": terms,
                 }
             )
-            if httpql:
-                presets.append({"id": f"target:{item.id}", "label": f"{item.handle} scope", "httpql": httpql})
         presets.extend(
             [
                 {"id": "errors", "label": "Error responses", "httpql": "resp.code.gte:400"},
@@ -1806,7 +1969,7 @@ class PrimordialRuntime:
                 effective_httpql = self.caido.build_target_httpql(terms)
         result = self.caido.search_requests(effective_httpql, limit=limit, offset=offset)
         result["target"] = target_record.as_payload() if target_record else None
-        result["presets"] = self.caido_httpql_presets(target_record.handle if target_record else None)
+        result["presets"] = self.caido_httpql_presets()
         return result
 
     def caido_request_detail(self, request_id: str) -> dict[str, object]:
@@ -2497,7 +2660,8 @@ class PrimordialRuntime:
         return self.credentials_payload()
 
     def set_discord_credentials(self, *, webhook_url: str | None = None) -> dict[str, object]:
-        outcome = self.credentials.update_service("discord", {"webhook_url": webhook_url or ""})
+        validated_webhook_url = validate_discord_webhook_url(webhook_url or "")
+        outcome = self.credentials.update_service("discord", {"webhook_url": validated_webhook_url})
         self.store.insert_event(
             EventRecord(
                 type=EventType.CREDENTIAL_UPDATED,
@@ -2544,11 +2708,14 @@ class PrimordialRuntime:
         graphql_url: str | None = None,
         api_token: str | None = None,
     ) -> dict[str, object]:
+        existing_graphql_url = self.credentials.get("caido", "graphql_url")
+        selected_graphql_url = CaidoIntegrationService.normalize_graphql_url(graphql_url or "")
         default_graphql_url = ""
-        if api_token and not graphql_url and not self.credentials.get("caido", "graphql_url"):
-            default_graphql_url = CaidoIntegrationService.DEFAULT_GRAPHQL_URL
+        if api_token and not selected_graphql_url:
+            if not existing_graphql_url or existing_graphql_url != CaidoIntegrationService.normalize_graphql_url(existing_graphql_url):
+                default_graphql_url = CaidoIntegrationService.DEFAULT_GRAPHQL_URL
         values = {
-            "graphql_url": graphql_url or default_graphql_url,
+            "graphql_url": selected_graphql_url or default_graphql_url,
             "api_token": api_token or "",
         }
         outcome = self.credentials.update_service("caido", values)
@@ -2577,6 +2744,22 @@ class PrimordialRuntime:
             )
         )
         return self.credentials_payload()
+
+    def _resolve_operator_chat_target(self, target: str | None, question: str) -> Target | None:
+        target_record = self._resolve_target_reference(target)
+        if target_record is not None:
+            return target_record
+        lowered = question.lower()
+        for candidate in self.store.list_targets():
+            identifiers = [candidate.handle, candidate.display_name, str(candidate.metadata.get("active_ip") or "")]
+            identifiers.extend(asset.asset for asset in self.store.list_scope_assets(candidate.id))
+            for identifier in identifiers:
+                normalized = str(identifier or "").strip().lower()
+                if not normalized:
+                    continue
+                if re.search(rf"(?<![a-z0-9_.:-]){re.escape(normalized)}(?![a-z0-9_.:-])", lowered):
+                    return candidate
+        return None
 
     def _operator_state_update_or_direct_answer(self, question: str, target: Target | None) -> str | None:
         lowered = question.lower()
@@ -2679,6 +2862,7 @@ class PrimordialRuntime:
 
     def _build_operator_prompt(self, question: str, target_id: str | None) -> str:
         target = self.store.get_target(target_id) if target_id else None
+        rag_context = self._rag_context_payload(question, target_id)
         snapshot = {
             "operator_question": question,
             "active_session": (
@@ -2713,6 +2897,7 @@ class PrimordialRuntime:
                 if target
                 else None
             ),
+            "rag_context": rag_context,
         }
         rendered = json.dumps(json_ready(snapshot), indent=2, sort_keys=True)
         if len(rendered) > 24000:
@@ -2724,6 +2909,7 @@ class PrimordialRuntime:
             "Required answer contract:\n"
             "- Use concise markdown with these headings when relevant: Facts, Blockers, Next Actions.\n"
             "- Every factual claim must be supported by a record in the snapshot.\n"
+            "- RAG context is advisory; cite chunk_id and evidence_refs before relying on it.\n"
             "- If user/root flags are not present in evidence, say they have not been obtained.\n"
             "- If current production primitives are insufficient, say exactly which primitive or operator input is missing.\n"
             "- Do not say evidence is implied; use the exact evidence, task, note, or primitive names supplied.\n\n"
@@ -2736,6 +2922,61 @@ class PrimordialRuntime:
             "Full structured snapshot:\n"
             f"{rendered}"
         )
+
+    def _rag_context_payload(self, question: str, target_id: str | None) -> list[dict[str, object]]:
+        if not target_id:
+            return []
+        try:
+            return [item.as_payload() for item in self.rag.retrieve(question, target_id=target_id, limit=5)]
+        except Exception as exc:  # noqa: BLE001 - retrieval must not break operator Q&A
+            return [
+                {
+                    "error": str(exc),
+                    "retrieval_source": "rag_error",
+                    "chunk_id": "",
+                    "evidence_refs": [],
+                }
+            ]
+
+    def _rag_context_ids(self, rag_context: list[dict[str, object]]) -> list[str]:
+        ids: list[str] = []
+        for item in rag_context:
+            chunk_id = str(item.get("chunk_id") or "").strip()
+            if chunk_id:
+                ids.append(chunk_id)
+            refs = item.get("evidence_refs", [])
+            if isinstance(refs, list):
+                ids.extend(str(ref).strip() for ref in refs if str(ref).strip())
+        return sorted(set(ids))
+
+    def _operator_answer_cites_rag_context(self, body: str, rag_context: list[dict[str, object]]) -> bool:
+        ids = self._rag_context_ids([item for item in rag_context if not item.get("error")])
+        if not ids:
+            return True
+        return any(record_id in body for record_id in ids)
+
+    def _deterministic_rag_citation_answer(
+        self,
+        question: str,
+        target_id: str | None,
+        rag_context: list[dict[str, object]],
+    ) -> str:
+        base = self._deterministic_operator_answer(question, target_id)
+        lines = []
+        for item in rag_context[:5]:
+            if item.get("error"):
+                continue
+            chunk_id = str(item.get("chunk_id") or "")
+            refs = item.get("evidence_refs", [])
+            evidence = ", ".join(f"`{ref}`" for ref in refs) if isinstance(refs, list) else ""
+            title = str(item.get("title") or "Imported document")
+            text = str(item.get("text") or "").replace("\n", " ").strip()
+            if len(text) > 220:
+                text = text[:220].rstrip() + "..."
+            lines.append(f"- `{chunk_id}` evidence={evidence or 'none'} {title}: {text}")
+        if not lines:
+            return base
+        return base + "\n\n**Retrieved Context**\n" + "\n".join(lines)
 
     def _build_operator_state_digest(self, target_id: str | None) -> str:
         target = self.store.get_target(target_id) if target_id else None
@@ -2833,6 +3074,28 @@ class PrimordialRuntime:
             "raw state",
             "current status",
             "status and next step",
+            "summarize",
+            "summary",
+            "next 3",
+            "next three",
+            "scoped recon",
+            "recon steps",
+            "latest task fail",
+            "last task fail",
+            "why did the latest task",
+            "failed task",
+            "blocked task",
+            "open port",
+            "open ports",
+            "only 2 open",
+            "only two open",
+            "login portal",
+            "login portals",
+            "port 80",
+            "escalate",
+            "premium review",
+            "remote review",
+            "gpt",
             "anything new",
             "what is it doing",
             "what are you doing",
@@ -2848,17 +3111,116 @@ class PrimordialRuntime:
             return True
         return False
 
+    def _operator_question_requires_deterministic_only(self, question: str) -> bool:
+        lowered = question.lower()
+        deterministic_terms = (
+            "summarize",
+            "summary",
+            "next 3",
+            "next three",
+            "scoped recon",
+            "recon steps",
+            "latest task fail",
+            "last task fail",
+            "why did the latest task",
+            "failed task",
+            "blocked task",
+            "open port",
+            "open ports",
+            "only 2 open",
+            "only two open",
+            "login portal",
+            "login portals",
+            "port 80",
+            "escalate",
+            "premium review",
+            "remote review",
+            "gpt",
+        )
+        return any(term in lowered for term in deterministic_terms)
+
     def _operator_answer_violates_contract(self, body: str) -> bool:
         lowered = body.lower()
         unsupported_patterns = (
             "thought process",
-            "DDoS",
+            "ddos",
             "denial of service",
             "ethical considerations",
             "as an ai",
             "always ensure you have",
+            "hello! i'm here to help",
+            "how can i assist you today",
+            "to help you best",
+            "could you please tell me",
+            "what you'd like to know or do",
         )
         return any(pattern in lowered for pattern in unsupported_patterns)
+
+    def _operator_uncertainty_escalation_reason(
+        self,
+        question: str,
+        body: str,
+        metadata: dict[str, object],
+        target: Target | None,
+    ) -> str:
+        if target is None:
+            return ""
+        current_evidence = [
+            item
+            for item in self.store.list_evidence(target_id=target.id, limit=100)
+            if self._record_matches_active_generation(item, self._target_active_generation(target))
+        ]
+        if not current_evidence:
+            return ""
+        if self._operator_requests_premium_escalation(question):
+            return "operator_requested_premium_review"
+        if metadata.get("guardrail_replaced_model_output"):
+            return "local_model_contract_violation"
+        lowered_question = question.lower()
+        asks_needed = "what is needed" in lowered_question or "what's needed" in lowered_question or "whats needed" in lowered_question
+        if asks_needed and "No runnable next action is derivable from current evidence." in body:
+            return "operator_needed_question_unresolved"
+        return ""
+
+    def _operator_requests_premium_escalation(self, question: str) -> bool:
+        lowered = question.lower()
+        mentions_premium = any(term in lowered for term in ("gpt", "premium", "remote review", "claude"))
+        asks_escalation = any(term in lowered for term in ("escalate", "send", "ask", "review"))
+        return mentions_premium and asks_escalation
+
+    def _append_operator_escalation_status(
+        self,
+        body: str,
+        target: Target,
+        *,
+        escalation_task: Task | None,
+        reason: str,
+    ) -> str:
+        task = escalation_task
+        if task is None:
+            active = [
+                item
+                for item in self.store.list_tasks(target_id=target.id, limit=50)
+                if item.kind == TaskKind.REVIEW_PREMIUM_ESCALATION
+                and item.status
+                in {TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.WAITING, TaskStatus.NEEDS_APPROVAL}
+            ]
+            task = active[0] if active else None
+        if task is None:
+            status = (
+                "**Premium Review**\n"
+                f"- Request detected for `{target.handle}`, but no new premium review task was created. "
+                "A duplicate review may already be recorded, or current evidence is insufficient for a structured packet."
+            )
+            return f"{body}\n\n{status}"
+        approval = "auto-approved" if task.metadata.get("auto_approved") else task.status.value
+        status = (
+            "**Premium Review**\n"
+            f"- Created or found `{task.kind.value}` task `{task.id}` for `{target.handle}`.\n"
+            f"- Status: `{approval}`. Reason: `{reason}`.\n"
+            "- The review packet is evidence-linked and cannot approve credential use, scope expansion, PoC execution, or Operator Intent changes."
+        )
+        return f"{body}\n\n{status}"
 
     def _deterministic_operator_answer(self, question: str, target_id: str | None) -> str:
         target = self.store.get_target(target_id) if target_id else None
@@ -2894,16 +3256,27 @@ class PrimordialRuntime:
         ]
         potential_paths = self._deterministic_potential_paths(current_evidence, interests, findings)
         lab_credentials_configured = self._lab_credentials_configured()
+        credential_surface = classify_credentialed_access_surface(current_evidence)
         blockers = self._deterministic_blockers(
             flag_hits,
             findings,
             potential_paths,
             capabilities,
             lab_credentials_configured,
+            credential_surface,
         )
-        next_actions = self._deterministic_next_actions(current_evidence, interests, findings, capabilities)
-        capability_gaps = self._deterministic_capability_gaps(current_evidence, evidence_kinds, capabilities)
+        next_actions = self._deterministic_next_actions(current_evidence, interests, findings, capabilities, credential_surface)
+        capability_gaps = self._deterministic_capability_gaps(current_evidence, evidence_kinds, capabilities, credential_surface)
         methodology_state = self._live_methodology_state_payload(target) if target else {}
+        direct_answers = self._deterministic_direct_answers(
+            question,
+            target=target,
+            tasks=tasks,
+            evidence=current_evidence,
+            interests=interests,
+            findings=findings,
+            next_actions=next_actions,
+        )
         derived_next_actions = list(next_actions)
         if isinstance(methodology_state, dict):
             planned_actions = methodology_state.get("candidate_actions", [])
@@ -2961,12 +3334,15 @@ class PrimordialRuntime:
             facts.append("No target-specific evidence is currently stored.")
 
         task_summary = ", ".join(f"{task.kind.value}:{task.status.value}" for task in tasks[:8]) or "none"
-        sections = [
+        sections = []
+        if direct_answers:
+            sections.append("**Direct Answer**\n" + "\n".join(f"- {line}" for line in direct_answers))
+        sections.append(
             "**Facts**\n"
             + "\n".join(f"- {fact}" for fact in facts)
             + f"\n- Recent task states: {task_summary}"
             + f"\n- Registered primitives: {', '.join(sorted(primitive_names)) or 'none'}"
-        ]
+        )
         if potential_paths:
             sections.append("**Potential Paths**\n" + "\n".join(f"- {path}" for path in potential_paths))
         sections.append(
@@ -2990,6 +3366,199 @@ class PrimordialRuntime:
         if capability_gaps:
             sections.append("**Capability Gaps**\n" + "\n".join(f"- {gap}" for gap in capability_gaps))
         return "\n\n".join(sections)
+
+    def _deterministic_direct_answers(
+        self,
+        question: str,
+        *,
+        target: Target | None,
+        tasks: list[Task],
+        evidence: list[EvidenceRecord],
+        interests: list[Interest],
+        findings: list[Finding],
+        next_actions: list[str],
+    ) -> list[str]:
+        lowered = question.lower()
+        lines: list[str] = []
+        asks_target_state = any(
+            term in lowered
+            for term in (
+                "summarize",
+                "summary",
+                "next 3",
+                "next three",
+                "scoped recon",
+                "recon steps",
+                "latest task fail",
+                "last task fail",
+                "open port",
+                "login portal",
+                "port 80",
+                "escalate",
+                "gpt",
+            )
+        )
+        if asks_target_state and target is None:
+            return ["No target is selected or named in the question, so I cannot give target-specific runtime state."]
+
+        if any(term in lowered for term in ("open port", "open ports", "only 2 open", "only two open")):
+            services = self._current_open_port_summary(evidence)
+            if services:
+                line = (
+                    f"Stored current evidence observes {len(services)} unique open TCP port(s): "
+                    + ", ".join(f"`{item}`" for item in services)
+                    + "."
+                )
+                lines.append(line)
+                if not self._has_full_port_scan_evidence(evidence):
+                    lines.append(
+                        "That is an observed-port answer, not proof that no other ports exist; no full-range port sweep evidence is stored."
+                    )
+            else:
+                lines.append("No current TCP service-discovery evidence is stored, so open ports cannot be answered from state.")
+
+        if any(term in lowered for term in ("login portal", "login portals", "port 80", "auth surface", "auth surfaces")):
+            auth_paths = self._current_auth_surface_summary(evidence, interests, findings)
+            if auth_paths:
+                lines.append(
+                    "Stored current evidence identifies auth/session candidate(s): "
+                    + ", ".join(f"`{item}`" for item in auth_paths[:10])
+                    + "."
+                )
+            elif any(self._evidence_has_http_surface(item) for item in evidence):
+                lines.append("No stored current evidence identifies a login portal on port 80.")
+            else:
+                lines.append("No current HTTP evidence is stored, so login portals cannot be answered from state.")
+
+        if any(term in lowered for term in ("latest task fail", "last task fail", "why did the latest task", "failed task", "blocked task")):
+            task = self._latest_problem_task(tasks)
+            if task is None:
+                lines.append("No failed, blocked, cancelled, or approval-waiting task is present in the recent target task set.")
+            else:
+                reason = self._task_problem_reason(task)
+                lines.append(
+                    f"Latest problem task is `{task.kind.value}` `{task.id}` with status `{task.status.value}`: {reason}"
+                )
+
+        if any(term in lowered for term in ("next 3", "next three", "scoped recon", "recon steps")):
+            scoped = next_actions[:3]
+            if scoped:
+                for index, action in enumerate(scoped, start=1):
+                    lines.append(f"Scoped recon step {index}: {action}")
+            else:
+                lines.append("No runnable scoped recon step is derivable from current evidence.")
+
+        if self._operator_requests_premium_escalation(question):
+            if target is None:
+                lines.append("Premium review was not created because no target is selected.")
+            elif not evidence:
+                lines.append(f"Premium review was not created for `{target.handle}` because no current evidence is stored.")
+            else:
+                lines.append(
+                    f"Premium review requested for `{target.handle}`; a structured evidence-linked review task will be created if no active duplicate exists."
+                )
+
+        return lines
+
+    def _current_open_port_summary(self, evidence: list[EvidenceRecord]) -> list[str]:
+        ports: dict[int, set[str]] = {}
+        for item in evidence:
+            services = item.metadata.get("open_services", [])
+            if not isinstance(services, list):
+                continue
+            for service in services:
+                if not isinstance(service, dict):
+                    continue
+                try:
+                    port = int(service.get("port", 0) or 0)
+                except (TypeError, ValueError):
+                    continue
+                if port <= 0:
+                    continue
+                name = str(service.get("service") or service.get("name") or "").strip().lower()
+                ports.setdefault(port, set())
+                if name:
+                    ports[port].add(name)
+        summary = []
+        for port in sorted(ports):
+            names = sorted(ports[port])
+            summary.append(f"{port}/{names[0]}" if names else str(port))
+        return summary
+
+    def _has_full_port_scan_evidence(self, evidence: list[EvidenceRecord]) -> bool:
+        for item in evidence:
+            payload = json.dumps(item.as_payload()).lower()
+            if any(term in payload for term in ("full-range", "full range", "all 65535", "65535 ports", "1-65535")):
+                return True
+        return False
+
+    def _current_auth_surface_summary(
+        self,
+        evidence: list[EvidenceRecord],
+        interests: list[Interest],
+        findings: list[Finding],
+    ) -> list[str]:
+        candidates: list[str] = []
+
+        def add(value: object) -> None:
+            text = str(value or "").strip()
+            if not text:
+                return
+            lowered = text.lower()
+            if any(term in lowered for term in ("login", "signin", "sign-in", "auth", "session", "admin", "account")):
+                if text not in candidates:
+                    candidates.append(text)
+
+        for item in evidence:
+            for key in ("auth_surfaces", "forms", "paths", "page_links", "interesting_paths"):
+                values = item.metadata.get(key, [])
+                if isinstance(values, list):
+                    for value in values:
+                        add(value)
+        for item in interests:
+            if item.metadata.get("class") == "auth":
+                values = item.metadata.get("paths", [])
+                if isinstance(values, list):
+                    for value in values:
+                        add(value)
+                add(item.title)
+                add(item.summary)
+        for item in findings:
+            values = item.metadata.get("auth_surfaces", [])
+            if isinstance(values, list):
+                for value in values:
+                    add(value)
+            values = item.metadata.get("interesting_paths", [])
+            if isinstance(values, list):
+                for value in values:
+                    add(value)
+        return candidates
+
+    def _latest_problem_task(self, tasks: list[Task]) -> Task | None:
+        problem_statuses = {
+            TaskStatus.FAILED,
+            TaskStatus.BLOCKED,
+            TaskStatus.CANCELLED,
+            TaskStatus.NEEDS_APPROVAL,
+            TaskStatus.WAITING,
+        }
+        candidates = [task for task in tasks if task.status in problem_statuses]
+        if not candidates:
+            return None
+        return sorted(candidates, key=lambda task: task.updated_at, reverse=True)[0]
+
+    def _task_problem_reason(self, task: Task) -> str:
+        for key in ("block_reason", "reason", "error", "validation_reason", "next_unblock_action"):
+            value = task.metadata.get(key)
+            if value:
+                return str(value)
+        validation = task.metadata.get("validation_issues")
+        if isinstance(validation, list) and validation:
+            first = validation[0]
+            if isinstance(first, dict):
+                return str(first.get("message") or first.get("reason") or task.summary)
+            return str(first)
+        return task.summary or task.title
 
     def _operator_recent_change_line(self, question: str, target_id: str | None) -> str:
         lowered = question.lower()
@@ -3069,6 +3638,7 @@ class PrimordialRuntime:
         potential_paths: list[str],
         capabilities: set[str],
         lab_credentials_configured: bool,
+        credential_surface: CredentialedAccessSurface,
     ) -> list[str]:
         blockers: list[str] = []
         if not flag_hits:
@@ -3082,8 +3652,8 @@ class PrimordialRuntime:
             blockers.append("No registered finding-verification primitive is available for exploitation-phase validation.")
         if not self._has_any_capability(capabilities, "winrm", "smb-session", "flag-collection", "credential-use"):
             blockers.append("No credentialed WinRM/SMB flag-collection primitive is registered.")
-        elif not lab_credentials_configured and not flag_hits:
-            blockers.append("Known username/password are not configured, so credentialed SMB/WinRM verification cannot run.")
+        elif credential_surface.eligible and not lab_credentials_configured and not flag_hits:
+            blockers.append("Known username/password are not configured, so credentialed Windows SMB/WinRM verification cannot run.")
         if potential_paths and not self._poc_adaptation_available(capabilities):
             blockers.append(
                 "Retained public PoC candidates exist, but no gated PoC applicability/adaptation primitive is registered."
@@ -3101,6 +3671,7 @@ class PrimordialRuntime:
         interests: list[Interest],
         findings: list[Finding],
         capabilities: set[str],
+        credential_surface: CredentialedAccessSurface,
     ) -> list[str]:
         actions: list[tuple[float, str]] = []
         evidence_kinds = {
@@ -3150,8 +3721,12 @@ class PrimordialRuntime:
             actions.append((0.80, "Verify local privilege-escalation candidate. Prerequisite: credentialed shell/access evidence exists."))
         elif has_lpe_candidate:
             actions.append((0.54, "Defer local privilege-escalation candidate until user shell or credentialed access exists. Prerequisite: foothold not yet evidenced."))
-        if self._has_any_capability(capabilities, "credentialed-access-check", "smb-session", "winrm") and not lab_credentials_configured:
-            actions.append((0.72, "Configure known credentials before credentialed SMB/WinRM verification. Prerequisite: operator-provided username/password."))
+        if (
+            credential_surface.eligible
+            and self._has_any_capability(capabilities, "credentialed-access-check", "smb-session", "winrm")
+            and not lab_credentials_configured
+        ):
+            actions.append((0.72, "Configure known credentials before credentialed Windows SMB/WinRM verification. Prerequisite: operator-provided username/password."))
 
         return [f"{text} Confidence: {score:.2f}." for score, text in sorted(actions, reverse=True)[:5]]
 
@@ -3160,6 +3735,7 @@ class PrimordialRuntime:
         evidence: list[EvidenceRecord],
         evidence_kinds: set[str],
         capabilities: set[str],
+        credential_surface: CredentialedAccessSurface,
     ) -> list[str]:
         gaps: list[str] = []
         has_http = any(self._evidence_has_http_surface(item) for item in evidence)
@@ -3174,7 +3750,7 @@ class PrimordialRuntime:
             gaps.append("Kerberos/LDAP user-discovery primitive is missing for AD attack-path validation.")
         if has_exploit_candidates and not self._poc_adaptation_available(capabilities):
             gaps.append("Gated exploit-synthesis/adaptation primitive is missing for retained public PoC candidates.")
-        if not self._has_any_capability(capabilities, "winrm", "smb-session", "flag-collection", "credential-use"):
+        if credential_surface.eligible and not self._has_any_capability(capabilities, "winrm", "smb-session", "flag-collection", "credential-use"):
             gaps.append("Credentialed WinRM/SMB flag-collection primitive is missing.")
         return gaps
 
@@ -3982,18 +4558,9 @@ class PrimordialRuntime:
             )
         )
         self.worker_broker.register_runner(
-            InProcessWorkerRunner(
-                runner_id="security-premium-runner",
-                lane="remote-premium",
-                supported_routes={ProviderRoute.REMOTE_PREMIUM},
-                executor_loader=lambda: self.security.primitive_executor,
+            AgentChatPremiumReviewRunner(
+                self.agent_chat,
+                target_loader=lambda target_id: self.store.get_target(target_id) if target_id else None,
                 max_concurrency=self.config.autonomy.remote_premium_concurrency,
-                contract=WorkerContract(
-                    name="premium_review_contract",
-                    supported_roles={AgentRole.CLAUDE_REVIEWER},
-                    preferred_kinds={TaskKind.REVIEW_PREMIUM_ESCALATION},
-                    processor="cpu",
-                    quality_tier=95,
-                ),
             )
         )

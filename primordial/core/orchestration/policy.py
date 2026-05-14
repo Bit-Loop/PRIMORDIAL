@@ -13,6 +13,7 @@ from primordial.core.domain.enums import (
     ScopeProfile,
     SideEffectLevel,
     TaskStatus,
+    TaskKind,
 )
 from primordial.core.domain.models import PolicyDecision, PrimitiveManifest, Target, Task
 
@@ -49,15 +50,38 @@ class PolicyEngine:
             )
 
         if task.provider_route == ProviderRoute.REMOTE_PREMIUM and not self.settings.allow_remote_premium:
-            return PolicyDecision(
-                action_kind=task.kind.value,
-                verdict=PolicyVerdict.DENY,
-                reason="remote premium provider use is disabled by policy",
-                target_id=task.target_id,
-                task_id=task.id,
-            )
+            if (
+                task.kind == TaskKind.REVIEW_PREMIUM_ESCALATION
+                and task.metadata.get("remote_premium_policy_approval_required")
+                and not task.metadata.get("remote_premium_operator_approved")
+            ):
+                return PolicyDecision(
+                    action_kind=task.kind.value,
+                    verdict=PolicyVerdict.NEEDS_APPROVAL,
+                    reason="remote premium provider use is disabled by policy and requires explicit operator approval",
+                    target_id=task.target_id,
+                    task_id=task.id,
+                    metadata={"remote_premium_policy_approval_required": True},
+                )
+            if (
+                task.kind == TaskKind.REVIEW_PREMIUM_ESCALATION
+                and task.metadata.get("remote_premium_policy_approval_required")
+                and task.metadata.get("remote_premium_operator_approved")
+            ):
+                pass
+            else:
+                return PolicyDecision(
+                    action_kind=task.kind.value,
+                    verdict=PolicyVerdict.DENY,
+                    reason="remote premium provider use is disabled by policy",
+                    target_id=task.target_id,
+                    task_id=task.id,
+                )
 
-        if task.provider_route == ProviderRoute.REMOTE_PREMIUM and self.daily_remote_cost_loader is not None:
+        if (
+            task.provider_route == ProviderRoute.REMOTE_PREMIUM
+            and self.daily_remote_cost_loader is not None
+        ):
             daily_spent = self.daily_remote_cost_loader()
             if daily_spent >= self.settings.daily_remote_budget:
                 return PolicyDecision(
@@ -191,14 +215,15 @@ class PolicyEngine:
             AutonomyMode.MANUAL,
             AutonomyMode.ASSISTED,
         }:
-            return PolicyDecision(
-                action_kind=primitive.name,
-                verdict=PolicyVerdict.NEEDS_APPROVAL,
-                reason="high-risk primitive requires approval in the current autonomy mode",
-                target_id=task.target_id,
-                task_id=task.id,
-                metadata={"action_policy": action_policy},
-            )
+            if not (task.metadata.get("operator_approved") is True and primitive.side_effect_level == SideEffectLevel.READ_ONLY):
+                return PolicyDecision(
+                    action_kind=primitive.name,
+                    verdict=PolicyVerdict.NEEDS_APPROVAL,
+                    reason="high-risk primitive requires approval in the current autonomy mode",
+                    target_id=task.target_id,
+                    task_id=task.id,
+                    metadata={"action_policy": action_policy},
+                )
 
         return PolicyDecision(
             action_kind=primitive.name,

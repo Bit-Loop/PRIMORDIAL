@@ -10,6 +10,7 @@ import tempfile
 from typing import Any
 
 from primordial.core.config import AppConfig, redact_database_url
+from primordial.core.local_runtime import load_project_env
 from primordial.core.storage.runtime import _SCHEMA_VERSION
 
 
@@ -31,6 +32,7 @@ class DoctorCheck:
 
 def run_doctor(*, project_root: Path | None = None) -> dict[str, Any]:
     root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
+    load_project_env(root)
     checks: list[DoctorCheck] = []
     config = _load_config(root, checks)
     database_url = _effective_database_url()

@@ -377,6 +377,21 @@ CREATE TABLE IF NOT EXISTS record_embeddings (
     UNIQUE(record_type, record_id, embedding_model)
 );
 
+CREATE TABLE IF NOT EXISTS document_chunks (
+    id TEXT PRIMARY KEY,
+    target_id TEXT NOT NULL REFERENCES targets(id) ON DELETE CASCADE,
+    source_artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+    source_sha256 TEXT NOT NULL,
+    chunk_index INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    text TEXT NOT NULL,
+    token_count INTEGER NOT NULL,
+    evidence_refs JSONB NOT NULL,
+    metadata JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    UNIQUE(source_artifact_id, chunk_index)
+);
+
 CREATE INDEX IF NOT EXISTS idx_targets_profile_handle ON targets(profile, handle);
 CREATE INDEX IF NOT EXISTS idx_remote_costs_created_at ON remote_provider_costs(created_at);
 CREATE INDEX IF NOT EXISTS idx_model_eval_role_created ON model_eval_role_metrics(role, created_at);
@@ -392,4 +407,7 @@ CREATE INDEX IF NOT EXISTS idx_sync_status ON external_sync_jobs(status, created
 CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at);
 CREATE INDEX IF NOT EXISTS idx_operator_messages_created_at ON operator_messages(created_at);
 CREATE INDEX IF NOT EXISTS idx_record_embeddings_record ON record_embeddings(record_type, record_id);
+CREATE INDEX IF NOT EXISTS idx_record_embeddings_target ON record_embeddings(target_id);
+CREATE INDEX IF NOT EXISTS idx_document_chunks_target ON document_chunks(target_id);
+CREATE INDEX IF NOT EXISTS idx_document_chunks_source ON document_chunks(source_artifact_id);
 """

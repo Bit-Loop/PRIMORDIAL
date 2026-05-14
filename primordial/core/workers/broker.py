@@ -156,6 +156,27 @@ class WorkerBroker:
     def register_runner(self, runner: WorkerRunner) -> None:
         self._runners.append(runner)
 
+    def has_runner_for(
+        self,
+        *,
+        route: ProviderRoute,
+        kind: TaskKind,
+        role: AgentRole,
+        runner_id: str | None = None,
+    ) -> bool:
+        for runner in self._runners:
+            if runner_id and runner.runner_id != runner_id:
+                continue
+            if route not in runner.supported_routes:
+                continue
+            contract = runner.contract
+            if contract.supported_roles and role not in contract.supported_roles:
+                continue
+            if contract.preferred_kinds and kind not in contract.preferred_kinds:
+                continue
+            return True
+        return False
+
     def dispatch(
         self,
         task: Task,

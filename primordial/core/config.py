@@ -8,6 +8,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from primordial.core.domain.enums import AutonomyMode
 from primordial.core.domain.constants import PROFILE_DEFAULT_TASK_ALLOWLIST
+from primordial.core.local_runtime import load_project_env
 
 
 @dataclass(slots=True)
@@ -81,6 +82,15 @@ class AppConfig:
     credentials_path: Path
     topology: ModelTopology = field(default_factory=ModelTopology)
     autonomy: AutonomySettings = field(default_factory=AutonomySettings)
+    agent_chat_base_url: str = "http://127.0.0.1:8787"
+    agent_chat_api_key: str | None = None
+    agent_chat_provider: str = "claude"
+    agent_chat_model: str | None = None
+    agent_chat_timeout_seconds: int = 300
+    agent_chat_cwd: Path | None = None
+    agent_chat_safe_guard: bool = True
+    agent_chat_codex_sandbox: str = "read-only"
+    agent_chat_claude_permission_mode: str = "dontAsk"
     # Maximum items written into any single evidence metadata list or note body
     # list. Increase if large targets are silently dropping evidence.
     max_evidence_items: int = 50
@@ -91,6 +101,7 @@ class AppConfig:
     @classmethod
     def from_env(cls, project_root: Path | None = None) -> "AppConfig":
         root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
+        load_project_env(root)
         runtime_dir = Path(os.getenv("PRIMORDIAL_RUNTIME_DIR", root / "runtime")).resolve()
         database_url = os.getenv("PRIMORDIAL_DATABASE_URL", "").strip()
         database_schema = None
@@ -154,6 +165,8 @@ class AppConfig:
             "/usr/share/wfuzz/wordlists/general/common.txt",
         )
         max_evidence_items = int(os.getenv("PRIMORDIAL_MAX_EVIDENCE_ITEMS", "50"))
+        agent_chat_cwd_raw = os.getenv("PRIMORDIAL_AGENT_CHAT_CWD", "").strip()
+        agent_chat_cwd = Path(agent_chat_cwd_raw).expanduser().resolve() if agent_chat_cwd_raw else None
         return cls(
             project_root=root,
             runtime_dir=runtime_dir,
@@ -172,6 +185,21 @@ class AppConfig:
             secrets_dir=secrets_dir,
             credentials_path=credentials_path,
             autonomy=autonomy,
+            agent_chat_base_url=os.getenv("PRIMORDIAL_AGENT_CHAT_BASE_URL", "http://127.0.0.1:8787").strip()
+            or "http://127.0.0.1:8787",
+            agent_chat_api_key=os.getenv("PRIMORDIAL_AGENT_CHAT_API_KEY") or os.getenv("CHAT_API_KEY") or None,
+            agent_chat_provider=os.getenv("PRIMORDIAL_AGENT_CHAT_PROVIDER", "claude").strip().lower() or "claude",
+            agent_chat_model=os.getenv("PRIMORDIAL_AGENT_CHAT_MODEL") or None,
+            agent_chat_timeout_seconds=_env_int("PRIMORDIAL_AGENT_CHAT_TIMEOUT_SECONDS", 300),
+            agent_chat_cwd=agent_chat_cwd,
+            agent_chat_safe_guard=_env_bool("PRIMORDIAL_AGENT_CHAT_SAFE_GUARD", True),
+            agent_chat_codex_sandbox=os.getenv("PRIMORDIAL_AGENT_CHAT_CODEX_SANDBOX", "read-only").strip()
+            or "read-only",
+            agent_chat_claude_permission_mode=os.getenv(
+                "PRIMORDIAL_AGENT_CHAT_CLAUDE_PERMISSION_MODE",
+                "dontAsk",
+            ).strip()
+            or "dontAsk",
             content_discovery_wordlist=content_discovery_wordlist,
             max_evidence_items=max_evidence_items,
         )
@@ -212,3 +240,13 @@ def _env_bool(name: str, default: bool) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
