@@ -78,7 +78,7 @@ artifacts/model_eval/lmstudio_role_eval_20260509T001954Z/model_eval_20260509T002
 ```
 
 Strict result: no LM Studio model met the benchmark's recommendation gate at this small `1024/128` run. Treat the following as relative guidance, not durable role routing.
-
+ 
 | Role | Relative best | Why | Caution |
 | --- | --- | --- | --- |
 | `local_fast` | `lily-cybersecurity-7b-v0.2` | Highest aggregate score in role eval, highest measured eval throughput at `126.4019` tok/s, lowest average latency at `0.9748s`. | Pass rate was only `0.1176`, so this is a practical hot-path pick, not a high-confidence recommendation. |

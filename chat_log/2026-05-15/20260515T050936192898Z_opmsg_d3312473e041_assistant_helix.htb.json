@@ -1,0 +1,155 @@
+{
+  "body": "**Facts**\n- Target `helix.htb` is `hack_the_box` and in_scope=True.\n- Active operator-confirmed IP is `10.129.55.37`.\n- Methodology phase is `analysis` / `analyze_evidence` with completion state `waiting_on_existing_tasks`.\n- 9 recent evidence record(s) are historical for an older active-IP generation.\n- `PoC applicability validation: helix.htb`: Classified 29 retained public PoC candidate(s): 14 ready for gated review, 15 blocked or research-only. No PoC was executed and no exploit code was generated.\n- `Exploit research: helix.htb`: Searchsploit research found 29 non-DoS candidate(s), suppressed 10 DoS/crash-oriented result(s), and retained 4 example excerpt(s): Ingress-NGINX 4.11.0 - Remote Code Execution (RCE), OpenSSH < 6.6 SFTP (x64) - Command Execution, OpenSSH < 6.6 SFTP - Command Execution, SSH (x2) - Remote Command Execution, PHP-FPM + Nginx - Remote Code Execution.\n- `TCP service discovery: helix.htb`: TCP service discovery observed 4 open service(s): 10.129.55.37:22/ssh, 10.129.55.37:80/http, helix.htb:22/ssh, helix.htb:80/http.\n- Recent task states: service_discovery:succeeded, analyze_evidence:succeeded, analyze_evidence:succeeded, analyze_evidence:succeeded, analyze_evidence:succeeded, analyze_evidence:succeeded, analyze_evidence:succeeded, analyze_evidence:succeeded\n- Registered primitives: ad-enumeration, approved-admin-action, behavior-review, caido-search, chain-review, claude-review, content-discovery, credentialed-access-check, discord-alert, dns-enumeration, document-ingest, finding-verification, http-probe, hypothesis-analysis, kerberos-attack-check, kerberos-user-discovery, memory-compactor, notion-sync, poc-applicability-validation, rag-search, searchsploit-research, sysadmin-health-check, tcp-service-discovery, tmde-record-extraction\n\n**Potential Paths**\n- `Public exploit references require manual triage` is a medium candidate with 0.62 confidence and partial verification.\n- `PoC applicability candidates ready for gated review`: 14 retained public PoC candidate(s) have enough evidence for a deeper gated review. Execution still requires explicit policy approval and bounded stop conditions. Confidence 0.72.\n- `PoC research candidates for gated synthesis`: Searchsploit returned non-DoS public exploit references. These are research candidates only; they require version validation, adaptation review, and policy approval before any execution. Confidence 0.70.\n- `Exploit research: helix.htb` retained 29 non-DoS public exploit reference(s). These are potential paths until target-specific version/applicability evidence verifies them.\n\n**Blockers**\n- No stored evidence contains a user/root flag or flag-like token.\n\n**Next Actions**\n- Run bounded web content discovery. Prerequisite: HTTP probe evidence shows a live web surface. Confidence: 0.82.\n- Run gated public PoC applicability validation against exact service/version evidence. Prerequisite: retained non-DoS Searchsploit candidates. Confidence: 0.76.",
+  "created_at": "2026-05-15T05:09:36.192898+00:00",
+  "id": "opmsg_d3312473e041",
+  "metadata": {
+    "ai_review_attempted": false,
+    "mode": "deterministic_state_answer",
+    "ok": true,
+    "route_model": "agent_chat_api:claude:provider-default"
+  },
+  "model": "deterministic-state",
+  "role": "assistant",
+  "target": {
+    "created_at": "2026-05-14T18:18:08.627618-05:00",
+    "display_name": "helix.htb",
+    "handle": "helix.htb",
+    "id": "target_restore_helix_htb",
+    "in_scope": true,
+    "metadata": {
+      "active_ip": "10.129.55.37",
+      "active_ip_generation": 2,
+      "active_ip_source": "scope_editor",
+      "helix_only_recovery_last_verified_at": "2026-05-14T23:58:57.348939+00:00",
+      "helix_only_recovery_sources": [
+        "findings/notion/helix.htb/notion-export.md",
+        "findings/targets/helix.htb/evidence.md",
+        "findings/targets/helix.htb/findings.md",
+        "findings/targets/helix.htb/guidance.md"
+      ],
+      "historical_ips": [
+        "10.129.54.140"
+      ],
+      "last_planner_uncertainty_escalation_key": "{\"evidence_ids\": [\"evidence_4a6541a6713b\", \"evidence_19aae821c612\", \"evidence_1656c5228a85\", \"evidence_0748f41bb64a\", \"evidence_4874ac495b54\", \"evidence_7b203a066575\"], \"question\": \"What is the next valid, evidence-linked task for helix.htb under operator intent htb_lab? Classify invalid existing tasks and missing evidence, but do not approve credential use, expand scope, execute tools, or override Operator Intent.\", \"reason_code\": \"planner_uncertainty\", \"reasons\": [{\"code\": \"all_ai_proposals_rejected\", \"rejected\": [{\"primitive_hint\": \"web_content_discovery\", \"reason\": \"missing primitive mapping\", \"task_id\": \"task_99c7e4ede70d\", \"title\": \"Web Directory and File Enumeration (HTTP)\"}, {\"primitive_hint\": \"service_version_detection\", \"reason\": \"missing primitive mapping\", \"task_id\": \"task_99c7e4ede70d\", \"title\": \"SSH Service Version and Banner Grabbing\"}, {\"primitive_hint\": \"http_header_analysis\", \"reason\": \"missing primitive mapping\", \"task_id\": \"task_99c7e4ede70d\", \"title\": \"HTTP Header Analysis and Parameter Discovery\"}, {\"primitive_hint\": \"web_directory_enumeration\", \"reason\": \"missing primitive mapping\", \"task_id\": \"task_752b85cd506f\", \"title\": \"Web Directory and File Enumeration\"}, {\"primitive_hint\": \"http_header_analysis\", \"reason\": \"missing primitive mapping\", \"task_id\": \"task_752b85cd506f\", \"title\": \"HTTP Header Analysis\"}, {\"primitive_hint\": \"service_version_fingerprinting\", \"reason\": \"missing primitive mapping\", \"task_id\": \"task_752b85cd506f\", \"title\": \"SSH Service Version Fingerprinting\"}, {\"primitive_hint\": \"web_vulnerability_scan\", \"reason\": \"missing primitive mapping\", \"task_id\": \"task_752b85cd506f\", \"title\": \"Web Application Vulnerability Scanning (Bounded)\"}, {\"primitive_hint\": \"web_content_discovery\", \"reason\": \"missing primitive mapping\", \"task_id\": \"task_6f6eff721d8e\", \"title\": \"Web Content Discovery (Directory/File Enumeration)\"}], \"summary\": \"All AI-proposed actions lacked registered primitive mappings.\"}]}",
+      "methodology_state": {
+        "blockers": [
+          "AI proposal rejected: Web Directory and File Enumeration (HTTP) (missing primitive mapping)",
+          "AI proposal rejected: SSH Service Version and Banner Grabbing (missing primitive mapping)",
+          "AI proposal rejected: HTTP Header Analysis and Parameter Discovery (missing primitive mapping)"
+        ],
+        "candidate_actions": [
+          {
+            "confidence": 0.9,
+            "kind": "analyze_evidence",
+            "metadata": {},
+            "phase": "analysis",
+            "prerequisite": "current-generation recon evidence",
+            "subphase": "evidence_review",
+            "summary": "Cluster recon evidence and generate bounded hypotheses for helix.htb.",
+            "title": "Analyze accumulated evidence",
+            "transition_reason": "The current evidence signature has not been analyzed yet."
+          }
+        ],
+        "completion": "candidate_actions_ready",
+        "fingerprint": "{\"blockers\": [\"AI proposal rejected: Web Directory and File Enumeration (HTTP) (missing primitive mapping)\", \"AI proposal rejected: SSH Service Version and Banner Grabbing (missing primitive mapping)\", \"AI proposal rejected: HTTP Header Analysis and Parameter Discovery (missing primitive mapping)\"], \"candidate_actions\": [{\"confidence\": 0.9, \"kind\": \"analyze_evidence\", \"metadata\": {}, \"phase\": \"analysis\", \"prerequisite\": \"current-generation recon evidence\", \"subphase\": \"evidence_review\", \"summary\": \"Cluster recon evidence and generate bounded hypotheses for helix.htb.\", \"title\": \"Analyze accumulated evidence\", \"transition_reason\": \"The current evidence signature has not been analyzed yet.\"}], \"completion\": \"candidate_actions_ready\", \"no_progress_reason\": null, \"phase\": \"analysis\", \"subphase\": \"evidence_review\"}",
+        "metadata": {
+          "active_ip_generation": "2",
+          "ai_proposal_admission": {
+            "accepted": [
+              {
+                "primitive_hint": "content-discovery",
+                "task_id": "task_98f37a60f985",
+                "title": "Content discovery on http://helix.htb/"
+              }
+            ],
+            "rejected": [
+              {
+                "primitive_hint": "web_content_discovery",
+                "reason": "missing primitive mapping",
+                "task_id": "task_99c7e4ede70d",
+                "title": "Web Directory and File Enumeration (HTTP)"
+              },
+              {
+                "primitive_hint": "service_version_detection",
+                "reason": "missing primitive mapping",
+                "task_id": "task_99c7e4ede70d",
+                "title": "SSH Service Version and Banner Grabbing"
+              },
+              {
+                "primitive_hint": "http_header_analysis",
+                "reason": "missing primitive mapping",
+                "task_id": "task_99c7e4ede70d",
+                "title": "HTTP Header Analysis and Parameter Discovery"
+              },
+              {
+                "primitive_hint": "web_directory_enumeration",
+                "reason": "missing primitive mapping",
+                "task_id": "task_752b85cd506f",
+                "title": "Web Directory and File Enumeration"
+              },
+              {
+                "primitive_hint": "http_header_analysis",
+                "reason": "missing primitive mapping",
+                "task_id": "task_752b85cd506f",
+                "title": "HTTP Header Analysis"
+              },
+              {
+                "primitive_hint": "service_version_fingerprinting",
+                "reason": "missing primitive mapping",
+                "task_id": "task_752b85cd506f",
+                "title": "SSH Service Version Fingerprinting"
+              },
+              {
+                "primitive_hint": "web_vulnerability_scan",
+                "reason": "missing primitive mapping",
+                "task_id": "task_752b85cd506f",
+                "title": "Web Application Vulnerability Scanning (Bounded)"
+              },
+              {
+                "primitive_hint": "web_content_discovery",
+                "reason": "missing primitive mapping",
+                "task_id": "task_6f6eff721d8e",
+                "title": "Web Content Discovery (Directory/File Enumeration)"
+              }
+            ]
+          },
+          "current_generation_evidence_count": 6,
+          "rag_hint_admission": {
+            "accepted": [],
+            "rejected": []
+          },
+          "remote_review_admission": {
+            "accepted": [],
+            "rejected": []
+          },
+          "verified_interest_count": 0,
+          "waiting_task_count": 0
+        },
+        "next_unblock_action": "AI proposal rejected: Web Directory and File Enumeration (HTTP) (missing primitive mapping)",
+        "no_progress_reason": null,
+        "phase": "analysis",
+        "planner_version": 2,
+        "retry_budget": {
+          "review_premium_escalation": 0
+        },
+        "subphase": "evidence_review",
+        "transition_reason": "The current evidence signature has not been analyzed yet.",
+        "updated_at": "2026-05-15T05:09:13.451596+00:00"
+      },
+      "operator_confirmed_ip": "10.129.55.37",
+      "operator_confirmed_ip_at": "2026-05-15T02:43:50.302187+00:00",
+      "operator_intent_blocks": {
+        "2:credentialed_access_check:recon_only": true,
+        "2:exploit_research:recon_only": true,
+        "2:poc_applicability_validation:recon_only": true
+      },
+      "other_htb_domains_ignored_for_recovery": true,
+      "restore_scope": "helix_only",
+      "restored_from": "helix filesystem exports",
+      "stale_evidence_before": "2026-05-15T02:43:50.302191+00:00",
+      "temporary_domain": true
+    },
+    "profile": "hack_the_box",
+    "updated_at": "2026-05-15T00:09:13.453310-05:00"
+  }
+}

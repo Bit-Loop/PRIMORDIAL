@@ -216,6 +216,76 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual([primitive.name for primitive in validation_primitives], ["finding-verification"])
         self.assertEqual([primitive.name for primitive in execution_primitives], ["finding-verification"])
 
+    def test_primitive_hint_aliases_narrow_validation_and_execution_primitives(self) -> None:
+        task = Task(
+            target_id=self.target.id,
+            phase=MethodologyPhase.RECON,
+            kind=TaskKind.WEB_CONTENT_DISCOVERY,
+            title="Discover web paths",
+            summary="Use the canonical content discovery primitive for planner aliases.",
+            role=AgentRole.RECON_WORKER,
+            risk_tier=RiskTier.MODERATE,
+            required_capabilities=["content-discovery", "path-enumeration"],
+            metadata={"primitive_hint": "web_content_discovery"},
+        )
+
+        validation_primitives = self.runtime.workflow._stored_primitives_for_task(task)
+        execution_primitives = self.runtime.security.primitive_executor.resolve_primitives(task)
+
+        self.assertEqual([primitive.name for primitive in validation_primitives], ["content-discovery"])
+        self.assertEqual([primitive.name for primitive in execution_primitives], ["content-discovery"])
+
+    def test_primitive_capability_hint_resolves_matching_manifest(self) -> None:
+        task = Task(
+            target_id=self.target.id,
+            phase=MethodologyPhase.RECON,
+            kind=TaskKind.SERVICE_DISCOVERY,
+            title="Fingerprint services",
+            summary="Use capability hints to select the backing manifest.",
+            role=AgentRole.RECON_WORKER,
+            risk_tier=RiskTier.LOW,
+            required_capabilities=[],
+            metadata={"primitive_hint": "service-identification"},
+        )
+
+        validation_primitives = self.runtime.workflow._stored_primitives_for_task(task)
+        execution_primitives = self.runtime.security.primitive_executor.resolve_primitives(task)
+
+        self.assertEqual([primitive.name for primitive in validation_primitives], ["tcp-service-discovery"])
+        self.assertEqual([primitive.name for primitive in execution_primitives], ["tcp-service-discovery"])
+
+    def test_ai_proposal_admission_canonicalizes_primitive_aliases(self) -> None:
+        task = Task(
+            target_id=self.target.id,
+            phase=MethodologyPhase.ANALYSIS,
+            kind=TaskKind.ANALYZE_EVIDENCE,
+            title="Analyze stalled planner evidence",
+            summary="Structured AI proposal with common primitive aliases.",
+            role=AgentRole.ANALYSIS_WORKER,
+            risk_tier=RiskTier.LOW,
+            metadata={
+                "ai_proposal": {
+                    "candidate_actions": [
+                        {"title": "Run content discovery", "primitive_hint": "web_content_discovery"},
+                        {"title": "Capture HTTP headers", "primitive_hint": "http_header_analysis"},
+                        {"title": "Fingerprint services", "primitive_hint": "service_version_fingerprinting"},
+                        {"title": "Run web vulnerability scan", "primitive_hint": "web_vulnerability_scan"},
+                    ],
+                }
+            },
+        )
+
+        admission = self.runtime.workflow._evaluate_ai_proposal_admission([task])
+        accepted = {item["title"]: item for item in admission["accepted"]}
+        rejected = {item["title"]: item for item in admission["rejected"]}
+
+        self.assertEqual(accepted["Run content discovery"]["primitive_hint"], "content-discovery")
+        self.assertEqual(accepted["Run content discovery"]["raw_primitive_hint"], "web_content_discovery")
+        self.assertEqual(accepted["Capture HTTP headers"]["primitive_hint"], "http-probe")
+        self.assertEqual(accepted["Fingerprint services"]["primitive_hint"], "tcp-service-discovery")
+        self.assertEqual(rejected["Run web vulnerability scan"]["primitive_hint"], "web-vulnerability-scan")
+        self.assertEqual(rejected["Run web vulnerability scan"]["reason"], "missing primitive mapping")
+
     def test_verify_hypothesis_writes_bounded_verification_result(self) -> None:
         evidence = EvidenceRecord(
             target_id=self.target.id,
@@ -842,7 +912,7 @@ class WorkflowTests(unittest.TestCase):
                     "recommended_next_actions": [
                         {
                             "title": "Run bounded web content discovery from remote review",
-                            "primitive_hint": "content-discovery",
+                            "primitive_hint": "web_directory_enumeration",
                             "evidence_refs": [service_evidence.id],
                             "confidence": 0.7,
                         },
@@ -859,6 +929,11 @@ class WorkflowTests(unittest.TestCase):
                             "evidence_refs": [service_evidence.id],
                             "credential_use_approved": True,
                         },
+                        {
+                            "title": "Unsafe unmapped scan",
+                            "primitive_hint": "web_vulnerability_scan",
+                            "evidence_refs": [service_evidence.id],
+                        },
                     ],
                     "missing_evidence": [],
                     "invalid_existing_tasks": [],
@@ -874,10 +949,13 @@ class WorkflowTests(unittest.TestCase):
         admission = state.metadata["remote_review_admission"]
 
         self.assertTrue(any(item["title"].startswith("Run bounded web content") for item in admission["accepted"]))
+        accepted = next(item for item in admission["accepted"] if item["title"].startswith("Run bounded web content"))
+        self.assertEqual(accepted["primitive_hint"], "content-discovery")
         reasons = " ".join(item["reason"] for item in admission["rejected"])
         self.assertIn("no evidence refs", reasons)
         self.assertIn("different scope", reasons)
         self.assertIn("attempted to approve", reasons)
+        self.assertIn("missing primitive mapping", reasons)
 
 
 if __name__ == "__main__":

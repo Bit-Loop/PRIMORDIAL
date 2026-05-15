@@ -46,6 +46,7 @@ from primordial.core.events.bus import EventBus, RuntimeSignal
 from primordial.core.intent.models import OperatorIntentPolicy
 from primordial.core.orchestration.policy import PolicyEngine
 from primordial.core.orchestration.verifier import BehaviorVerifier
+from primordial.core.primitives.aliases import normalize_primitive_hint, primitives_for_hint
 from primordial.core.providers.router import ProviderRouter
 from primordial.core.providers.scheduler import ModelScheduler
 from primordial.core.recovery.resume_tracker import ResumeTracker
@@ -87,6 +88,7 @@ class WorkflowOrchestrator:
     REMOTE_REVIEW_KIND_BY_PRIMITIVE = {
         "tcp-service-discovery": TaskKind.SERVICE_DISCOVERY,
         "service-identification": TaskKind.SERVICE_DISCOVERY,
+        "http-probe": TaskKind.RECON_SCAN,
         "dns-enumeration": TaskKind.DNS_ENUMERATION,
         "content-discovery": TaskKind.WEB_CONTENT_DISCOVERY,
         "path-enumeration": TaskKind.WEB_CONTENT_DISCOVERY,
@@ -1392,24 +1394,27 @@ class WorkflowOrchestrator:
                 if not isinstance(action, dict):
                     continue
                 title = str(action.get("title") or "untitled action").strip()
-                primitive_hint = str(action.get("primitive_hint") or "").strip().lower()
+                raw_primitive_hint = str(action.get("primitive_hint") or "").strip()
+                primitive_hint = normalize_primitive_hint(raw_primitive_hint)
                 if primitive_hint and (primitive_hint in available_primitives or primitive_hint in available_capabilities):
-                    accepted.append(
-                        {
-                            "task_id": task.id,
-                            "title": title,
-                            "primitive_hint": primitive_hint,
-                        }
-                    )
+                    item = {
+                        "task_id": task.id,
+                        "title": title,
+                        "primitive_hint": primitive_hint,
+                    }
+                    if raw_primitive_hint and raw_primitive_hint.lower().replace("_", "-") != primitive_hint:
+                        item["raw_primitive_hint"] = raw_primitive_hint
+                    accepted.append(item)
                 else:
-                    rejected.append(
-                        {
-                            "task_id": task.id,
-                            "title": title,
-                            "primitive_hint": primitive_hint,
-                            "reason": "missing primitive mapping" if primitive_hint else "no primitive hint supplied",
-                        }
-                    )
+                    item = {
+                        "task_id": task.id,
+                        "title": title,
+                        "primitive_hint": primitive_hint,
+                        "reason": "missing primitive mapping" if primitive_hint else "no primitive hint supplied",
+                    }
+                    if raw_primitive_hint and raw_primitive_hint.lower().replace("_", "-") != primitive_hint:
+                        item["raw_primitive_hint"] = raw_primitive_hint
+                    rejected.append(item)
         return {"accepted": accepted[:8], "rejected": rejected[:8]}
 
     def _evaluate_remote_review_admission(self, target: Target) -> dict[str, object]:
@@ -1488,6 +1493,7 @@ class WorkflowOrchestrator:
                     surface=surface,
                 )
                 primitive_hint = self._normalized_primitive_hint(recommendation)
+                raw_primitive_hint = self._raw_primitive_hint(recommendation)
                 task_kind = self.REMOTE_REVIEW_KIND_BY_PRIMITIVE.get(primitive_hint)
                 action_refs = self._remote_review_action_refs(recommendation, rationale_refs)
                 if reason:
@@ -1513,6 +1519,15 @@ class WorkflowOrchestrator:
                     continue
                 confidence = self._float_between_0_1(recommendation.get("confidence"), review.get("confidence"))
                 summary = str(recommendation.get("summary") or recommendation.get("rationale") or title)
+                metadata = {
+                    "remote_review_admitted": True,
+                    "source_review_evidence_id": record.id,
+                    "primitive_hint": primitive_hint,
+                    "evidence_refs": action_refs,
+                    "supporting_evidence_refs": action_refs,
+                }
+                if raw_primitive_hint and raw_primitive_hint.lower().replace("_", "-") != primitive_hint:
+                    metadata["raw_primitive_hint"] = raw_primitive_hint
                 actions.append(
                     PlannedTargetAction(
                         kind=task_kind,
@@ -1526,13 +1541,7 @@ class WorkflowOrchestrator:
                             "validated primitive, evidence, scope, policy, and Operator Intent gates."
                         ),
                         prerequisite=str(recommendation.get("prerequisite") or "current-generation evidence refs"),
-                        metadata={
-                            "remote_review_admitted": True,
-                            "source_review_evidence_id": record.id,
-                            "primitive_hint": primitive_hint,
-                            "evidence_refs": action_refs,
-                            "supporting_evidence_refs": action_refs,
-                        },
+                        metadata=metadata,
                     )
                 )
                 accepted.append(
@@ -1736,7 +1745,7 @@ class WorkflowOrchestrator:
         )
 
     def _rag_hint_primitive(self, chunk: DocumentChunk) -> str:
-        metadata_hint = str(chunk.metadata.get("primitive_hint") or "").strip().lower().replace("_", "-")
+        metadata_hint = normalize_primitive_hint(chunk.metadata.get("primitive_hint"))
         if metadata_hint:
             return metadata_hint
         corpus_type = str(chunk.metadata.get("corpus_type") or "")
@@ -1860,7 +1869,11 @@ class WorkflowOrchestrator:
 
     def _normalized_primitive_hint(self, recommendation: dict[str, object]) -> str:
         raw = recommendation.get("primitive_hint") or recommendation.get("primitive") or recommendation.get("capability")
-        return str(raw or "").strip().lower().replace("_", "-")
+        return normalize_primitive_hint(raw)
+
+    def _raw_primitive_hint(self, recommendation: dict[str, object]) -> str:
+        raw = recommendation.get("primitive_hint") or recommendation.get("primitive") or recommendation.get("capability")
+        return str(raw or "").strip()
 
     def _remote_review_action_refs(self, recommendation: dict[str, object], rationale_refs: list[str]) -> list[str]:
         refs = recommendation.get("evidence_refs")
@@ -3025,15 +3038,9 @@ class WorkflowOrchestrator:
     def _stored_primitives_for_task(self, task: Task) -> list[PrimitiveManifest]:
         selected: dict[str, PrimitiveManifest] = {}
         manifests = self.store.list_primitives()
-        primitive_hint = str(task.metadata.get("primitive_hint") or "").strip().lower()
-        if primitive_hint:
-            hinted = [
-                manifest
-                for manifest in manifests
-                if manifest.name.lower() == primitive_hint
-            ]
-            if hinted:
-                return hinted
+        hinted = primitives_for_hint(manifests, task.metadata.get("primitive_hint"))
+        if hinted:
+            return hinted
         for capability in task.required_capabilities:
             for manifest in manifests:
                 if capability in manifest.capability_tags:

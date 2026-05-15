@@ -24,7 +24,10 @@ function agentLabel(model) {
   if (!raw) return 'AGENT';
   if (raw.startsWith('agent_chat_api:')) {
     const parts = raw.split(':');
-    return `AGENT · wrapper:${parts[1] || 'provider'}`;
+    const provider = parts[1] || 'provider';
+    const model = parts[2] && parts[2] !== 'provider-default' ? `/${parts[2]}` : '';
+    const effort = parts[3] ? ` ${parts[3]}` : '';
+    return `AGENT · wrapper:${provider}${model}${effort}`;
   }
   if (raw === 'deterministic-state') return 'AGENT · deterministic';
   return `AGENT · ${raw}`;
@@ -184,7 +187,7 @@ function ChatMode() {
   const inquiryModel = wrapperMode.use_only_wrapper
     ? (wrapperMode.model_label || `agent_chat_api:${wrapperMode.provider || 'claude'}:provider-default`)
     : `local-deep · ${localDeepModel}`;
-  const inquiryLane = wrapperMode.use_only_wrapper ? `wrapper:${wrapperMode.provider || 'provider'}` : 'local-deep';
+  const inquiryLane = wrapperMode.use_only_wrapper ? `wrapper:${wrapperMode.display_label || wrapperMode.provider || 'provider'}` : 'local-deep';
   const premiumWrapperLine = premiumWrapper.local_wrapper_available
     ? `Claude/GPT: ${premiumWrapper.local_chat_wrapper || 'agent_chat_api'} wrapper`
     : `Claude/GPT: ${premiumWrapper.status || 'disabled'}`;

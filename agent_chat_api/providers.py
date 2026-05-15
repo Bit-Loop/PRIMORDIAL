@@ -19,6 +19,7 @@ from .sessions import SessionRecord, SessionStore, SessionStoreError
 PROVIDERS = {"codex", "claude"}
 FINAL_FALLBACK_PROVIDER = "wrapper"
 CODEX_SANDBOXES = {"read-only", "workspace-write", "danger-full-access"}
+REASONING_EFFORTS = {"low", "medium", "high", "xhigh"}
 SENSITIVE_RAW_KEYS = {
     "api_key",
     "apikey",
@@ -52,6 +53,7 @@ class ChatRequest:
     prompt: str | None = None
     messages: list[dict[str, Any]] | None = None
     model: str | None = None
+    effort: str | None = None
     cwd: str | None = None
     timeout_seconds: int | None = None
     system_prompt: str | None = None
@@ -168,6 +170,7 @@ def request_from_payload(payload: dict[str, Any], default_provider: str) -> Chat
     provider = payload.get("provider")
     provider_explicit = provider is not None
     model = payload.get("model")
+    effort = payload.get("effort", payload.get("reasoning_effort"))
     if isinstance(model, str) and ":" in model:
         prefix, remainder = model.split(":", 1)
         if prefix.lower() in PROVIDERS and remainder:
@@ -188,6 +191,7 @@ def request_from_payload(payload: dict[str, Any], default_provider: str) -> Chat
         prompt=prompt,
         messages=messages,
         model=str(model) if model else None,
+        effort=_optional_effort(effort),
         cwd=str(payload.get("cwd")) if payload.get("cwd") else None,
         timeout_seconds=_optional_int(payload.get("timeout_seconds")),
         system_prompt=str(payload.get("system_prompt")) if payload.get("system_prompt") else None,
@@ -665,6 +669,8 @@ class ChatRunner:
             command.extend(["--tools", "", "--permission-mode", "dontAsk"])
         if request.model:
             command.extend(["--model", request.model])
+        if request.effort:
+            command.extend(["--effort", request.effort])
         return command, warnings
 
     def _build_codex_command(
@@ -693,6 +699,8 @@ class ChatRunner:
                 command.append("--json")
             if request.model:
                 command.extend(["--model", request.model])
+            if request.effort:
+                command.extend(["-c", f'model_reasoning_effort="{request.effort}"'])
             command.extend([provider_session_id, "-"])
             return command, warnings
 
@@ -713,6 +721,8 @@ class ChatRunner:
             command.append("--ephemeral")
         if request.model:
             command.extend(["--model", request.model])
+        if request.effort:
+            command.extend(["-c", f'model_reasoning_effort="{request.effort}"'])
         command.append("-")
         return command, warnings
 
@@ -869,6 +879,17 @@ def _optional_bool(value: Any, *, default: bool | None, field_name: str) -> bool
         if normalized in {"0", "false", "no", "off"}:
             return False
     raise RequestError(f"{field_name} must be a boolean.")
+
+
+def _optional_effort(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    effort = str(value).strip().lower()
+    if not effort:
+        return None
+    if effort not in REASONING_EFFORTS:
+        raise RequestError(f"effort must be one of: {', '.join(sorted(REASONING_EFFORTS))}")
+    return effort
 
 
 def _validate_provider(provider: str) -> str:

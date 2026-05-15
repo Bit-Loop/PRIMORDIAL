@@ -51,6 +51,20 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(request.provider, "codex")
         self.assertEqual(request.model, "gpt-5.5")
 
+    def test_payload_accepts_reasoning_effort(self) -> None:
+        request = request_from_payload(
+            {"provider": "codex", "model": "gpt-5.5", "effort": "high", "prompt": "x"},
+            "claude",
+        )
+
+        self.assertEqual(request.provider, "codex")
+        self.assertEqual(request.model, "gpt-5.5")
+        self.assertEqual(request.effort, "high")
+
+    def test_payload_rejects_unknown_reasoning_effort(self) -> None:
+        with self.assertRaises(RequestError):
+            request_from_payload({"prompt": "hello", "effort": "extreme"}, "claude")
+
     def test_payload_rejects_non_list_messages(self) -> None:
         with self.assertRaises(RequestError):
             request_from_payload({"messages": "hello"}, "claude")
@@ -93,6 +107,17 @@ class ProviderTests(unittest.TestCase):
         self.assertIn("json", command)
         self.assertNotIn("--max-turns", command)
         self.assertEqual(command[command.index("--tools") + 1], "")
+
+    def test_claude_command_accepts_model_and_effort(self) -> None:
+        command, warnings = self.runner.build_command(
+            ChatRequest(provider="claude", prompt="hello", model="sonnet", effort="high"),
+            "claude",
+            self.root,
+        )
+
+        self.assertEqual(warnings, [])
+        self.assertEqual(command[command.index("--model") + 1], "sonnet")
+        self.assertEqual(command[command.index("--effort") + 1], "high")
 
     def test_claude_command_allows_explicit_tool_mode(self) -> None:
         command, warnings = self.runner.build_command(
@@ -271,6 +296,18 @@ print('fake codex saw ' + str(len(stdin)) + ' chars')
         result = runner.run(ChatRequest(provider="codex", prompt="hello", safe_guard=False))
         self.assertEqual(result.text, "fake codex saw 5 chars")
         self.assertEqual(result.exit_code, 0)
+
+    def test_codex_command_accepts_model_and_effort(self) -> None:
+        command, warnings = self.runner.build_command(
+            ChatRequest(provider="codex", prompt="hello", model="gpt-5.5", effort="high"),
+            "codex",
+            self.root,
+        )
+
+        self.assertTrue(any("read-only sandbox" in warning for warning in warnings))
+        self.assertEqual(command[command.index("--model") + 1], "gpt-5.5")
+        self.assertIn("-c", command)
+        self.assertIn('model_reasoning_effort="high"', command)
 
     def test_provider_nonzero_exit_becomes_provider_error(self) -> None:
         fake_claude = temporary_executable(

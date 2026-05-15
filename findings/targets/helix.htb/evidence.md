@@ -1,6 +1,6 @@
 # helix.htb Evidence Index
 
-Generated: 2026-05-15T04:04:27.116644+00:00
+Generated: 2026-05-15T05:12:30.003538+00:00
 
 - `evidence_4a6541a6713b` PoC applicability validation: helix.htb: Classified 29 retained public PoC candidate(s): 14 ready for gated review, 15 blocked or research-only. No PoC was executed and no exploit code was generated.
 - `evidence_19aae821c612` Exploit research: helix.htb: Searchsploit research found 29 non-DoS candidate(s), suppressed 10 DoS/crash-oriented result(s), and retained 4 example excerpt(s): Ingress-NGINX 4.11.0 - Remote Code Execution (RCE), OpenSSH < 6.6 SFTP (x64) - Command Execution, OpenSSH < 6.6 SFTP - Command Execution, SSH (x2) - Remote Command Execution, PHP-FPM + Nginx - Remote Code Execution.

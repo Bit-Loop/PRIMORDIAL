@@ -69,7 +69,7 @@ class AgentChatClientTests(unittest.TestCase):
                 )
             )
 
-            response = client.chat(prompt="review this", conversation_id="conv-test")
+            response = client.chat(prompt="review this", conversation_id="conv-test", effort="high")
         finally:
             server.shutdown()
             thread.join(timeout=2)
@@ -81,6 +81,7 @@ class AgentChatClientTests(unittest.TestCase):
         payload = captured["payload"]
         self.assertIsInstance(payload, dict)
         self.assertEqual(payload["provider"], "claude")
+        self.assertEqual(payload["effort"], "high")
         self.assertEqual(payload["conversation_id"], "conv-test")
         self.assertFalse(payload["allow_tools"])
 

@@ -82,6 +82,7 @@ class AgentChatClient:
         system_prompt: str | None = None,
         provider: str | None = None,
         model: str | None = None,
+        effort: str | None = None,
         conversation_id: str | None = None,
         persist: bool = True,
     ) -> AgentChatResponse:
@@ -104,6 +105,8 @@ class AgentChatClient:
         selected_model = model or self.settings.model
         if selected_model:
             payload["model"] = selected_model
+        if effort:
+            payload["effort"] = effort
         if conversation_id:
             payload["conversation_id"] = conversation_id
         if self.settings.cwd is not None:
@@ -489,6 +492,7 @@ class AgentChatPremiumReviewRunner:
             "output_rules": [
                 "Return JSON only, with no markdown fences.",
                 "Every recommended_next_actions item must include title, rationale, confidence, primitive_hint, and evidence_refs.",
+                "Use exact primitive_hint values when applicable: content-discovery, http-probe, tcp-service-discovery.",
                 "Only reference evidence IDs supplied in task.evidence_refs or the escalation package.",
                 "Leave recommended_next_actions empty when evidence or policy is insufficient.",
             ],

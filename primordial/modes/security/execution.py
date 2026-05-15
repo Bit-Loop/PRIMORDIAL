@@ -52,6 +52,7 @@ from primordial.core.domain.models import (
     TaskHandoff,
 )
 from primordial.core.intent.models import OperatorIntentPolicy
+from primordial.core.primitives.aliases import primitives_for_hint
 from primordial.core.primitives.catalog import PrimitiveCatalog
 from primordial.core.storage.runtime import RuntimeStore
 
@@ -259,15 +260,9 @@ class PrimitiveExecutor:
 
     def resolve_primitives(self, task: Task) -> list[PrimitiveManifest]:
         selected: dict[str, PrimitiveManifest] = {}
-        primitive_hint = str(task.metadata.get("primitive_hint") or "").strip().lower()
-        if primitive_hint:
-            hinted = [
-                manifest
-                for manifest in self.catalog.all()
-                if manifest.name.lower() == primitive_hint
-            ]
-            if hinted:
-                return hinted
+        hinted = primitives_for_hint(self.catalog.all(), task.metadata.get("primitive_hint"))
+        if hinted:
+            return hinted
         for capability in task.required_capabilities:
             for manifest in self.catalog.by_capability(capability):
                 selected.setdefault(manifest.name, manifest)
@@ -2026,6 +2021,7 @@ class PrimitiveExecutor:
             "- summary: short operational summary\n"
             "- facts: list of concise evidence-backed facts\n"
             "- candidate_actions: list of objects with title, rationale, confidence, primitive_hint\n"
+            "  Use exact primitive_hint values when applicable: content-discovery, http-probe, tcp-service-discovery.\n"
             "- blocked_reasons: list of concise blockers\n"
             "- required_primitives: list of missing or required primitive names\n"
             "- evidence_refs: list of evidence IDs if visible in the snapshot\n"

@@ -70,6 +70,7 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
   const [modelDraft, setModelDraft] = useStateD({});
   const [processorDraft, setProcessorDraft] = useStateD({});
   const [wrapperOnlyDraft, setWrapperOnlyDraft] = useStateD(!!D.modelPayload?.wrapper_mode?.use_only_wrapper);
+  const [wrapperPresetDraft, setWrapperPresetDraft] = useStateD(D.modelPayload?.wrapper_mode?.preset || 'claude_sonnet');
   const [wrapperDraftDirty, setWrapperDraftDirty] = useStateD(false);
   const [targetDraft, setTargetDraft] = useStateD({});
   const [targetAdvancedOpen, setTargetAdvancedOpen] = useStateD(false);
@@ -97,6 +98,7 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
     }
     if (!wrapperDraftDirty) {
       setWrapperOnlyDraft(!!D.modelPayload?.wrapper_mode?.use_only_wrapper);
+      setWrapperPresetDraft(D.modelPayload?.wrapper_mode?.preset || 'claude_sonnet');
     }
   }, [
     D.runtime.autonomy,
@@ -105,6 +107,7 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
     D.runtime.executionMode?.interval_seconds,
     D.runtime.runtimeTuning,
     D.modelPayload?.wrapper_mode?.use_only_wrapper,
+    D.modelPayload?.wrapper_mode?.preset,
     runtimeDraftDirty,
     tuningDraftDirty,
     wrapperDraftDirty,
@@ -198,12 +201,25 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
   const modelRoles = D.modelPayload?.roles || [];
   const availableModels = D.modelPayload?.available_models || [];
   const wrapperMode = D.modelPayload?.wrapper_mode || {};
+  const wrapperPresetOptions = (wrapperMode.presets || []).length
+    ? wrapperMode.presets
+    : [
+        { id: 'claude_sonnet', label: 'Claude Sonnet', provider: 'claude', model: 'sonnet', effort: null },
+        { id: 'codex_gpt55_high', label: 'GPT 5.5 High', provider: 'codex', model: 'gpt-5.5', effort: 'high' },
+      ];
+  const selectedWrapperPreset = wrapperPresetOptions.find(item => item.id === wrapperPresetDraft) || wrapperPresetOptions[0];
   const roleMetric = (role) => D.modelPayload?.role_metrics?.[role] || modelRoles.find(r => r.role === role)?.metrics || {};
   const saveModels = async () => {
     const result = await API.post?.('/api/models', {
       roles: modelDraft,
       processors: processorDraft,
-      wrapper_mode: { use_only_wrapper: wrapperOnlyDraft },
+      wrapper_mode: {
+        use_only_wrapper: wrapperOnlyDraft,
+        preset: selectedWrapperPreset?.id || wrapperPresetDraft,
+        provider: selectedWrapperPreset?.provider,
+        model: selectedWrapperPreset?.model,
+        effort: selectedWrapperPreset?.effort || null,
+      },
     });
     setWrapperDraftDirty(false);
     return result;
@@ -212,6 +228,7 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
     setModelDraft({});
     setProcessorDraft({});
     setWrapperOnlyDraft(!!D.modelPayload?.wrapper_mode?.use_only_wrapper);
+    setWrapperPresetDraft(D.modelPayload?.wrapper_mode?.preset || 'claude_sonnet');
     setWrapperDraftDirty(false);
   };
   const scopeProfileOptions = (D.scopeProfiles?.profiles || []).length
@@ -796,7 +813,20 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
                     <span className="strong">Use only wrapper</span>
                   </label>
                   <Pill tone={wrapperOnlyDraft ? 'cyan' : 'gray'}>{wrapperOnlyDraft ? 'WRAPPER' : 'LOCAL'}</Pill>
-                  <span className="dim mono">{wrapperMode.local_chat_wrapper || 'agent_chat_api'} · {wrapperMode.provider || 'provider'}</span>
+                  <select
+                    className="input"
+                    style={{ maxWidth: 190 }}
+                    value={wrapperPresetDraft}
+                    onChange={e => {
+                      setWrapperDraftDirty(true);
+                      setWrapperPresetDraft(e.target.value);
+                    }}
+                  >
+                    {wrapperPresetOptions.map(option => (
+                      <option key={option.id} value={option.id}>{option.label}</option>
+                    ))}
+                  </select>
+                  <span className="dim mono">{wrapperMode.local_chat_wrapper || 'agent_chat_api'} · {wrapperMode.display_label || wrapperMode.model_label || wrapperMode.provider || 'provider'}</span>
                 </div>
                 <table className="t">
                   <thead><tr><th>Role</th><th>Model</th><th>Processor</th><th>Score</th><th>Pass</th><th>Failures</th><th>Latency</th></tr></thead>

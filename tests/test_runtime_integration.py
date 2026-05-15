@@ -106,6 +106,54 @@ class RuntimeIntegrationTests(unittest.TestCase):
             finally:
                 runtime.shutdown()
 
+    def test_wrapper_mode_persists_gpt_preset_and_passes_effort(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = AppConfig.from_env(project_root=root)
+            config.manifests_dir = MANIFESTS_DIR
+            config.use_only_wrapper_mode = True
+            config.ensure_directories()
+            runtime = PrimordialRuntime(config)
+            runtime.initialize()
+
+            class FakeAgentChat:
+                def __init__(self) -> None:
+                    self.calls: list[dict[str, object]] = []
+
+                def chat(self, **kwargs: object) -> AgentChatResponse:
+                    self.calls.append(kwargs)
+                    return AgentChatResponse(
+                        provider="codex",
+                        model="gpt-5.5",
+                        text="wrapper-ok",
+                        exit_code=0,
+                        elapsed_seconds=0.1,
+                        request_id="req-gpt",
+                    )
+
+            fake = FakeAgentChat()
+            runtime.agent_chat = fake  # type: ignore[assignment]
+            try:
+                with patch.object(runtime, "_ensure_agent_chat_api_available", return_value={"ok": True}):
+                    payload = runtime.update_model_roles(
+                        {},
+                        wrapper_mode={"use_only_wrapper": True, "preset": "codex_gpt55_high"},
+                    )
+                    response = runtime._wrapper_ai_generate(role="operator_chat", system="s", prompt="p")
+
+                wrapper = payload["wrapper_mode"]
+                self.assertEqual(wrapper["preset"], "codex_gpt55_high")
+                self.assertEqual(wrapper["provider"], "codex")
+                self.assertEqual(wrapper["model"], "gpt-5.5")
+                self.assertEqual(wrapper["effort"], "high")
+                self.assertEqual(wrapper["display_label"], "GPT 5.5 High")
+                self.assertEqual(fake.calls[0]["provider"], "codex")
+                self.assertEqual(fake.calls[0]["model"], "gpt-5.5")
+                self.assertEqual(fake.calls[0]["effort"], "high")
+                self.assertEqual(response["model"], "agent_chat_api:codex:gpt-5.5:high")
+            finally:
+                runtime.shutdown()
+
     def test_wrapper_only_generation_autostarts_local_agent_chat_api_when_unreachable(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
