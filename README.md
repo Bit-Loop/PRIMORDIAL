@@ -214,6 +214,29 @@ The intent is `core` stays reusable, `modes/security` preserves product behavior
 - [docs/FLOOR_PLAN.md](docs/FLOOR_PLAN.md)
 - [docs/HUMAN_CHANGE_GUIDE.md](docs/HUMAN_CHANGE_GUIDE.md)
 
+## Complexity Profile
+
+~43,000 LOC across 94 Python files. Project difficulty: high. Most orchestration files are large state machines with tightly coupled policy, I/O, and risk logic.
+
+**Big-O summary:**
+
+| Subsystem | Complexity | Notes |
+|---|---|---|
+| Policy evaluation | O(1) | 7 constant-time gates — fastest path |
+| Task execution dispatch | O(1) | `getattr` dynamic dispatch |
+| Recon scan | O(p × h) | p = probe plans, h = HTML size |
+| Workflow planning tick | O(T × n) | T = targets, n = evidence per target |
+| Memory compaction dedup | **O(m²)** | Known hotspot — `_supersede_conflicts()` in a loop |
+
+**Known hotspots:**
+- `primordial/app/runtime.py` and `primordial/core/storage/runtime.py` are god objects — do not add more logic to either.
+- `primordial/modes/security/execution.py` has 726 branch statements and depth-3 loop nesting — new handlers go in dedicated `_handle_<task_kind>()` methods only.
+- Memory compaction (`modes/security/memory.py:202`) issues O(m²) DB queries in worst case — highest-priority algorithmic fix.
+- No index on generation fields — generation filtering is a full table scan.
+- No transaction around compaction writes — race window with concurrent ticks exists.
+
+See `quick-complexity-notes.md` for the full per-file ledger and structural assessment.
+
 ## Hard Boundaries
 
 - **DDoS is always forbidden.** The system will never propose, automate, or assist with DDoS in any form.
