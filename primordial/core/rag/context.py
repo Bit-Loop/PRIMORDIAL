@@ -19,6 +19,7 @@ RESTRICTED_DOMAINS = {
 }
 TACTICAL_SOURCE_DOMAINS = {"cve_advisory", "exploit_note", "htb_writeup"}
 SAFE_PLANNING_DOMAINS = {
+    "operator_note",
     "api_security",
     "web_security",
     "kubernetes_cloud",
@@ -271,6 +272,8 @@ class RagContextBroker:
         planner_visibility = str(metadata.get("planner_visibility") or "")
         if self._is_taxonomy_only(domain, planner_visibility) and purpose in ACTION_SELECTION_PURPOSES:
             return "taxonomy-only material cannot drive action selection"
+        if self._is_taxonomy_only(domain, planner_visibility) and purpose == "operator_answer":
+            return "taxonomy-only material withheld from ordinary operator answers"
         if self._is_taxonomy_only(domain, planner_visibility) and purpose in {"planner_review", "worker_ai_review", "poc_design"}:
             return "taxonomy-only material withheld from execution-oriented context"
         if self._is_restricted(domain, metadata):
@@ -309,8 +312,10 @@ class RagContextBroker:
         )
 
     def _allowed_domains_for(self, *, role: str, purpose: str) -> set[str]:
-        if purpose in {"rag_synthesis", "operator_answer"}:
+        if purpose == "rag_synthesis":
             return set()
+        if purpose == "operator_answer":
+            return set(SAFE_PLANNING_DOMAINS)
         if purpose == "report_mapping":
             return set(REPORTING_DOMAINS)
         if role in {"local_deep", "operator_chat"}:

@@ -114,8 +114,9 @@ function ChatPane({ title, kind, messages, setMessages, approval, model, onResol
 
   const suggestions = kind === 'approval' ? [
     'show me the exact request',
-    'reduce scope: only check banner',
     'what evidence backs this?',
+    'what is missing before approving?',
+    'why is approval needed?',
     'reject with reason: too noisy',
   ] : [
     `summarize ${targetLabel}`,
@@ -156,7 +157,7 @@ function ChatPane({ title, kind, messages, setMessages, approval, model, onResol
             className="input"
             rows={2}
             placeholder={kind === 'approval'
-              ? 'Discuss with the blocked agent. Modify scope. Then APPROVE or REJECT.'
+              ? 'Ask about the blocked task, evidence, and limits. Approve or reject separately.'
               : 'Ask anything about runtime, evidence, targets, or methodology.'}
             value={input}
             onChange={e => setInput(e.target.value)}
@@ -253,6 +254,21 @@ function ChatMode() {
     };
   };
 
+  const askApproval = async (message) => {
+    if (!activeAp) {
+      return { text: 'No pending approval is selected.', model: 'deterministic-approval' };
+    }
+    const payload = await API.post?.('/api/approvals/inquiry', {
+      task_id: activeAp.task || activeAp.id,
+      message,
+    });
+    const chat = payload?.result?.chat || payload?.chat || {};
+    return {
+      text: chat?.answer?.body || chat?.error || 'Approval inquiry updated.',
+      model: chat?.answer?.model || chat?.model || 'deterministic-approval',
+    };
+  };
+
   const queue = D.approvals.filter(a => !resolved[a.id]);
 
   return (
@@ -330,7 +346,7 @@ function ChatMode() {
                 approval={activeAp}
                 model={`local-deep · ${localDeepModel}`}
                 onResolve={resolveApproval}
-                onSend={async (message) => `Approval note recorded locally: ${message}`}
+                onSend={askApproval}
                 targetLabel={activeAp?.target && activeAp.target !== '*' ? activeAp.target : 'approval'}
               />
             </div>

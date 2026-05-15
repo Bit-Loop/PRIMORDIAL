@@ -605,7 +605,7 @@ class DocumentIngestionService:
         return {self._normalize_corpus_type(item) for item in corpus_types}
 
     def _normalize_hint_policy(self, hint_policy: str | None, *, corpus_type: str) -> str:
-        default = "advisory" if corpus_type == "operator_note" else "direct_task_hints"
+        default = "advisory"
         normalized = str(hint_policy or default).strip().lower().replace("-", "_")
         if normalized not in self.HINT_POLICIES:
             raise DocumentIngestionError(

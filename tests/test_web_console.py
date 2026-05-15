@@ -1022,6 +1022,85 @@ class WebConsoleTests(unittest.TestCase):
         self.assertEqual(denied.status, TaskStatus.CANCELLED)
         run_tick.assert_called_once_with(max_executions=1)
 
+    def test_approval_inquiry_answers_from_task_and_evidence(self) -> None:
+        target = self.runtime.store.get_target_by_handle("pirate.htb")
+        self.assertIsNotNone(target)
+        assert target is not None
+        evidence = EvidenceRecord(
+            target_id=target.id,
+            type=EvidenceType.TOOL_OUTPUT,
+            title="HTTP header evidence",
+            summary="HTTP service responded with a bounded banner capture.",
+            source_ref="fixture://http-headers",
+            verification_status=VerificationStatus.VERIFIED,
+            confidence=0.88,
+            freshness=0.9,
+            metadata={"kind": "http_probe"},
+        )
+        self.runtime.store.insert_evidence(evidence)
+        task = Task(
+            target_id=target.id,
+            phase=MethodologyPhase.RECON,
+            kind=TaskKind.RECON_SCAN,
+            title="HTTP Header Analysis and Parameter Discovery",
+            summary="Review HTTP headers before proposing any follow-up.",
+            role=AgentRole.RECON_WORKER,
+            risk_tier=RiskTier.LOW,
+            status=TaskStatus.NEEDS_APPROVAL,
+            requires_approval=True,
+            evidence_refs=[evidence.id],
+            metadata={"primitive_hint": "http-probe"},
+        )
+        self.runtime.store.insert_task(task)
+
+        exact_response = self.app.dispatch(
+            "POST",
+            "/api/approvals/inquiry",
+            json.dumps({"task_id": task.id, "message": "show me the exact request"}).encode("utf-8"),
+        )
+        evidence_response = self.app.dispatch(
+            "POST",
+            "/api/approvals/inquiry",
+            json.dumps({"task_id": task.id, "message": "what evidence backs this?"}).encode("utf-8"),
+        )
+
+        exact = json.loads(exact_response.body)["result"]["chat"]["answer"]["body"]
+        backed = json.loads(evidence_response.body)["result"]["chat"]["answer"]["body"]
+        stored = self.runtime.store.get_task(task.id)
+
+        self.assertEqual(exact_response.status, 200)
+        self.assertEqual(evidence_response.status, 200)
+        self.assertIn("**Approval Request**", exact)
+        self.assertIn(task.id, exact)
+        self.assertIn("`http-probe`", exact)
+        self.assertNotIn("Approval note recorded locally", exact)
+        self.assertIn("**Evidence Check**", backed)
+        self.assertIn(evidence.id, backed)
+        self.assertEqual(stored.status, TaskStatus.NEEDS_APPROVAL)
+
+    def test_operator_next_steps_do_not_use_searchsploit_without_versioned_evidence(self) -> None:
+        target = self.runtime.store.get_target_by_handle("pirate.htb")
+        self.assertIsNotNone(target)
+        assert target is not None
+        self.runtime.store.insert_evidence(
+            EvidenceRecord(
+                target_id=target.id,
+                type=EvidenceType.TOOL_OUTPUT,
+                title="TCP service discovery",
+                summary="TCP connect checks completed; no service versions were identified.",
+                source_ref="fixture://tcp-discovery",
+                verification_status=VerificationStatus.VERIFIED,
+                confidence=0.7,
+                freshness=0.9,
+                metadata={"kind": "tcp_service_discovery", "open_services": []},
+            )
+        )
+
+        answer = self.runtime.ask_operator_ai("next 3 scoped recon steps", target=target.handle)["answer"]["body"]
+
+        self.assertNotIn("Run evidence-backed Searchsploit research", answer)
+        self.assertIn("Collect current service/version evidence before Searchsploit research", answer)
+
     def test_generated_web_bundle_has_no_fixture_switch_or_payload(self) -> None:
         generated = Path("primordial/core/web/frontend/src/generated-gui.jsx").read_text(encoding="utf-8")
         static_assets = Path("primordial/core/web/static/assets")

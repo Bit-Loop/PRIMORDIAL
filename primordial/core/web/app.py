@@ -545,6 +545,23 @@ class PrimordialWebApp:
                 lambda: {"chat": self.runtime.ask_operator_ai(message, target=target)},
                 use_runtime_lock=False,
             )
+        if method == "POST" and path == "/api/approvals/inquiry":
+            payload = self._parse_json_body(body)
+            task_id = str(payload.get("task_id") or payload.get("approval_id") or "").strip()
+            message = str(payload.get("message") or "").strip()
+            if not task_id:
+                return self._json_response({"error": "task_id is required"}, status=400)
+            if not message:
+                return self._json_response({"error": "message is required"}, status=400)
+            try:
+                return self._run_tracked_action(
+                    "Ask approval inquiry",
+                    "approval-inquiry",
+                    lambda: {"chat": self.runtime.ask_approval_inquiry(task_id, message)},
+                    use_runtime_lock=False,
+                )
+            except ValueError as exc:
+                return self._json_response({"error": str(exc)}, status=404)
         if method == "DELETE" and path.startswith("/api/credentials/"):
             service = unquote(path.rsplit("/", 1)[-1])
             try:
@@ -1091,6 +1108,7 @@ class PrimordialWebApp:
                     "warmModels": "/api/actions/warm-models",
                     "clearModels": "/api/actions/clear-models",
                     "uiCommands": "/api/ui/commands",
+                    "approvalInquiry": "/api/approvals/inquiry",
                     "ragStatus": "/api/rag/status",
                     "ragConfig": "/api/rag/config",
                     "ragImport": "/api/rag/import",
@@ -1487,6 +1505,8 @@ class PrimordialWebApp:
                     "target": str(item.get("target") or "*"),
                     "primitive": str(item.get("task_kind") or "task"),
                     "limits": "bounded by active operator intent",
+                    "inspect_kind": "task",
+                    "inspect_id": task_id,
                 }
             )
         if pending:
@@ -1502,6 +1522,8 @@ class PrimordialWebApp:
                 "target": item.get("target", "*"),
                 "primitive": item.get("kind", "task"),
                 "limits": "not blocked",
+                "inspect_kind": "task",
+                "inspect_id": item["id"],
             }
             for item in tasks
             if item.get("status") == "await_approval"

@@ -131,7 +131,7 @@ class RagIngestionTests(unittest.TestCase):
 
         self.assertIsNone(payload["evidence"])
         self.assertEqual(payload["corpus_type"], "cve_advisory")
-        self.assertEqual(payload["hint_policy"], "direct_task_hints")
+        self.assertEqual(payload["hint_policy"], "advisory")
         self.assertEqual(payload["cve_ids"], ["CVE-2024-6387"])
         self.assertEqual(self.store.list_evidence(target_id=self.target.id, limit=20), [])
         self.assertTrue(chunks)
@@ -167,8 +167,35 @@ class RagIngestionTests(unittest.TestCase):
         self.assertIn(ingest["evidence"]["id"], prompt)
         self.assertFalse(runtime._operator_answer_cites_rag_context("The document says uploads matter.", rag_context))
         self.assertTrue(runtime._operator_answer_cites_rag_context(f"rag:{ingest['chunks'][0]['id']}", rag_context))
-        self.assertIn("**Retrieved Context**", fallback)
+        self.assertIn("**RAG Hints (not evidence)**", fallback)
         self.assertIn(f"rag:{ingest['chunks'][0]['id']}", fallback)
+
+    def test_operator_answer_rag_context_withholds_taxonomy_by_default(self) -> None:
+        runtime = PrimordialRuntime(self.config)
+        runtime.initialize()
+        runtime.store.insert_target(self.target)
+        source = self.root / "mitre-mobile.md"
+        source.write_text(
+            "# MITRE ATT&CK mobile relationship\n\n"
+            "FluBot can use Accessibility Services to make removal difficult.\n",
+            encoding="utf-8",
+        )
+        runtime.rag_ingest_document(
+            source,
+            target=self.target.handle,
+            corpus_type="mitre_attack",
+            embed=False,
+        )
+
+        ordinary = runtime._rag_context_pack_payload("What does FluBot do?", self.target.id)
+        mapping = runtime._rag_context_pack_payload("Map FluBot to MITRE detection context", self.target.id)
+
+        self.assertEqual(ordinary["purpose"], "operator_answer")
+        self.assertEqual(ordinary["chunks"], [])
+        self.assertTrue(any("withheld" in item.get("reason", "") for item in ordinary["omitted_sources"]))
+        self.assertEqual(mapping["purpose"], "report_mapping")
+        self.assertTrue(mapping["chunks"])
+        runtime.shutdown()
 
     def test_cve_search_classifies_against_current_evidence(self) -> None:
         self.config.manifests_dir = MANIFESTS_DIR
@@ -478,7 +505,12 @@ class RagIngestionTests(unittest.TestCase):
             "The writeup uses ffuf directory discovery to find hidden endpoints.\n",
             encoding="utf-8",
         )
-        ingest = runtime.rag_ingest_document(source, target=self.target.handle, corpus_type="htb_writeup")
+        ingest = runtime.rag_ingest_document(
+            source,
+            target=self.target.handle,
+            corpus_type="htb_writeup",
+            hint_policy="direct_task_hints",
+        )
 
         hints = runtime.rag_hints("directory discovery", target=self.target.handle)
 

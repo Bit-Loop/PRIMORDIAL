@@ -2180,14 +2180,13 @@ class PrimordialRuntime:
                     assistant_body,
                     rag_context_for_answer,
                 ):
-                    assistant_body = self._deterministic_rag_citation_answer(
+                    assistant_body = self._deterministic_operator_answer(
                         question,
                         target_record.id if target_record else None,
-                        rag_context_for_answer,
                     )
                     model = "deterministic-state"
-                    metadata["guardrail_replaced_uncited_rag_output"] = True
-                    metadata["mode"] = "deterministic_rag_citation_answer"
+                    metadata["guardrail_discarded_uncited_rag_output"] = True
+                    metadata["mode"] = "deterministic_state_answer"
                     metadata["route_model"] = route_model
                 elif self._operator_answer_violates_contract(assistant_body):
                     assistant_body = self._deterministic_operator_answer(
@@ -2252,6 +2251,180 @@ class PrimordialRuntime:
             "answer": assistant_message.as_payload(),
             "chat": self.operator_chat_payload(target=target),
         }
+
+    def ask_approval_inquiry(self, task_id: str, message: str) -> dict[str, object]:
+        question = message.strip()
+        if not question:
+            raise ValueError("message is required")
+        task = self.store.get_task(task_id)
+        if task is None:
+            raise ValueError(f"task not found: {task_id}")
+        target = self.store.get_target(task.target_id) if task.target_id else None
+        operator_message = OperatorMessage(
+            role="operator",
+            body=question,
+            target_id=target.id if target else None,
+            metadata={
+                "approval_task_id": task.id,
+                "approval_inquiry": True,
+            },
+        )
+        self.store.insert_operator_message(operator_message)
+        self._write_operator_chat_log(operator_message)
+        self.store.insert_event(
+            EventRecord(
+                type=EventType.OPERATOR_MESSAGE,
+                summary="Approval inquiry recorded",
+                target_id=operator_message.target_id,
+                task_id=task.id,
+                metadata={"message_id": operator_message.id, "approval_task_id": task.id},
+            )
+        )
+
+        evidence_refs = self._approval_evidence_refs(task)
+        evidence_records = [record for ref in evidence_refs if (record := self.store.get_evidence(ref)) is not None]
+        answer = self._deterministic_approval_inquiry_answer(
+            question,
+            task=task,
+            target=target,
+            evidence_refs=evidence_refs,
+            evidence_records=evidence_records,
+        )
+        assistant_message = OperatorMessage(
+            role="assistant",
+            body=answer,
+            target_id=target.id if target else None,
+            model="deterministic-approval",
+            metadata={
+                "approval_task_id": task.id,
+                "approval_inquiry": True,
+                "evidence_refs": evidence_refs,
+            },
+        )
+        self.store.insert_operator_message(assistant_message)
+        self._write_operator_chat_log(assistant_message)
+        self.store.insert_event(
+            EventRecord(
+                type=EventType.OPERATOR_AI_RESPONSE,
+                summary="Approval inquiry answered",
+                target_id=assistant_message.target_id,
+                task_id=task.id,
+                metadata={
+                    "message_id": assistant_message.id,
+                    "model": "deterministic-approval",
+                    "approval_task_id": task.id,
+                    "evidence_refs": evidence_refs,
+                },
+            )
+        )
+        return {
+            "ok": True,
+            "model": "deterministic-approval",
+            "question": operator_message.as_payload(),
+            "answer": assistant_message.as_payload(),
+            "task": task.as_payload(),
+            "target": target.as_payload() if target else None,
+            "evidence_refs": evidence_refs,
+            "evidence": [record.as_payload() for record in evidence_records],
+        }
+
+    def _approval_evidence_refs(self, task: Task) -> list[str]:
+        refs: list[str] = []
+
+        def add(value: object) -> None:
+            if isinstance(value, str):
+                if value.startswith("evidence_") and value not in refs:
+                    refs.append(value)
+                return
+            if isinstance(value, list | tuple | set):
+                for item in value:
+                    add(item)
+                return
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    if "evidence" in str(key).lower():
+                        add(item)
+                    elif isinstance(item, dict | list | tuple | set):
+                        add(item)
+
+        add(task.evidence_refs)
+        add(task.metadata)
+        return refs
+
+    def _deterministic_approval_inquiry_answer(
+        self,
+        question: str,
+        *,
+        task: Task,
+        target: Target | None,
+        evidence_refs: list[str],
+        evidence_records: list[EvidenceRecord],
+    ) -> str:
+        lowered = question.lower()
+        target_label = target.handle if target else "global"
+        primitive = task.metadata.get("primitive_hint") or task.metadata.get("primitive") or task.kind.value
+        intent = self.active_operator_intent().id
+        active_generation = self._target_active_generation(target)
+        current_records = [
+            item for item in evidence_records if self._record_matches_active_generation(item, active_generation)
+        ]
+        stale_records = [item for item in evidence_records if item not in current_records]
+
+        lines: list[str] = []
+        if any(term in lowered for term in ("exact request", "show me", "request", "what is this")):
+            lines.extend(
+                [
+                    "**Approval Request**",
+                    f"- Task: `{task.id}`",
+                    f"- Title: {task.title}",
+                    f"- Kind: `{task.kind.value}`",
+                    f"- Target: `{target_label}`",
+                    f"- Primitive/request hint: `{primitive}`",
+                    f"- Status: `{task.status.value}`; approval required: `{task.requires_approval}`",
+                    f"- Risk: `{task.risk_tier.value}`; priority: `{task.priority}`",
+                    f"- Active Operator Intent: `{intent}`",
+                    f"- Summary: {task.summary}",
+                    f"- Required capabilities: {', '.join(task.required_capabilities) if task.required_capabilities else 'none declared'}",
+                    f"- Attached evidence refs: {', '.join(f'`{ref}`' for ref in evidence_refs) if evidence_refs else 'none'}",
+                    f"- Inspect raw task: `/api/inspect/task/{task.id}`",
+                ]
+            )
+            if task.metadata:
+                lines.append(f"- Metadata keys: {', '.join(sorted(str(key) for key in task.metadata.keys()))}")
+        elif any(term in lowered for term in ("evidence", "backs", "proof", "why", "support")):
+            lines.extend(
+                [
+                    "**Evidence Check**",
+                    f"- Task: `{task.id}`",
+                    f"- Attached evidence refs: {', '.join(f'`{ref}`' for ref in evidence_refs) if evidence_refs else 'none'}",
+                    f"- Current-generation attached evidence: {len(current_records)}",
+                    f"- Stale-generation attached evidence: {len(stale_records)}",
+                ]
+            )
+            if not evidence_refs:
+                lines.append("- No evidence refs are attached to this approval request. Treat it as unsupported until the planner supplies current evidence.")
+            missing = [ref for ref in evidence_refs if self.store.get_evidence(ref) is None]
+            if missing:
+                lines.append("- Missing evidence records: " + ", ".join(f"`{ref}`" for ref in missing))
+            for item in current_records[:8]:
+                lines.append(
+                    f"- CURRENT `{item.id}` {item.title}: {item.summary} "
+                    f"(confidence={item.confidence:.2f}, freshness={item.freshness:.2f})"
+                )
+            for item in stale_records[:5]:
+                generation = item.metadata.get("active_ip_generation", "unknown")
+                lines.append(f"- STALE `{item.id}` generation={generation} {item.title}: {item.summary}")
+        else:
+            lines.extend(
+                [
+                    "**Approval Inquiry**",
+                    f"- Task `{task.id}` is waiting on `{task.kind.value}` for `{target_label}`.",
+                    f"- Ask `show me the exact request` for the request packet.",
+                    f"- Ask `what evidence backs this?` for attached evidence and current/stale generation status.",
+                    "- Inquiry messages do not approve, deny, or modify the task.",
+                ]
+            )
+        return "\n".join(lines)
 
     def export_operator_chat_logs(self) -> int:
         exported = 0
@@ -4256,7 +4429,8 @@ class PrimordialRuntime:
             "Required answer contract:\n"
             "- Use concise markdown with these headings when relevant: Facts, Blockers, Next Actions.\n"
             "- Every factual claim must be supported by a record in the snapshot.\n"
-            "- RAG context is advisory; cite rag:<chunk_id> and evidence_refs before relying on it.\n"
+            "- RAG context is advisory source material, not target evidence, approval, scope, or execution authority.\n"
+            "- If you use RAG, cite rag:<chunk_id>; never present rag:<chunk_id> as evidence:<id>.\n"
             "- If user/root flags are not present in evidence, say they have not been obtained.\n"
             "- If current production primitives are insufficient, say exactly which primitive or operator input is missing.\n"
             "- Do not say evidence is implied; use the exact evidence, task, note, or primitive names supplied.\n\n"
@@ -4276,10 +4450,11 @@ class PrimordialRuntime:
         return [item for item in chunks if isinstance(item, dict)]
 
     def _rag_context_pack_payload(self, question: str, target_id: str | None) -> dict[str, object]:
+        purpose = self._operator_rag_context_purpose(question)
         if not target_id:
             return {
                 "query": question,
-                "purpose": "operator_answer",
+                "purpose": purpose,
                 "role": "operator_chat",
                 "target_id": None,
                 "chunks": [],
@@ -4292,7 +4467,7 @@ class PrimordialRuntime:
             target = self.store.get_target(target_id)
             return self.build_rag_context_pack(
                 question,
-                purpose="operator_answer",
+                purpose=purpose,
                 role="operator_chat",
                 target=target,
                 limit=5,
@@ -4300,7 +4475,7 @@ class PrimordialRuntime:
         except Exception as exc:  # noqa: BLE001 - retrieval must not break operator Q&A
             return {
                 "query": question,
-                "purpose": "operator_answer",
+                "purpose": purpose,
                 "role": "operator_chat",
                 "target_id": target_id,
                 "chunks": [
@@ -4317,15 +4492,30 @@ class PrimordialRuntime:
                 "prompt_context": "",
             }
 
+    def _operator_rag_context_purpose(self, question: str) -> str:
+        lowered = question.lower()
+        reporting_terms = (
+            "mitre",
+            "att&ck",
+            "attack mapping",
+            "map to",
+            "mapping",
+            "report",
+            "detection",
+            "mitigation",
+            "classify",
+            "classification",
+            "cwe",
+            "owasp",
+        )
+        return "report_mapping" if any(term in lowered for term in reporting_terms) else "operator_answer"
+
     def _rag_context_ids(self, rag_context: list[dict[str, object]]) -> list[str]:
         ids: list[str] = []
         for item in rag_context:
             chunk_id = str(item.get("chunk_id") or "").strip()
             if chunk_id:
                 ids.append(chunk_id)
-            refs = item.get("evidence_refs", [])
-            if isinstance(refs, list):
-                ids.extend(str(ref).strip() for ref in refs if str(ref).strip())
         return sorted(set(ids))
 
     def _operator_answer_cites_rag_context(self, body: str, rag_context: list[dict[str, object]]) -> bool:
@@ -4352,10 +4542,10 @@ class PrimordialRuntime:
             text = str(item.get("text") or "").replace("\n", " ").strip()
             if len(text) > 220:
                 text = text[:220].rstrip() + "..."
-            lines.append(f"- `rag:{chunk_id}` evidence={evidence or 'none'} {title}: {text}")
+            lines.append(f"- `rag:{chunk_id}` linked_evidence={evidence or 'none'} advisory_only=true {title}: {text}")
         if not lines:
             return base
-        return base + "\n\n**Retrieved Context**\n" + "\n".join(lines)
+        return base + "\n\n**RAG Hints (not evidence)**\n" + "\n".join(lines)
 
     def _build_operator_state_digest(self, target_id: str | None) -> str:
         target = self.store.get_target(target_id) if target_id else None
@@ -5070,6 +5260,7 @@ class PrimordialRuntime:
             item.metadata.get("kind") == "exploit_research" and int(item.metadata.get("match_count", 0) or 0) > 0
             for item in evidence
         ) or any(interest.metadata.get("class") == "exploit_research" for interest in interests)
+        has_versioned_service_terms = self._has_service_version_terms(evidence)
         has_lpe_candidate = any(
             self._looks_like_lpe(item.title, item.summary)
             for item in [*evidence, *interests]
@@ -5087,8 +5278,15 @@ class PrimordialRuntime:
             {"tcp_service_discovery", "dns_enumeration", "ad_enumeration"}.intersection(evidence_kinds)
             and "exploit_research" not in evidence_kinds
             and self._has_any_capability(capabilities, "exploit-research", "searchsploit")
+            and has_versioned_service_terms
         ):
             actions.append((0.78, "Run evidence-backed Searchsploit research. Prerequisite: service/version terms from stored recon evidence."))
+        elif (
+            {"tcp_service_discovery", "dns_enumeration", "ad_enumeration"}.intersection(evidence_kinds)
+            and "exploit_research" not in evidence_kinds
+            and self._has_any_capability(capabilities, "exploit-research", "searchsploit")
+        ):
+            actions.append((0.77, "Collect current service/version evidence before Searchsploit research. Prerequisite: exact product/version terms are not yet stored."))
         if has_exploit_candidates:
             if self._poc_adaptation_available(capabilities):
                 actions.append((0.76, "Run gated public PoC applicability validation against exact service/version evidence. Prerequisite: retained non-DoS Searchsploit candidates."))
@@ -5108,6 +5306,36 @@ class PrimordialRuntime:
             actions.append((0.72, "Configure known credentials before credentialed Windows SMB/WinRM verification. Prerequisite: operator-provided username/password."))
 
         return [f"{text} Confidence: {score:.2f}." for score, text in sorted(actions, reverse=True)[:5]]
+
+    def _has_service_version_terms(self, evidence: list[EvidenceRecord]) -> bool:
+        version_pattern = re.compile(r"\b\d+(?:\.\d+){1,3}[A-Za-z0-9._+-]*\b")
+        empty_values = {"", "unknown", "none", "n/a", "tcpwrapped"}
+
+        def has_version(value: object) -> bool:
+            text = str(value or "").strip()
+            if text.lower() in empty_values:
+                return False
+            return bool(version_pattern.search(text))
+
+        for item in evidence:
+            metadata = item.metadata
+            for key in ("service_version", "version", "product_version", "banner", "fingerprint"):
+                if has_version(metadata.get(key)):
+                    return True
+            for service in metadata.get("open_services", []):
+                if not isinstance(service, dict):
+                    continue
+                version = service.get("version") or service.get("product_version")
+                product = service.get("product") or service.get("name") or service.get("service")
+                if has_version(version):
+                    return True
+                combined = " ".join(str(service.get(key) or "") for key in ("product", "banner", "extrainfo", "fingerprint"))
+                if product and has_version(combined):
+                    return True
+            headers = metadata.get("headers")
+            if isinstance(headers, dict) and has_version(headers.get("server") or headers.get("Server")):
+                return True
+        return False
 
     def _deterministic_capability_gaps(
         self,

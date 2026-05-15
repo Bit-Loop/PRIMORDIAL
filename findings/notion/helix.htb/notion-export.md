@@ -2,7 +2,7 @@
 
 Target: `helix.htb`
 Profile: `hack_the_box`
-Generated: 2026-05-15T19:49:49.258861+00:00
+Generated: 2026-05-15T20:12:27.998289+00:00
 
 ## AI Agent Guidance
 
@@ -39,87 +39,100 @@ Generated: 2026-05-15T19:49:49.258861+00:00
 ## Recent Notes
 
 - AI strategy review: ## Summary
-helix.htb (gen3) shows zero open services across a 38-port TCP scan and no DNS records. All 16 recon_scan executions failed via model gemma4:e4b, which is not in the configured model inventory. HTTP probes are blocked because no candidate ports were surfaced. Recon is stalled at the surface layer — no evidence supports any further attack phase.
+helix.htb recon is effectively stalled. DNS returned zero records, AXFR failed, and a 38-port TCP bounded scan found no open services. All 16 recon_scan task executions failed under model gemma4:e4b, which is not a configured route in this system. Three HTTP probe tasks are blocked with no candidate ports to probe. No interests or findings exist. The target cannot be reached with the current primitive configuration.
 
 ## Facts
-- TCP scan covered only 38 ports across 2 hosts; no open ports found (evidence_b3ff3d45169c, confidence=0.72)
-- DNS enumeration retu
+- DNS query against 10.129.64.253 for helix.htb returned 0 
 - Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
 - AI strategy review: ## Summary
-helix.htb is currently a near-blank surface. DNS returned zero records and AXFR was refused. TCP discovery across only 38 ports on 2 hosts found nothing open. HTTP probe tasks are blocked because no candidate ports were confirmed. Recon scan tasks have failed 14+ times under gemma4:e4b — likely a model execution failure, not a target-side issue. No interests or findings exist. The scan coverage is far too narrow to conclude the host is closed.
+helix.htb recon is stalled. DNS returned nothing, TCP sweep of 38 ports found zero open services, and all HTTP probe tasks are blocked downstream of that null result. Fourteen consecutive recon_scan tasks have failed with the same model (gemma4:e4b), indicating a systemic executor or model-routing failure, not a target behavior. No evidence of live services exists in the current generation.
 
 ## Facts
-- DNS: 0 records parsed for hel
+- DNS enumeration returned 0 records; AXFR refused — no subdomain surface derivable f
 - Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
 - AI strategy review: ## Summary
-helix.htb shows no open services across a 38-port TCP sweep and no DNS records. Fifteen consecutive recon_scan tasks failed under gemma4:e4b, suggesting an executor or model routing failure — not confirmed host unavailability. HTTP probes are blocked downstream of the empty port sweep. The active port set is too narrow to draw meaningful conclusions. Primary gap: expanded port coverage and host liveness confirmation.
+helix.htb generation-3 is effectively dark: DNS returned zero records, AXFR failed, and a 38-port TCP sweep found no open services. All recon_scan tasks are failing against model gemma4:e4b (16 consecutive failures), and the 3 HTTP probe tasks are blocked — almost certainly because no candidate ports were surfaced. No interests or findings exist. Progression is stalled at initial recon with zero confirmed attack surface.
 
 ## Facts
-- TCP service discovery scanned 38 ports across 2 hosts an
+- DNS enumeration against 10.129.64.253 returned 0 rec
 - Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
 - AI strategy review: ## Summary
-helix.htb recon is stalled: 38-port bounded scan returned no open services, DNS returned 0 records with AXFR blocked, HTTP probes are gated on open port evidence that does not exist yet. 16 consecutive recon_scan failures against model gemma4:e4b indicate a model routing failure, not a target-side issue. Full-range port scan is the critical unblocked next move.
+helix.htb recon phase is stalled: DNS returned zero records (AXFR denied), TCP sweep across 38 ports on 2 hosts found nothing open, and HTTP probe tasks are blocked on missing candidate ports. 16 consecutive recon_scan failures on model gemma4:e4b signal a model-executor issue, not purely a target-resistance issue. Minimal surface confirmed; port coverage is critically insufficient.
 
 ## Facts
-- DNS query via 10.129.64.253 returned 0 records; AXFR blocked — helix.htb hostname may not be resolving to an acti
+- DNS enumeration via 10.129.64.253 returned 0 records; AXFR was attempted and failed — hostn
+- Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
 - AI strategy review: ## Summary
-helix.htb recon is stalled. DNS returned nothing, AXFR failed, and TCP discovery across 38 ports found zero open services. All 16 recon_scan tasks failed under gemma4:e4b — likely a model execution environment fault, not a target state issue. HTTP probe tasks are blocked downstream because no candidate ports exist. Port coverage is severely insufficient; the 38-port bounded set almost certainly missed the live service surface.
+helix.htb generation-3 shows zero open TCP services across a 38-port bounded scan and zero DNS records. Sixteen consecutive recon_scan tasks failed under model gemma4:e4b. HTTP probe tasks are blocked because no candidate ports were produced. The scan surface is too narrow to conclude the host is unreachable; active IP validity for generation 3 is unverified.
 
 ## Facts
-- DNS enumeration via 10.129.64.253 returned 0 r
+- DNS enumeration returned 0 records; AXFR refused or failed (evidence_4caa6aeeef3c, confidence=0.82).
+- TCP connect 
+- Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
+- AI strategy review: ## Summary
+Target helix.htb (gen 3) has yielded no actionable surface: DNS returned 0 records, AXFR failed, and TCP discovery across 38 ports on 2 hosts found nothing open. HTTP probe tasks are correctly blocked downstream of the empty port evidence. Sixteen consecutive recon_scan task failures with gemma4:e4b strongly suggest a model-routing or executor issue unrelated to target state — this must be resolved before trusting further task output.
+
+## Facts
+- DNS enumeration against 10.129.64.253 
+- Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
+- AI strategy review: ## Summary
+Current evidence supports only negative bounded recon: DNS returned no records, AXFR failed, and bounded TCP checks found no open services. Repeated recon_scan failures and blocked HTTP probes make the next safe move a bounded TCP primitive retry/expansion plus task-failure diagnostics before any web-specific work.
+
+## Facts
+- evidence_4caa6aeeef3c: DNS query for helix.htb via 10.129.64.253 parsed 0 records.
+- evidence_4caa6aeeef3c: AXFR did not succeed.
+- evidence_b3ff3d45169c: TCP c
+- Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
+- AI strategy review: ## Summary
+Current evidence supports only negative recon: DNS returned no records and bounded TCP checks found no open services. Next safe move is bounded service discovery plus task failure diagnostics before any HTTP/content work.
+
+## Facts
+- evidence_4caa6aeeef3c: DNS enumeration queried helix.htb via 10.129.64.253, parsed 0 records, and AXFR did not succeed.
+- evidence_b3ff3d45169c: TCP connect checks covered 2 hosts and 38 ports with no open services observed.
+- No findings are proven in th
+- AI strategy review: ## Summary
+Current evidence does not prove any reachable service on helix.htb. DNS yielded no records and AXFR failed; bounded TCP checks found no open services. Stop repeating the same failed recon_scan loop until the failure cause and scope/target resolution are clarified.
+
+## Facts
+- evidence_4caa6aeeef3c: DNS enumeration queried helix.htb via 10.129.64.253, parsed 0 records, and AXFR did not succeed.
+- evidence_b3ff3d45169c: TCP connect checks covered 2 hosts and 38 ports with no open servic
 - Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
 - Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
 - AI strategy review: ## Summary
-helix.htb presents a hard reconnaissance wall: 38-port TCP sweep found zero open services, DNS returned zero records with no AXFR, and 16 consecutive recon_scan tasks failed on gemma4:e4b. HTTP probes are downstream-blocked because no candidate ports were surfaced. Port coverage is the primary gap — the bounded 38-port set almost certainly missed listening services.
+Current evidence does not prove any exposed service on helix.htb. The useful next move is bounded service-discovery validation and failure diagnosis, not HTTP/content work yet.
 
 ## Facts
-- TCP sweep across 38 ports on 2 hosts produced zero open services (evidence_b3ff3d45169c, confidence=0.72).
--
+- DNS enumeration against helix.htb via 10.129.64.253 returned 0 parsed records.
+- AXFR did not succeed.
+- Bounded TCP connect checks covered 2 hosts and 38 ports with no open services observed.
+- Multiple recent recon_scan tasks failed; HTTP probe tasks are blocked.
+- No findings or interests are pre
 - Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
 - AI strategy review: ## Summary
-helix.htb generation-3 is effectively dark: 38-port TCP sweep returned zero open services, DNS returned zero records with no AXFR. All 14 recon_scan executions failed under gemma4:e4b — that model ID does not match any configured route. HTTP probes are correctly blocked due to no confirmed open ports. No actionable evidence exists yet. Root blockers are insufficient port coverage and a broken model route.
+Current evidence does not prove any exposed service on helix.htb. DNS returned no records and bounded TCP checks found no open ports; HTTP/content work is blocked until a current in-scope host and open web port are evidenced.
 
 ## Facts
-- DNS enumeration against 10.129.64.253 returned 0 records; AXFR denie
+- evidence_4caa6aeeef3c: DNS enumeration queried helix.htb via 10.129.64.253 and parsed 0 records.
+- evidence_4caa6aeeef3c: AXFR did not succeed.
+- evidence_b3ff3d45169c: TCP connect checks covered 2 hosts and 38 ports with no open services observed.
+- 
 - Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
 - AI strategy review: ## Summary
-helix.htb generation-3 shows zero open services across a 38-port bounded TCP sweep and zero DNS records. All 16 recon_scan tasks failed under model gemma4:e4b (not a configured route). HTTP probes are blocked downstream because no candidate ports were surfaced. No exploitable surface identified — evidence is insufficient to claim any finding.
+Current evidence does not prove any reachable service or vulnerability on helix.htb. The next safe move is bounded service discovery and runtime failure triage before any HTTP or content workflow.
 
 ## Facts
-- TCP sweep: 2 hosts x 38 ports — 0 open services observed (evidence_b3ff3d45169c, confidence=0.72)
-- DNS: AXFR denied, 0 records pars
+- DNS enumeration against helix.htb via 10.129.64.253 returned 0 parsed records.
+- AXFR did not succeed.
+- Bounded TCP connect checks covered 2 hosts and 38 ports with no open services observed.
+- Multiple recent recon_scan tasks failed or were cancelled using model gemma4:e4b.
+- H
 - Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
 - AI strategy review: ## Summary
-helix.htb generation-3 shows zero open ports across a 38-port bounded scan and no usable DNS records. HTTP probes are blocked because no candidate web ports surfaced. Fourteen-plus consecutive recon_scan failures on gemma4:e4b indicate a model execution fault, not target silence. Port coverage is critically insufficient — 38 ports against a live HTB target will miss nearly everything.
+Current evidence proves only negative bounded recon: DNS returned no parsed records and AXFR failed; bounded TCP checks found no open services. Next move is to repair/diagnose recon execution and run a bounded service-discovery primitive before any HTTP or content work.
 
 ## Facts
-- DNS: 0 records parsed for helix.htb, AXFR refused (evidence_4caa6aeeef3c, confidence=0.82
-- Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
-- AI strategy review: ## Summary
-helix.htb shows zero open services across a 38-port TCP scan and zero DNS records. HTTP probe tasks are blocked on missing port candidates. All recon_scan task failures appear to be model-execution failures (gemma4:e4b is not a configured route), not target refusals. The target is not enumerated—it is unenumerated.
-
-## Facts
-- TCP scan covered only 38 ports across 2 hosts; 0 open ports observed (evidence_b3ff3d45169c, confidence=0.72)
-- DNS query returned 0 records; AXFR denied (evide
-- Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
-- AI strategy review: ## Summary
-Recon branch is effectively stalled. TCP discovery covered only 38 ports and found nothing; DNS returned 0 records with AXFR denied. All 16 recon_scan tasks failed under gemma4:e4b — likely a model execution fault, not a target state. HTTP probes are downstream-blocked by the empty port result. No open attack surface is confirmed; no interests or findings exist. The most urgent gap is port coverage: 38 ports is far below minimum for HTB-class targets.
-
-## Facts
-- DNS enumeration again
-- Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
-- AI strategy review: ## Summary
-helix.htb recon is stalled: 38 bounded ports returned no open services, DNS returned 0 records and no AXFR, and 14 consecutive recon_scan tasks have failed on gemma4:e4b. HTTP probe tasks are blocked because no candidate ports exist. No facts, interests, or findings are established. The scan surface is too narrow to progress.
-
-## Facts
-- DNS enumeration against 10.129.64.253 resolved helix.htb but returned 0 parsed records; AXFR was refused.
-- TCP connect scan covered 38 ports across 
-- Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
-- AI strategy review: ## Summary
-helix.htb shows no open services across 38 bounded ports and no DNS records. Fourteen consecutive recon_scan failures on gemma4:e4b indicate an executor or model-dispatch problem, not just a hardened target. HTTP probes are blocked because no candidate ports exist. Root cause is likely either a connectivity/VPN issue, an IP generation mismatch, or the bounded port set missing the actual listening port.
-
-## Facts
-- DNS: 0 records returned, AXFR failed — no subdomain or host expansion a
+- evidence_4caa6aeeef3c: DNS enumeration queried helix.htb via 10.129.64.253, parsed 0 records, and AXFR did not succeed.
+- evidence_b3ff3d45169c: TCP connect checks covered 2 hosts and 38 ports with no open 
 
 ## Evidence References
 

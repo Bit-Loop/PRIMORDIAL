@@ -1843,7 +1843,7 @@ class WorkflowOrchestrator:
             chunk
             for chunk in self.store.list_document_chunks(target_id=target.id, limit=500)
             if str(chunk.metadata.get("corpus_type") or "") in self.RAG_HINT_CORPUS_TYPES
-            and str(chunk.metadata.get("hint_policy") or "direct_task_hints") == "direct_task_hints"
+            and str(chunk.metadata.get("hint_policy") or "advisory") == "direct_task_hints"
             and str(chunk.metadata.get("planner_visibility") or "normal") != "taxonomy_only"
         ]
         if not terms:
