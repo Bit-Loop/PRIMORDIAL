@@ -24,13 +24,11 @@ def extract_with_docling(
     docling_json_path: Path | str | None = None,
     markdown_path: Path | str | None = None,
 ) -> dict[str, Any]:
-    if allow_ocr:
-        raise DoclingExtractionUnavailable("OCR is disabled by policy for this pipeline")
     try:
         from docling.document_converter import DocumentConverter
     except ModuleNotFoundError as exc:
         raise DoclingExtractionUnavailable("Docling is not installed; no fallback extractor is enabled") from exc
-    converter = DocumentConverter()
+    converter = _converter(allow_ocr=allow_ocr)
     result = converter.convert(str(path))
     document = result.document
     markdown = str(document.export_to_markdown())
@@ -61,6 +59,33 @@ def extract_with_docling(
         "units": units,
         "warnings": warnings,
     }
+
+
+def _converter(*, allow_ocr: bool) -> Any:
+    from docling.document_converter import DocumentConverter
+
+    try:
+        from docling.datamodel.base_models import InputFormat
+        from docling.datamodel.pipeline_options import PdfPipelineOptions
+        from docling.document_converter import ImageFormatOption, PdfFormatOption
+    except Exception:
+        return DocumentConverter()
+    pdf_options = PdfPipelineOptions()
+    if hasattr(pdf_options, "do_ocr"):
+        pdf_options.do_ocr = bool(allow_ocr)
+    if hasattr(pdf_options, "enable_remote_services"):
+        pdf_options.enable_remote_services = False
+    image_options = PdfPipelineOptions()
+    if hasattr(image_options, "do_ocr"):
+        image_options.do_ocr = bool(allow_ocr)
+    if hasattr(image_options, "enable_remote_services"):
+        image_options.enable_remote_services = False
+    return DocumentConverter(
+        format_options={
+            InputFormat.PDF: PdfFormatOption(pipeline_options=pdf_options),
+            InputFormat.IMAGE: ImageFormatOption(pipeline_options=image_options),
+        }
+    )
 
 
 def _page_units(document: Any, full_markdown: str) -> tuple[list[dict[str, Any]], list[str]]:

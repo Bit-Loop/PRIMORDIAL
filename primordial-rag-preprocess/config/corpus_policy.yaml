@@ -10,7 +10,7 @@ allow_duplicate_extraction: false
 prefer_docling: true
 docling_only: true
 fallback_extractors_enabled: false
-docling_allow_ocr: false
+docling_allow_ocr: true
 docling_chunker: hybrid
 epub_conversion: pandoc_only
 vlm_profile_extraction: false

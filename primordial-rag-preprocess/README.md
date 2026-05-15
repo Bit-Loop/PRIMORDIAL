@@ -12,8 +12,10 @@ The pipeline inventories, classifies, policy-gates, extracts, parses, chunks, va
 - Restricted exploit, kernel, binary-analysis, tool-abuse, and post-exploitation-sensitive material is marked `restricted` or `quarantine`.
 - Restricted material must not be used in default web/API planning retrieval.
 - MITRE ATT&CK JSON is parsed structurally into records; raw ATT&CK bundles are not chunked as giant text blobs.
-- Docling is the only document extraction backend. No fallback parsers are used if Docling is missing or fails.
-- OCR is disabled by default.
+- Docling is the document extraction backend for supported formats.
+- EPUBs are converted with `pandoc` only before Docling ingestion; no ebooklib/BeautifulSoup fallback is used.
+- OCR is controlled by `docling_allow_ocr`. It is enabled in the default corpus policy for scanned/image-heavy PDFs, and first use may initialize local Docling/RapidOCR model artifacts.
+- Docling HybridChunker is the primary chunker for converted Docling JSON. The pipeline passes a local approximate tokenizer so chunking does not need to fetch a Hugging Face tokenizer.
 
 ## Install
 
@@ -27,7 +29,7 @@ pip install -r requirements.txt
 pytest -q
 ```
 
-Docling is required for PDF, EPUB, Markdown, HTML, and text extraction. If Docling is unavailable, the pipeline records an extraction error for that source and continues without fallback extraction.
+Docling is required for PDF, Markdown, HTML, and text extraction. EPUB requires `pandoc` first, then the converted Markdown goes through Docling. If Docling or pandoc is unavailable, the pipeline records an extraction error for that source and continues without fallback extraction.
 
 ## Example Run
 
@@ -73,6 +75,13 @@ output/
   classification_report.md
   extracted_sources.jsonl
   extracted/<source_id>.json
+  converted/
+    docling_json/<source_id>.json
+    markdown/<source_id>.md
+    epub_converted/<source_id>.md
+  profiles/
+    <source_id>.profile.json
+  profiles.jsonl
   attack/
     enterprise_records.jsonl
     mobile_records.jsonl
@@ -80,6 +89,13 @@ output/
   chunks/
     chunks.jsonl
     chunks_by_source/<source_id>.jsonl
+    api_web.jsonl
+    kubernetes_cloud.jsonl
+    systems_exploitation.jsonl
+    methodology_standards.jsonl
+    mitre_attack.jsonl
+    formal_methods.jsonl
+    general_security.jsonl
   indexes/
     attck_enterprise_index.jsonl
     attck_mobile_index.jsonl
@@ -117,12 +133,15 @@ Classification records add:
 Each chunk includes:
 
 - deterministic `chunk_id`
+- `doc_id`
 - `source_id`, `source_sha256`, and `source_path`
+- `source_file`, `source_type`, `retrieval_text`, and `raw_text`
 - title, author, publisher, year
 - page and section location when available
 - chunk index and token estimate
 - authority, corpus type, domain, risk level
 - planner visibility and approval gates
+- `requires_authorized_scope` and `allowed_use_modes`
 - license status and policy-blocked flag
 - extraction warnings
 - pipeline version
@@ -186,9 +205,24 @@ Extraction still goes through Docling only.
 
 Place local Kubernetes, NSA/CISA, CIS, or vendor docs under `docs/RAG_SRC/`. Official Kubernetes/CISA/NSA/CIS material is normal safe-planning context. Books or practical Kubernetes attack material are classified more conservatively.
 
+## EPUB Handling
+
+The pipeline does not send EPUB files directly to Docling. It first tries:
+
+```bash
+pandoc input.epub -t gfm -o output.md
+```
+
+If pandoc is missing or conversion fails, the EPUB is marked not extracted. This is intentional: there is no fallback EPUB body extractor.
+
+## Profile Extraction
+
+Every classified source gets a `SecurityDocProfile` JSON file. By default profiles are heuristic and derived from filename, classification, source family, and corpus policy. Docling `DocumentExtractor` is only attempted if `vlm_profile_extraction: true` and the CLI is not run with `--skip-vlm`.
+
 ## Troubleshooting
 
 - `Docling is required; no fallback extractors are enabled`: install or repair Docling, then rerun extraction.
+- `pandoc is not installed; EPUB fallback extractors are disabled`: install pandoc or pre-convert EPUBs yourself.
 - `policy_blocked=true`: inspect `policy_block_reason`; add an override only if rights and scope are clear.
 - No chunks generated: check whether all sources were blocked, Docling failed, or only inventory/classification phases were run.
 - Validation failed: inspect `output/validation_report.json` before ingesting any chunks.

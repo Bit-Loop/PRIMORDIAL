@@ -161,7 +161,7 @@ def _chunks_for_extracted_source(
     chunk_index = 0
     if extracted.get("docling_json_path") and policy.docling_chunker == "hybrid":
         try:
-            return _chunks_for_docling_json(source, extracted, profile)
+            return _chunks_for_docling_json(source, extracted, policy, profile)
         except Exception as exc:  # noqa: BLE001 - fallback to saved extraction units with warning
             extracted.setdefault("warnings", []).append(f"hybrid_chunker_failed:{type(exc).__name__}:{exc}")
     for unit in extracted.get("units", []):
@@ -192,6 +192,28 @@ def _load_hybrid_chunker() -> Any:
     return HybridChunker
 
 
+def _make_hybrid_chunker(policy: CorpusPolicy) -> Any:
+    HybridChunker = _load_hybrid_chunker()
+    try:
+        from docling_core.transforms.chunker.tokenizer.base import BaseTokenizer
+    except Exception:
+        return HybridChunker()
+
+    class ApproxTokenizer(BaseTokenizer):
+        max_tokens: int = max(256, int(policy.chunking.target_chars / 4))
+
+        def count_tokens(self, text: str) -> int:
+            return max(1, len(str(text).split()))
+
+        def get_max_tokens(self) -> int:
+            return self.max_tokens
+
+        def get_tokenizer(self) -> Any:
+            return None
+
+    return HybridChunker(tokenizer=ApproxTokenizer(), repeat_table_header=True)
+
+
 def _load_docling_document(path: Path) -> Any:
     try:
         from docling_core.types.doc.document import DoclingDocument
@@ -203,11 +225,12 @@ def _load_docling_document(path: Path) -> Any:
 def _chunks_for_docling_json(
     source: dict[str, Any],
     extracted: dict[str, Any],
+    policy: CorpusPolicy,
     profile: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     doc_path = Path(str(extracted["docling_json_path"]))
     document = _load_docling_document(doc_path)
-    chunker = _load_hybrid_chunker()()
+    chunker = _make_hybrid_chunker(policy)
     chunks: list[dict[str, Any]] = []
     for index, doc_chunk in enumerate(chunker.chunk(document)):
         raw_text = str(getattr(doc_chunk, "text", "") or "")
@@ -216,7 +239,9 @@ def _chunks_for_docling_json(
         except Exception:
             retrieval_text = raw_text
         retrieval_text = clean_text(retrieval_text)
-        raw_text = clean_text(raw_text or retrieval_text)
+        raw_text = clean_text(raw_text)
+        if not raw_text:
+            raw_text = retrieval_text
         if not retrieval_text:
             continue
         chunk = _base_chunk(
