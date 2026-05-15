@@ -18,7 +18,7 @@ dependencies = [
 test = ["pytest>=8.0"]
 
 [tool.setuptools]
-packages = ["primordial_preprocess", "primordial_preprocess.extraction"]
+packages = ["primordial_preprocess", "primordial_preprocess.extraction", "primordial_preprocess.vuln"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

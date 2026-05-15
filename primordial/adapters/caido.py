@@ -142,21 +142,59 @@ class CaidoIntegrationService:
     def health(self) -> dict[str, object]:
         query = "query PrimordialCaidoHealth { __typename }"
         result = self.graphql(query)
+        traffic_result = None
+        if result.get("ok"):
+            traffic_result = self.graphql(
+                """
+                query PrimordialCaidoTrafficHealth($limit: Int!, $offset: Int!) {
+                  requestsByOffset(limit: $limit, offset: $offset) {
+                    count { value }
+                  }
+                }
+                """,
+                {"limit": 1, "offset": 0},
+                operation_name="PrimordialCaidoTrafficHealth",
+            )
+        traffic_ok = bool(traffic_result.get("ok")) if isinstance(traffic_result, dict) else False
+        traffic_error = self._graphql_error_message(traffic_result) if isinstance(traffic_result, dict) and not traffic_ok else None
         return {
-            "ok": result["ok"],
+            "ok": bool(result["ok"]) and traffic_ok,
             "status_code": result.get("status_code"),
-            "error": result.get("error"),
-            "auth_error": bool(result.get("auth_error")),
+            "error": result.get("error") or traffic_error,
+            "auth_error": bool(result.get("auth_error")) or bool(traffic_result.get("auth_error") if isinstance(traffic_result, dict) else False),
             "graphql_typename": (result.get("data") or {}).get("__typename")
             if isinstance(result.get("data"), dict)
             else None,
+            "traffic_access_ok": traffic_ok,
+            "traffic_error": traffic_error,
         }
 
     def schema_probe(self) -> dict[str, object]:
         query = """
         query PrimordialCaidoSchemaProbe {
           __schema {
-            queryType { name fields { name } }
+            queryType {
+              name
+              fields {
+                name
+                args {
+                  name
+                  type {
+                    kind
+                    name
+                    ofType {
+                      kind
+                      name
+                      ofType {
+                        kind
+                        name
+                        ofType { kind name }
+                      }
+                    }
+                  }
+                }
+              }
+            }
             mutationType { name fields { name } }
           }
         }
@@ -165,19 +203,25 @@ class CaidoIntegrationService:
         schema = result.get("data", {}).get("__schema") if isinstance(result.get("data"), dict) else None
         query_fields: set[str] = set()
         mutation_fields: set[str] = set()
+        request_args: dict[str, dict[str, str]] = {}
         if isinstance(schema, dict):
             query_type = schema.get("queryType") if isinstance(schema.get("queryType"), dict) else {}
             mutation_type = schema.get("mutationType") if isinstance(schema.get("mutationType"), dict) else {}
+            query_field_payloads = [item for item in query_type.get("fields", []) if isinstance(item, dict)]
             query_fields = {
                 str(item.get("name"))
-                for item in query_type.get("fields", [])
-                if isinstance(item, dict) and item.get("name")
+                for item in query_field_payloads
+                if item.get("name")
             }
             mutation_fields = {
                 str(item.get("name"))
                 for item in mutation_type.get("fields", [])
                 if isinstance(item, dict) and item.get("name")
             }
+            request_args = self._field_arg_types(
+                query_field_payloads,
+                {"request", "requests", "requestsByOffset"},
+            )
         return {
             "ok": bool(result.get("ok")) and bool(query_fields or mutation_fields),
             "error": result.get("error"),
@@ -191,6 +235,7 @@ class CaidoIntegrationService:
             },
             "query_fields": sorted(query_fields),
             "mutation_fields": sorted(mutation_fields),
+            "request_args": request_args,
         }
 
     def graphql(
@@ -253,73 +298,32 @@ class CaidoIntegrationService:
         selected_limit = max(1, min(int(limit), 200))
         selected_offset = max(0, int(offset))
         normalized_httpql = httpql.strip()
-        variables: dict[str, object] = {
-            "filter": normalized_httpql or None,
-            "limit": selected_limit,
-            "offset": selected_offset,
-        }
-        attempts = [
-            (
-                "requestsByOffset",
-                f"""
-                query PrimordialCaidoRequestSearch($filter: HTTPQL, $limit: Int!, $offset: Int!) {{
-                  requestsByOffset(
-                    limit: $limit
-                    offset: $offset
-                    filter: $filter
-                    order: {{ by: CREATED_AT, ordering: DESC }}
-                  ) {{
-                    count {{ value }}
-                    nodes {{ {self.REQUEST_SUMMARY_FIELDS} }}
-                  }}
-                }}
-                """,
-                "PrimordialCaidoRequestSearch",
-            ),
-            (
-                "requestsByOffset",
-                f"""
-                query PrimordialCaidoRequestSearch($filter: HTTPQL, $limit: Int!, $offset: Int!) {{
-                  requestsByOffset(limit: $limit, offset: $offset, filter: $filter) {{
-                    count {{ value }}
-                    nodes {{ {self.REQUEST_SUMMARY_FIELDS} }}
-                  }}
-                }}
-                """,
-                "PrimordialCaidoRequestSearch",
-            ),
-            (
-                "requests",
-                f"""
-                query PrimordialCaidoRequestSearch($filter: HTTPQL, $limit: Int!) {{
-                  requests(first: $limit, filter: $filter, order: {{ by: CREATED_AT, ordering: DESC }}) {{
-                    count {{ value }}
-                    nodes {{ {self.REQUEST_SUMMARY_FIELDS} }}
-                  }}
-                }}
-                """,
-                "PrimordialCaidoRequestSearch",
-            ),
-            (
-                "requests",
-                f"""
-                query PrimordialCaidoRequestSearch($filter: HTTPQL, $limit: Int!) {{
-                  requests(first: $limit, filter: $filter) {{
-                    count {{ value }}
-                    nodes {{ {self.REQUEST_SUMMARY_FIELDS} }}
-                  }}
-                }}
-                """,
-                "PrimordialCaidoRequestSearch",
-            ),
-        ]
         last_result: dict[str, object] | None = None
-        for field_name, query, operation_name in attempts:
-            attempt_variables = dict(variables)
-            if field_name == "requests":
-                attempt_variables.pop("offset", None)
-            result = self.graphql(query, attempt_variables, operation_name=operation_name)
+        attempt_log: list[dict[str, object]] = []
+        for attempt in self._request_search_attempts(
+            httpql=normalized_httpql,
+            limit=selected_limit,
+            offset=selected_offset,
+        ):
+            field_name = str(attempt["field_name"])
+            filter_strategy = str(attempt["filter_strategy"])
+            result = self.graphql(
+                str(attempt["query"]),
+                attempt["variables"] if isinstance(attempt["variables"], dict) else {},
+                operation_name="PrimordialCaidoRequestSearch",
+            )
             last_result = result
+            attempt_log.append(
+                {
+                    "query_field": field_name,
+                    "filter_strategy": filter_strategy,
+                    "ok": bool(result.get("ok")),
+                    "error": "" if result.get("ok") else self._graphql_error_message(result),
+                    "auth_error": bool(result.get("auth_error")),
+                }
+            )
+            if result.get("auth_error"):
+                break
             if not result.get("ok"):
                 continue
             connection = result.get("data", {}).get(field_name) if isinstance(result.get("data"), dict) else None
@@ -329,16 +333,23 @@ class CaidoIntegrationService:
                 "ok": True,
                 "httpql": normalized_httpql,
                 "query_field": field_name,
+                "filter_strategy": filter_strategy,
                 "limit": selected_limit,
                 "offset": selected_offset,
                 "total": self._connection_count(connection),
                 "requests": [self._normalize_request_summary(item) for item in connection.get("nodes", []) if isinstance(item, dict)],
+                "diagnostics": {"attempts": self._compact_search_attempts(attempt_log)},
+                "auth_error": False,
             }
         return {
             "ok": False,
             "httpql": normalized_httpql,
             "error": self._graphql_error_message(last_result),
+            "auth_error": bool(last_result.get("auth_error")) if isinstance(last_result, dict) else False,
+            "query_field": "",
+            "filter_strategy": "",
             "requests": [],
+            "diagnostics": {"attempts": self._compact_search_attempts(attempt_log)},
         }
 
     def request_detail(self, request_id: str, *, snippet_chars: int = 4096) -> dict[str, object]:
@@ -609,6 +620,116 @@ class CaidoIntegrationService:
     def _httpql_string(self, value: str) -> str:
         return value.replace("\\", "\\\\").replace('"', '\\"')
 
+    def _graphql_string_literal(self, value: str) -> str:
+        return json.dumps(value)
+
+    def _request_search_attempts(self, *, httpql: str, limit: int, offset: int) -> list[dict[str, object]]:
+        attempts: list[dict[str, object]] = []
+        field_shapes = [
+            ("requestsByOffset", {"limit": limit, "offset": offset}, ["limit: $limit", "offset: $offset"]),
+            ("requests", {"limit": limit}, ["first: $limit"]),
+        ]
+        filter_shapes: list[tuple[str, str, dict[str, object], str]]
+        if httpql:
+            httpql_literal = self._graphql_string_literal(httpql)
+            filter_shapes = [
+                ("variable:HTTPQLInput.code", "$filter: HTTPQLInput!, ", {"filter": {"code": httpql}}, "filter: $filter"),
+                ("inline:HTTPQLInput.code", "", {}, f"filter: {{ code: {httpql_literal} }}"),
+                ("variable:HTTPQLInput.query", "$filter: HTTPQLInput!, ", {"filter": {"query": httpql}}, "filter: $filter"),
+                ("inline:HTTPQLInput.query", "", {}, f"filter: {{ query: {httpql_literal} }}"),
+                ("variable:String", "$filter: String!, ", {"filter": httpql}, "filter: $filter"),
+                ("inline:String", "", {}, f"filter: {httpql_literal}"),
+            ]
+        else:
+            filter_shapes = [("unfiltered", "", {}, "")]
+        for field_name, base_variables, base_args in field_shapes:
+            for filter_strategy, filter_var_defs, filter_variables, filter_arg in filter_shapes:
+                for include_order in (True, False):
+                    variables = dict(base_variables)
+                    variables.update(filter_variables)
+                    arg_lines = list(base_args)
+                    if filter_arg:
+                        arg_lines.append(filter_arg)
+                    if include_order:
+                        arg_lines.append("order: { by: CREATED_AT, ordering: DESC }")
+                    variable_defs = "$limit: Int!"
+                    if field_name == "requestsByOffset":
+                        variable_defs += ", $offset: Int!"
+                    if filter_var_defs:
+                        variable_defs = filter_var_defs + variable_defs
+                    args = "\n                    ".join(arg_lines)
+                    query = f"""
+                query PrimordialCaidoRequestSearch({variable_defs}) {{
+                  {field_name}(
+                    {args}
+                  ) {{
+                    count {{ value }}
+                    nodes {{ {self.REQUEST_SUMMARY_FIELDS} }}
+                  }}
+                }}
+                """
+                    order_label = "+order" if include_order else ""
+                    attempts.append(
+                        {
+                            "field_name": field_name,
+                            "filter_strategy": f"{filter_strategy}{order_label}",
+                            "query": query,
+                            "variables": variables,
+                        }
+                    )
+        return attempts
+
+    def _compact_search_attempts(self, attempts: list[dict[str, object]]) -> list[dict[str, object]]:
+        compacted = []
+        seen_errors: set[tuple[str, str, str]] = set()
+        for item in attempts:
+            error_text = str(item.get("error") or "")
+            key = (str(item.get("query_field") or ""), str(item.get("filter_strategy") or ""), error_text)
+            if error_text and key in seen_errors:
+                continue
+            if error_text:
+                seen_errors.add(key)
+            compacted.append(
+                {
+                    "query_field": item.get("query_field") or "",
+                    "filter_strategy": item.get("filter_strategy") or "",
+                    "ok": bool(item.get("ok")),
+                    "error": error_text,
+                    "auth_error": bool(item.get("auth_error")),
+                }
+            )
+        return compacted[-8:]
+
+    def _field_arg_types(self, fields: list[dict[str, object]], selected_names: set[str]) -> dict[str, dict[str, str]]:
+        selected: dict[str, dict[str, str]] = {}
+        for field in fields:
+            name = str(field.get("name") or "")
+            if name not in selected_names:
+                continue
+            args: dict[str, str] = {}
+            for arg in field.get("args", []) if isinstance(field.get("args"), list) else []:
+                if not isinstance(arg, dict):
+                    continue
+                arg_name = str(arg.get("name") or "")
+                if not arg_name:
+                    continue
+                args[arg_name] = self._graphql_type_name(arg.get("type"))
+            selected[name] = args
+        return selected
+
+    def _graphql_type_name(self, value: object) -> str:
+        if not isinstance(value, dict):
+            return ""
+        kind = str(value.get("kind") or "")
+        name = str(value.get("name") or "")
+        if kind == "NON_NULL":
+            inner = self._graphql_type_name(value.get("ofType"))
+            return f"{inner}!" if inner else "!"
+        if kind == "LIST":
+            inner = self._graphql_type_name(value.get("ofType"))
+            return f"[{inner}]" if inner else "[]"
+        return name or kind
+
     def _normalize_request_summary(self, payload: dict[str, object] | None) -> dict[str, object]:
         payload = payload or {}
         response_payload = payload.get("response") if isinstance(payload.get("response"), dict) else {}
@@ -744,6 +865,7 @@ class CaidoIntegrationService:
             },
             "query_fields": [],
             "mutation_fields": [],
+            "request_args": {},
         }
 
     def _contains_auth_error(self, errors: list[object]) -> bool:
@@ -751,7 +873,13 @@ class CaidoIntegrationService:
 
     def _contains_auth_text(self, value: str) -> bool:
         lowered = value.lower()
-        return "unauthorized" in lowered or "forbidden" in lowered or "invalid token" in lowered
+        return (
+            "unauthorized" in lowered
+            or "forbidden" in lowered
+            or "invalid token" in lowered
+            or "invalid_token" in lowered
+            or '"authorization"' in lowered
+        )
 
     def _sanitize_json(self, value: object, secret: str) -> object:
         if isinstance(value, dict):
@@ -776,6 +904,13 @@ class CaidoIntegrationService:
         if isinstance(errors, list) and errors:
             first = errors[0]
             if isinstance(first, dict):
+                caido = first.get("extensions", {}).get("CAIDO") if isinstance(first.get("extensions"), dict) else None
+                if isinstance(caido, dict):
+                    reason = str(caido.get("reason") or "").strip()
+                    code = str(caido.get("code") or "").strip()
+                    if reason or code:
+                        category = code.lower() if code else "graphql"
+                        return f"Caido {category} error: {reason or code}"
                 return str(first.get("message") or first.get("code") or first.get("__typename") or first)
             return str(first)
         return "Caido GraphQL request failed."

@@ -67,10 +67,11 @@ from primordial.core.providers.lmstudio_tuning import LMStudioPerformanceTuner
 from primordial.core.providers.ollama import OllamaClient, OllamaModelListResult
 from primordial.core.providers.model_eval import ModelEvaluationService
 from primordial.core.providers.wrapper_prompts import WRAPPER_ROLE_PERSONALITY_PROMPTS, build_wrapper_system_prompt
-from primordial.core.rag import DocumentIngestionService
+from primordial.core.rag import DocumentIngestionService, RagContextBroker
 from primordial.core.rag.citations import disallowed_rag_synthesis_model, validate_rag_citations
 from primordial.core.rag.embeddings import embedding_provider_from_config
 from primordial.core.rag.importer import RagChunkImporter, RagImportOptions
+from primordial.core.rag.vuln_hints import vulnerability_hints_from_results
 from primordial.core.recovery.crash_journal import CrashJournal
 from primordial.core.recovery.resume_tracker import ResumeTracker
 from primordial.core.providers.scheduler import ModelScheduler
@@ -192,6 +193,7 @@ class PrimordialRuntime:
             config.artifacts_dir,
             embedding_provider=self.rag_embedding_provider,
         )
+        self.rag_context_broker = RagContextBroker(self.rag)
         self.resume_tracker = ResumeTracker(self.store, self.event_bus)
         self._last_recovery_status: dict[str, object] = {
             "previous_unclean_shutdown": False,
@@ -223,6 +225,7 @@ class PrimordialRuntime:
             credentials_status_loader=self.credentials_payload,
             active_intent_policy_loader=self.intent_policy,
             active_intent_id_loader=lambda: self.active_operator_intent().id,
+            rag_context_builder=self.build_rag_context_pack,
             resource_status_loader=lambda: self.system_metrics_payload(force_refresh=True),
             resource_reserve_loader=self.resource_reserve_payload,
             event_bus=self.event_bus,
@@ -1522,13 +1525,50 @@ class PrimordialRuntime:
             corpus_types=corpus_types,
             filters=filters,
         )
+        payload_results = [item.as_payload() for item in results]
         return {
             "target": target_record.as_payload() if target_record else None,
             "query": query,
             "corpus_types": corpus_types or [],
             "filters": filters or {},
-            "results": [item.as_payload() for item in results],
+            "results": payload_results,
+            "citation_map": self.rag_context_broker.citation_map_for_chunks(payload_results),
         }
+
+    def build_rag_context_pack(
+        self,
+        query: str,
+        *,
+        purpose: str,
+        role: str | AgentRole | None = None,
+        target: str | Target | None = None,
+        task: Task | None = None,
+        limit: int = 5,
+        filters: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        target_record: Target | None
+        if isinstance(target, Target):
+            target_record = target
+        elif target:
+            target_record = self._resolve_target_reference(str(target))
+            if target_record is None:
+                raise ValueError(f"target not found: {target}")
+        elif task and task.target_id:
+            target_record = self.store.get_target(task.target_id)
+        else:
+            target_record = None
+        pack = self.rag_context_broker.build_pack(
+            query,
+            purpose=purpose,
+            role=role,
+            target=target_record,
+            task=task,
+            limit=limit,
+            filters=filters,
+            operator_intent=self.active_operator_intent().id,
+            intent_policy=self.intent_policy(),
+        )
+        return pack.as_payload()
 
     def rag_status(self) -> dict[str, object]:
         counts = self.store.rag_status_counts()
@@ -1572,6 +1612,15 @@ class PrimordialRuntime:
             },
             "default_chunks_dir": str(self.config.project_root / "primordial-rag-preprocess" / "output" / "chunks"),
             "supported_domains": sorted(self.rag.CORPUS_TYPES),
+            "context_pack_purposes": [
+                "operator_answer",
+                "planner_review",
+                "worker_ai_review",
+                "rag_synthesis",
+                "report_mapping",
+                "poc_design",
+            ],
+            "context_pack_roles": ["local_fast", "local_deep", "local_code", "local_compact", "operator_chat"],
             "supported_filters": [
                 "domain",
                 "source_file",
@@ -1582,6 +1631,27 @@ class PrimordialRuntime:
                 "output_mode",
                 "source_priority",
                 "requires_authorized_scope",
+                "vuln_id",
+                "cve_id",
+                "ghsa_id",
+                "osv_id",
+                "alias",
+                "ecosystem",
+                "package",
+                "vendor",
+                "product",
+                "cpe",
+                "purl",
+                "cwe",
+                "cvss_severity",
+                "kev",
+                "epss_probability",
+                "epss_percentile",
+                "fixed_version_known",
+                "asset_match",
+                "watchlist_match",
+                "source_kind",
+                "safety_level",
             ],
             "allowed_use_modes": [
                 "authorized_bug_bounty",
@@ -1793,12 +1863,14 @@ class PrimordialRuntime:
     ) -> dict[str, object]:
         chunks = retrieved_chunks or self.rag_search(query, limit=5)["results"]
         clean_chunks = [item for item in chunks if isinstance(item, dict) and not item.get("error")]
+        citation_map = self.rag_context_broker.citation_map_for_chunks(clean_chunks)
         if not clean_chunks:
             return {
                 "ok": False,
                 "status": "insufficient_context",
                 "answer": "",
                 "retrieved_ids": [],
+                "citation_map": [],
                 "validation": validate_rag_citations("", [], mode=mode, require_citations=True).as_payload(),
             }
         disallowed = disallowed_rag_synthesis_model(
@@ -1812,6 +1884,7 @@ class PrimordialRuntime:
                 "answer": "",
                 "error": f"RAG synthesis model {self.config.rag.synthesis.model!r} is disallowed by pattern {disallowed!r}",
                 "retrieved_ids": [str(item.get("citation_id") or f"rag:{item.get('chunk_id')}") for item in clean_chunks],
+                "citation_map": citation_map,
                 "validation": validate_rag_citations("", clean_chunks, mode=mode, require_citations=True).as_payload(),
             }
         system = build_wrapper_system_prompt(
@@ -1858,6 +1931,7 @@ class PrimordialRuntime:
                 "answer": "",
                 "error": str(exc),
                 "retrieved_ids": [str(item.get("citation_id") or f"rag:{item.get('chunk_id')}") for item in clean_chunks],
+                "citation_map": citation_map,
             }
         validation = validate_rag_citations(answer, clean_chunks, mode=mode, require_citations=True)
         return {
@@ -1867,6 +1941,7 @@ class PrimordialRuntime:
             "provider": provider,
             "model": model,
             "retrieved_ids": validation.retrieved_ids,
+            "citation_map": citation_map,
             "validation": validation.as_payload(),
         }
 
@@ -1888,12 +1963,14 @@ class PrimordialRuntime:
         for item in chunks:
             citation_id = str(item.get("citation_id") or f"rag:{item.get('chunk_id')}")
             metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            source_display = str(item.get("source_display") or metadata.get("source_display") or "")
             text = str(item.get("text") or item.get("retrieval_text") or "").strip()
             if len(text) > 1800:
                 text = text[:1800].rstrip() + "\n...TRUNCATED_RAG_CHUNK..."
             lines.extend(
                 [
                     f"[{citation_id}]",
+                    f"source={source_display}",
                     f"source_file={metadata.get('source_file') or item.get('source_file') or ''}",
                     f"domain={metadata.get('domain') or metadata.get('corpus_type') or ''}",
                     f"planner_visibility={metadata.get('planner_visibility') or ''}",
@@ -1916,7 +1993,7 @@ class PrimordialRuntime:
             query,
             target_id=target_record.id,
             limit=limit,
-            corpus_types=["cve_advisory", "exploit_note"],
+            corpus_types=["vuln_intel", "cve_advisory", "exploit_note"],
         )
         evidence = self.workflow._current_generation_evidence(target_record, limit=200)
         payload_results: list[dict[str, object]] = []
@@ -1929,8 +2006,40 @@ class PrimordialRuntime:
         return {
             "target": target_record.as_payload(),
             "query": query,
-            "corpus_types": ["cve_advisory", "exploit_note"],
+            "corpus_types": ["vuln_intel", "cve_advisory", "exploit_note"],
             "results": payload_results,
+        }
+
+    def rag_vuln_search(
+        self,
+        query: str,
+        *,
+        limit: int = 8,
+        filters: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        clean_filters = {"domain": ["vuln_intel"], **(filters or {})}
+        return self.rag_search(
+            query or "vulnerability remediation detection affected package",
+            limit=limit,
+            corpus_types=["vuln_intel"],
+            filters=clean_filters,
+        )
+
+    def rag_vuln_hints(
+        self,
+        query: str,
+        *,
+        limit: int = 8,
+        filters: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        search = self.rag_vuln_search(query, limit=limit, filters=filters)
+        hints = vulnerability_hints_from_results(
+            [item for item in search.get("results", []) if isinstance(item, dict)]
+        )
+        return {
+            "query": query,
+            "search": search,
+            **hints,
         }
 
     def rag_hints(self, query: str, *, target: str, limit: int = 8) -> dict[str, object]:
@@ -2201,6 +2310,287 @@ class PrimordialRuntime:
             "handoffs": [item.as_payload() for item in self.store.list_handoffs(task_id=task_id, limit=limit)],
             "checkpoints": checkpoints,
             "events": events,
+        }
+
+    def inspect_object(self, kind: str, object_id: str, *, limit: int = 25) -> dict[str, object]:
+        normalized = self._normalize_inspect_kind(kind)
+        record = self._lookup_inspect_record(normalized, object_id)
+        if record is None:
+            raise ValueError(f"{normalized} not found: {object_id}")
+        payload = self._inspect_payload(record)
+        related = self._inspect_related(normalized, payload, limit=limit)
+        artifact_preview = self._inspect_artifact_preview(payload) if normalized in {"artifact", "checkpoint"} else None
+        error_detail = self._inspect_error_detail(payload, related)
+        return {
+            "ok": True,
+            "kind": normalized,
+            "id": str(payload.get("id") or object_id),
+            "title": self._inspect_title(normalized, payload),
+            "summary": str(payload.get("summary") or payload.get("trace_summary") or payload.get("title") or ""),
+            "record": payload,
+            "related": related,
+            "artifact_preview": artifact_preview,
+            "error_detail": error_detail,
+        }
+
+    def inspect_many(self, kind: str, object_ids: list[str], *, limit: int = 25) -> dict[str, object]:
+        normalized = self._normalize_inspect_kind(kind)
+        members: list[dict[str, object]] = []
+        failures: list[dict[str, str]] = []
+        for object_id in object_ids:
+            try:
+                members.append(self.inspect_object(normalized, object_id, limit=limit))
+            except ValueError as exc:
+                failures.append({"id": object_id, "error": str(exc)})
+        return {
+            "ok": not failures,
+            "kind": "group",
+            "group_kind": normalized,
+            "count": len(members),
+            "members": members,
+            "failures": failures,
+        }
+
+    def _normalize_inspect_kind(self, kind: str) -> str:
+        value = str(kind or "").strip().lower().replace("-", "_")
+        aliases = {
+            "tasks": "task",
+            "task_run": "run",
+            "task_runs": "run",
+            "taskrun": "run",
+            "runs": "run",
+            "agent_trace": "trace",
+            "agent_traces": "trace",
+            "traces": "trace",
+            "events": "event",
+            "evidences": "evidence",
+            "artifacts": "artifact",
+            "findings": "finding",
+            "interests": "interest",
+            "checkpoints": "checkpoint",
+            "notifications": "notification",
+            "external_sync": "sync_job",
+            "external_sync_job": "sync_job",
+            "external_sync_jobs": "sync_job",
+            "sync": "sync_job",
+            "sync_jobs": "sync_job",
+            "handoffs": "handoff",
+            "notes": "note",
+            "memory_entry": "memory",
+            "memory_entries": "memory",
+            "document_chunk": "chunk",
+            "document_chunks": "chunk",
+            "rag_chunk": "chunk",
+        }
+        normalized = aliases.get(value, value)
+        allowed = {
+            "task",
+            "run",
+            "trace",
+            "event",
+            "evidence",
+            "artifact",
+            "finding",
+            "interest",
+            "checkpoint",
+            "notification",
+            "sync_job",
+            "handoff",
+            "note",
+            "memory",
+            "chunk",
+            "target",
+        }
+        if normalized not in allowed:
+            raise ValueError(f"unsupported inspect kind: {kind}")
+        return normalized
+
+    def _lookup_inspect_record(self, kind: str, object_id: str) -> object | None:
+        if kind == "task":
+            return self.store.get_task(object_id)
+        if kind == "run":
+            return self.store.get_task_run(object_id)
+        if kind == "trace":
+            return self.store.get_trace(object_id)
+        if kind == "event":
+            return self.store.get_event(object_id)
+        if kind == "evidence":
+            return self.store.get_evidence(object_id)
+        if kind == "artifact":
+            return self.store.get_artifact(object_id)
+        if kind == "finding":
+            return self.store.get_finding(object_id)
+        if kind == "interest":
+            return self.store.get_interest(object_id)
+        if kind == "checkpoint":
+            return self.store.get_checkpoint(object_id)
+        if kind == "notification":
+            return self.store.get_notification(object_id)
+        if kind == "sync_job":
+            return self.store.get_external_sync_job(object_id)
+        if kind == "handoff":
+            return self.store.get_handoff(object_id)
+        if kind == "note":
+            return self.store.get_note(object_id)
+        if kind == "memory":
+            return self.store.get_memory_entry(object_id)
+        if kind == "chunk":
+            return self.store.get_document_chunk(object_id)
+        if kind == "target":
+            return self.store.get_target(object_id)
+        return None
+
+    def _inspect_payload(self, record: object) -> dict[str, object]:
+        if hasattr(record, "as_payload"):
+            payload = record.as_payload()
+            return payload if isinstance(payload, dict) else {"value": payload}
+        if isinstance(record, dict):
+            return json_ready(record)
+        return {"value": str(record)}
+
+    def _inspect_title(self, kind: str, payload: dict[str, object]) -> str:
+        title = payload.get("title") or payload.get("summary") or payload.get("trace_summary") or payload.get("path")
+        if title:
+            return f"{kind}: {title}"
+        return f"{kind}: {payload.get('id') or 'record'}"
+
+    def _inspect_related(self, kind: str, payload: dict[str, object], *, limit: int) -> dict[str, object]:
+        related: dict[str, object] = {}
+        task_id = str(payload.get("task_id") or "")
+        target_id = str(payload.get("target_id") or "")
+        run_id = str(payload.get("run_id") or "")
+        if kind == "task":
+            task_id = str(payload.get("id") or "")
+        elif kind == "run":
+            task_id = str(payload.get("task_id") or "")
+            run_id = str(payload.get("id") or run_id)
+        if kind == "target":
+            target_id = str(payload.get("id") or "")
+
+        task = self.store.get_task(task_id) if task_id else None
+        if task is not None:
+            related["task"] = task.as_payload()
+            target_id = target_id or str(task.target_id or "")
+        target = self.store.get_target(target_id) if target_id else None
+        if target is not None:
+            related["target"] = target.as_payload()
+
+        if task_id:
+            runs = self.store.list_task_runs(task_id=task_id, limit=limit)
+            run_ids = {run.id for run in runs}
+            if run_id:
+                run_ids.add(run_id)
+            related["runs"] = [item.as_payload() for item in runs]
+            related["traces"] = [item.as_payload() for item in self.store.list_traces(task_id=task_id, limit=limit)]
+            related["handoffs"] = [item.as_payload() for item in self.store.list_handoffs(task_id=task_id, limit=limit)]
+            related["artifacts"] = [item.as_payload() for item in self.store.list_artifacts(task_id=task_id, limit=limit)]
+            related["checkpoints"] = [
+                item.as_payload()
+                for item in self.store.list_checkpoints(limit=limit * 5)
+                if item.task_id == task_id or item.run_id in run_ids
+            ][:limit]
+            related["events"] = [
+                item.as_payload()
+                for item in self.store.list_events(limit=limit * 5)
+                if item.task_id == task_id
+            ][:limit]
+            if target_id:
+                related["evidence"] = [
+                    item.as_payload()
+                    for item in self.store.list_evidence(target_id=target_id, limit=limit * 5)
+                    if item.task_id == task_id
+                ][:limit]
+        return related
+
+    def _inspect_artifact_preview(self, payload: dict[str, object], *, max_bytes: int = 65536) -> dict[str, object] | None:
+        raw_path = str(payload.get("path") or "")
+        if not raw_path:
+            return None
+        path = Path(raw_path)
+        try:
+            resolved = path.resolve()
+        except OSError as exc:
+            return {"available": False, "path": raw_path, "error": str(exc)}
+        allowed_roots = (self.config.artifacts_dir.resolve(), self.config.checkpoints_dir.resolve())
+        if not any(root == resolved or root in resolved.parents for root in allowed_roots):
+            return {"available": False, "path": raw_path, "error": "preview blocked outside runtime artifact roots"}
+        if not resolved.exists() or not resolved.is_file():
+            return {"available": False, "path": str(resolved), "error": "file is not present on disk"}
+        data = resolved.read_bytes()[: max_bytes + 1]
+        truncated = len(data) > max_bytes
+        if truncated:
+            data = data[:max_bytes]
+        text = data.decode("utf-8", errors="replace")
+        return {
+            "available": True,
+            "path": str(resolved),
+            "size_bytes": resolved.stat().st_size,
+            "truncated": truncated,
+            "text": self._redact_inspector_text(text),
+        }
+
+    def _redact_inspector_text(self, text: str) -> str:
+        redacted = re.sub(
+            r"(?i)(api[_-]?key|token|secret|password|passwd|webhook)([\"']?\s*[:=]\s*[\"']?)([^\"'\s,}]{4,})",
+            lambda match: f"{match.group(1)}{match.group(2)}[redacted]",
+            text,
+        )
+        return re.sub(
+            r"(?i)(authorization\s*:\s*bearer\s+)([A-Za-z0-9._~+/=-]{8,})",
+            lambda match: f"{match.group(1)}[redacted]",
+            redacted,
+        )
+
+    def _inspect_error_detail(self, payload: dict[str, object], related: dict[str, object]) -> dict[str, object]:
+        messages: list[dict[str, str]] = []
+        tracebacks: list[dict[str, str]] = []
+
+        def scan(item: object, source: str) -> None:
+            if not isinstance(item, dict):
+                return
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            for key in ("error", "last_error", "failure_reason"):
+                value = item.get(key) or metadata.get(key)
+                if value:
+                    messages.append({"source": source, "key": key, "message": str(value)})
+            for key in ("traceback", "stack", "stack_trace"):
+                value = metadata.get(key) or item.get(key)
+                if value:
+                    tracebacks.append({"source": source, "key": key, "traceback": str(value)})
+            exception_type = metadata.get("exception_type") or item.get("exception_type")
+            if exception_type:
+                messages.append({"source": source, "key": "exception_type", "message": str(exception_type)})
+
+        scan(payload, "record")
+        for key, value in related.items():
+            if isinstance(value, dict):
+                scan(value, key)
+            elif isinstance(value, list):
+                for index, item in enumerate(value):
+                    scan(item, f"{key}[{index}]")
+
+        seen_messages: set[tuple[str, str, str]] = set()
+        deduped_messages = []
+        for item in messages:
+            marker = (item["source"], item["key"], item["message"])
+            if marker in seen_messages:
+                continue
+            seen_messages.add(marker)
+            deduped_messages.append(item)
+        seen_tracebacks: set[str] = set()
+        deduped_tracebacks = []
+        for item in tracebacks:
+            text = item["traceback"]
+            if text in seen_tracebacks:
+                continue
+            seen_tracebacks.add(text)
+            deduped_tracebacks.append(item)
+        return {
+            "available": bool(deduped_messages or deduped_tracebacks),
+            "messages": deduped_messages,
+            "tracebacks": deduped_tracebacks,
+            "stack_available": bool(deduped_tracebacks),
+            "stack_note": "" if deduped_tracebacks else "No traceback was recorded for this object.",
         }
 
     def health_payload(self) -> dict[str, object]:
@@ -3373,6 +3763,7 @@ class PrimordialRuntime:
         selection = self.router.select_route(task)
         route = task.provider_route or selection.route
         role = self._model_role_for_route(route) or "local_fast"
+        prompt = self._with_worker_rag_context(task, prompt, role=role)
         if self._use_only_wrapper_mode():
             try:
                 return self._wrapper_ai_generate(
@@ -3429,6 +3820,28 @@ class PrimordialRuntime:
             "prompt_tokens": response.prompt_tokens,
             "completion_tokens": response.completion_tokens,
         }
+
+    def _with_worker_rag_context(self, task: Task, prompt: str, *, role: str) -> str:
+        query = " ".join(part for part in [task.title, task.summary, task.kind.value] if part)
+        try:
+            pack = self.build_rag_context_pack(
+                query,
+                purpose="worker_ai_review",
+                role=role,
+                task=task,
+                limit=4,
+            )
+        except Exception:  # noqa: BLE001 - advisory RAG must not break AI review
+            return prompt
+        context = str(pack.get("prompt_context") or "").strip()
+        if not context:
+            return prompt
+        return (
+            f"{prompt}\n\n"
+            "Role-aware RAG advisory pack:\n"
+            f"{context}\n\n"
+            "Use RAG only as cited source material. Do not treat it as target evidence, approval, or scope."
+        )
 
     def _wrapper_ai_generate(
         self,
@@ -3794,7 +4207,8 @@ class PrimordialRuntime:
 
     def _build_operator_prompt(self, question: str, target_id: str | None) -> str:
         target = self.store.get_target(target_id) if target_id else None
-        rag_context = self._rag_context_payload(question, target_id)
+        rag_context_pack = self._rag_context_pack_payload(question, target_id)
+        rag_context = rag_context_pack.get("chunks", []) if isinstance(rag_context_pack.get("chunks"), list) else []
         snapshot = {
             "operator_question": question,
             "active_session": (
@@ -3830,6 +4244,7 @@ class PrimordialRuntime:
                 else None
             ),
             "rag_context": rag_context,
+            "rag_context_pack": rag_context_pack,
         }
         rendered = json.dumps(json_ready(snapshot), indent=2, sort_keys=True)
         if len(rendered) > 24000:
@@ -3856,19 +4271,51 @@ class PrimordialRuntime:
         )
 
     def _rag_context_payload(self, question: str, target_id: str | None) -> list[dict[str, object]]:
+        pack = self._rag_context_pack_payload(question, target_id)
+        chunks = pack.get("chunks", [])
+        return [item for item in chunks if isinstance(item, dict)]
+
+    def _rag_context_pack_payload(self, question: str, target_id: str | None) -> dict[str, object]:
         if not target_id:
-            return []
+            return {
+                "query": question,
+                "purpose": "operator_answer",
+                "role": "operator_chat",
+                "target_id": None,
+                "chunks": [],
+                "citation_map": [],
+                "omitted_sources": [],
+                "warnings": [],
+                "prompt_context": "",
+            }
         try:
-            return [item.as_payload() for item in self.rag.retrieve(question, target_id=target_id, limit=5)]
+            target = self.store.get_target(target_id)
+            return self.build_rag_context_pack(
+                question,
+                purpose="operator_answer",
+                role="operator_chat",
+                target=target,
+                limit=5,
+            )
         except Exception as exc:  # noqa: BLE001 - retrieval must not break operator Q&A
-            return [
-                {
-                    "error": str(exc),
-                    "retrieval_source": "rag_error",
-                    "chunk_id": "",
-                    "evidence_refs": [],
-                }
-            ]
+            return {
+                "query": question,
+                "purpose": "operator_answer",
+                "role": "operator_chat",
+                "target_id": target_id,
+                "chunks": [
+                    {
+                        "error": str(exc),
+                        "retrieval_source": "rag_error",
+                        "chunk_id": "",
+                        "evidence_refs": [],
+                    }
+                ],
+                "citation_map": [],
+                "omitted_sources": [],
+                "warnings": [str(exc)],
+                "prompt_context": "",
+            }
 
     def _rag_context_ids(self, rag_context: list[dict[str, object]]) -> list[str]:
         ids: list[str] = []
@@ -3901,7 +4348,7 @@ class PrimordialRuntime:
             chunk_id = str(item.get("chunk_id") or "")
             refs = item.get("evidence_refs", [])
             evidence = ", ".join(f"`{ref}`" for ref in refs) if isinstance(refs, list) else ""
-            title = str(item.get("title") or "Imported document")
+            title = str(item.get("source_display") or item.get("title") or "Imported document")
             text = str(item.get("text") or "").replace("\n", " ").strip()
             if len(text) > 220:
                 text = text[:220].rstrip() + "..."

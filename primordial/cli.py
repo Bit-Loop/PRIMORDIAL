@@ -222,6 +222,34 @@ def build_parser() -> argparse.ArgumentParser:
     rag_hints.add_argument("--target", required=True, help="Target handle or ID.")
     rag_hints.add_argument("--limit", type=int, default=8)
     rag_hints.add_argument("--json", action="store_true")
+    rag_vuln = rag_subparsers.add_parser("vuln", help="Inspect vulnerability-intelligence RAG cards.")
+    rag_vuln_subparsers = rag_vuln.add_subparsers(dest="rag_vuln_command")
+    rag_vuln_status = rag_vuln_subparsers.add_parser("status", help="Show vulnerability-intel RAG counts.")
+    rag_vuln_status.add_argument("--json", action="store_true")
+    rag_vuln_import = rag_vuln_subparsers.add_parser("import", help="Import vulnerability-intel card chunks.")
+    rag_vuln_import.add_argument("--chunks-dir", default="primordial-rag-preprocess/output/vuln/chunks")
+    rag_vuln_import.add_argument("--dry-run", action="store_true")
+    rag_vuln_import.add_argument("--force", action="store_true")
+    rag_vuln_import.add_argument("--reembed", action="store_true")
+    rag_vuln_import.add_argument("--skip-embeddings", action="store_true")
+    rag_vuln_import.add_argument("--limit", type=int)
+    rag_vuln_import.add_argument("--json", action="store_true")
+    rag_vuln_search = rag_vuln_subparsers.add_parser("search", help="Search vulnerability-intel cards.")
+    rag_vuln_search.add_argument("query", nargs="+")
+    rag_vuln_search.add_argument("--limit", type=int, default=8)
+    rag_vuln_search.add_argument("--cve-id")
+    rag_vuln_search.add_argument("--ghsa-id")
+    rag_vuln_search.add_argument("--osv-id")
+    rag_vuln_search.add_argument("--package")
+    rag_vuln_search.add_argument("--ecosystem")
+    rag_vuln_search.add_argument("--kev", action="store_true")
+    rag_vuln_search.add_argument("--epss-percentile", type=float)
+    rag_vuln_search.add_argument("--json", action="store_true")
+    rag_vuln_hints = rag_vuln_subparsers.add_parser("hints", help="Return hint-only vulnerability context.")
+    rag_vuln_hints.add_argument("query", nargs="*")
+    rag_vuln_hints.add_argument("--limit", type=int, default=8)
+    rag_vuln_hints.add_argument("--kev", action="store_true")
+    rag_vuln_hints.add_argument("--json", action="store_true")
 
     ask = subparsers.add_parser("ask", help="Ask the bounded operator AI about current Primordial state.")
     ask.add_argument("message", nargs="+")
@@ -618,6 +646,49 @@ def main(argv: list[str] | None = None) -> int:
                 else:
                     print(_format_rag_hints(payload))
                 return 0
+            if rag_command == "vuln":
+                if args.rag_vuln_command is None:
+                    parser.error("rag vuln requires a subcommand")
+                if args.rag_vuln_command == "status":
+                    payload = runtime.rag_status()
+                    payload["vuln_intel_chunks"] = runtime.store.count_document_chunks(metadata_filters={"domain": ["vuln_intel"]})
+                    if args.json:
+                        print(json.dumps(payload, indent=2, sort_keys=True))
+                    else:
+                        print(_format_rag_status(payload))
+                        print(f"vuln_intel_chunks={payload['vuln_intel_chunks']}")
+                    return 0
+                if args.rag_vuln_command == "import":
+                    payload = runtime.rag_import_chunks(
+                        args.chunks_dir,
+                        dry_run=args.dry_run,
+                        force=args.force,
+                        reembed=args.reembed,
+                        skip_embeddings=args.skip_embeddings,
+                        domains=["vuln_intel"],
+                        limit=args.limit,
+                    )
+                    if args.json:
+                        print(json.dumps(payload, indent=2, sort_keys=True))
+                    else:
+                        print(_format_rag_import(payload))
+                    return 0
+                if args.rag_vuln_command == "search":
+                    filters = _vuln_cli_filters(args)
+                    payload = runtime.rag_vuln_search(" ".join(args.query), limit=args.limit, filters=filters)
+                    if args.json:
+                        print(json.dumps(payload, indent=2, sort_keys=True))
+                    else:
+                        print(_format_rag_search(payload))
+                    return 0
+                if args.rag_vuln_command == "hints":
+                    filters = {"kev": True} if args.kev else {}
+                    payload = runtime.rag_vuln_hints(" ".join(args.query), limit=args.limit, filters=filters)
+                    if args.json:
+                        print(json.dumps(payload, indent=2, sort_keys=True))
+                    else:
+                        print(_format_rag_vuln_hints(payload))
+                    return 0
         if command == "ask":
             payload = runtime.ask_operator_ai(" ".join(args.message), target=args.target)
             if args.json:
@@ -966,6 +1037,37 @@ def _format_rag_hints(payload: dict[str, object]) -> str:
         for item in rejected[:8]:
             if isinstance(item, dict):
                 lines.append(f"- {item.get('title')} ({item.get('reason')})")
+    return "\n".join(lines)
+
+
+def _vuln_cli_filters(args) -> dict[str, object]:
+    filters: dict[str, object] = {}
+    for key in ("cve_id", "ghsa_id", "osv_id", "package", "ecosystem"):
+        value = getattr(args, key, None)
+        if value:
+            filters[key] = [str(value)]
+    if getattr(args, "kev", False):
+        filters["kev"] = True
+    epss = getattr(args, "epss_percentile", None)
+    if epss is not None:
+        filters["epss_percentile"] = {"gte": float(epss)}
+    return filters
+
+
+def _format_rag_vuln_hints(payload: dict[str, object]) -> str:
+    lines = [f"query={payload.get('query')}", f"policy={payload.get('policy')}"]
+    hints = payload.get("hints", [])
+    if not isinstance(hints, list) or not hints:
+        lines.append("No vulnerability-intelligence hints matched.")
+        return "\n".join(lines)
+    for hint in hints:
+        if not isinstance(hint, dict):
+            continue
+        lines.append(
+            f"- {hint.get('hint_type')} {hint.get('cve_id') or hint.get('vuln_id')} "
+            f"citation={hint.get('citation_id')} task={hint.get('creates_executable_task')}"
+        )
+        lines.append(f"  {hint.get('summary')}")
     return "\n".join(lines)
 
 

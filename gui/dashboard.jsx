@@ -403,6 +403,8 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
       const payload = await API.refreshCaido?.({ checkHealth: true });
       if (!payload?.ok) {
         setCredentialFeedback({ tone: 'red', message: payload?.error || 'Caido health check failed.' });
+      } else {
+        setCredentialFeedback({ tone: 'green', message: 'Caido health check OK: GraphQL, auth, and schema answered.' });
       }
       return payload;
     } catch (err) {
@@ -1121,7 +1123,14 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
                       ) : null}
                     </td>
                     <td className="dim">{t.ms ? `${(t.ms / 1000).toFixed(1)}s` : '—'}</td>
-                    <td><button className="btn ghost sm" onClick={() => API.command?.('inspect-task', { task_id: t.id, target: t.target, title: `Inspect ${t.kind}` })}>INSPECT</button></td>
+                    <td>
+                      <button
+                        className="btn ghost sm"
+                        onClick={() => API.openInspector?.(t.grouped ? 'group' : 'task', t.id, { title: `Inspect ${t.kind}` })}
+                      >
+                        {t.grouped ? 'INSPECT GROUP' : 'INSPECT'}
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>

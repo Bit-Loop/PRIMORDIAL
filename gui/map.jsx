@@ -11,6 +11,14 @@ const KIND_COLOR = {
   self: 'var(--cyan)', relay: 'var(--violet)', target: 'var(--red)', sync: 'var(--blue)',
 };
 const uiCommand = (command, body = {}) => window.PD_API?.command?.(command, body);
+const openTraceObject = (node, options = {}) => {
+  const API = window.PD_API || {};
+  if (!node || !API.openInspector) return;
+  const id = String(node.inspect_id || node.id || '');
+  if (!id || id === 'tr_root' || id === 'trace_empty') return;
+  const kind = String(node.inspect_kind || (id.startsWith('group:') ? 'group' : node.task ? 'trace' : 'trace'));
+  API.openInspector(kind, id, { title: node.summary || node.kind || 'Trace object', ...options });
+};
 
 function Globe({ markers = [], onClick, w = 280, h = 160, traces = [], showLabels = true, big = false }) {
   const lonLat = (lon, lat) => [
@@ -347,13 +355,19 @@ function TraceRow({ row, depth = 0, isLast = false, selectedId = '', onSelect })
   }[row.status] || '·';
   return (
     <>
-      <div className={`trace-row ${row.status} ${isLast ? 'last' : ''}`} onClick={() => onSelect?.(row)} style={{ cursor: 'pointer' }}>
+      <div
+        className={`trace-row ${row.status} ${isLast ? 'last' : ''} ${selectedId === row.id ? 'selected' : ''}`}
+        onClick={() => onSelect?.(row)}
+        onDoubleClick={() => openTraceObject(row)}
+        style={{ cursor: 'pointer' }}
+      >
         {depth > 0 && <span className="branch"></span>}
         <span className="marker">{sym}</span>
         <span className="kind" onClick={() => hasChildren && setOpen(o => !o)} style={{ cursor: hasChildren ? 'pointer' : 'default' }}>
           {hasChildren ? (open ? '▾ ' : '▸ ') : '  '}{row.kind}
         </span>
         <span className="summary">{row.summary}</span>
+        <button className="btn ghost sm trace-open-btn" onClick={(event) => { event.stopPropagation(); openTraceObject(row); }}>OPEN</button>
         <span className="meta">
           {row.task && <span style={{ color: 'var(--txt-mute)' }}>{row.task} · </span>}
           {row.count > 1 && <span style={{ color: 'var(--yellow)' }}>{row.count}x · </span>}
@@ -460,9 +474,9 @@ function TracesSub() {
       {/* trace inspector */}
       <aside className="inspector">
         <div className="tabs">
-          <button className="tab active" onClick={() => selectedTrace && uiCommand('trace-detail', { trace_id: selectedTrace.id, task_id: selectedTrace.task, title: `Trace detail ${selectedTrace.kind}` })}>DETAIL</button>
-          <button className="tab" onClick={() => selectedTrace && uiCommand('trace-evidence', { trace_id: selectedTrace.id, task_id: selectedTrace.task, title: `Trace evidence ${selectedTrace.kind}` })}>EVIDENCE</button>
-          <button className="tab" onClick={() => selectedTrace && uiCommand('trace-prompt', { trace_id: selectedTrace.id, task_id: selectedTrace.task, title: `Trace prompt ${selectedTrace.kind}` })}>PROMPT</button>
+          <button className="tab active" onClick={() => selectedTrace && openTraceObject(selectedTrace)}>DETAIL</button>
+          <button className="tab" onClick={() => selectedTrace && openTraceObject(selectedTrace, { tab: 'related' })}>EVIDENCE</button>
+          <button className="tab" onClick={() => selectedTrace && openTraceObject(selectedTrace, { tab: 'raw' })}>RAW</button>
         </div>
         <div className="panel-body" style={{ padding: 12, gap: 12, display: 'flex', flexDirection: 'column', fontSize: 11.5 }}>
           {selectedTrace ? (
@@ -1082,12 +1096,13 @@ const STATUS_STYLE = {
   gated:   { bg: 'var(--violet)',  glow: 'var(--violet)',  sym: '◆' },
 };
 
-function FlowNode({ node, isRoot }) {
+function FlowNode({ node, isRoot, onInspect }) {
   const [hover, setHover] = useStateM(false);
   const st = STATUS_STYLE[node.status] || STATUS_STYLE.queued;
   const isRunning = node.status === 'run';
   return (
     <div
+      onClick={() => onInspect?.(node)}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       style={{
@@ -1100,6 +1115,7 @@ function FlowNode({ node, isRoot }) {
         fontFamily: 'var(--mono)',
         boxShadow: isRunning ? `0 0 10px ${st.glow}44` : hover ? `0 0 6px ${st.bg}22` : 'none',
         transition: 'box-shadow 200ms, border-color 200ms',
+        cursor: onInspect ? 'pointer' : 'default',
         minWidth: isRoot ? 320 : 180,
         maxWidth: isRoot ? 480 : 220,
       }}
@@ -1129,14 +1145,14 @@ function FlowNode({ node, isRoot }) {
   );
 }
 
-function BranchColumn({ branch }) {
+function BranchColumn({ branch, onInspect }) {
   const st = STATUS_STYLE[branch.status] || STATUS_STYLE.queued;
   const isRunning = branch.status === 'run';
   const children = branch.children || [];
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0 }}>
       {/* Branch node */}
-      <FlowNode node={branch} />
+      <FlowNode node={branch} onInspect={onInspect} />
       {children.length > 0 && (
         <>
           {/* Vertical connector from branch to children row */}
@@ -1162,7 +1178,7 @@ function BranchColumn({ branch }) {
                 {children.map(child => (
                   <div key={child.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0 }}>
                     <svg width="2" height="10"><line x1="1" y1="0" x2="1" y2="10" stroke="var(--line-strong)" strokeWidth="1" strokeDasharray="2 3" /></svg>
-                    <FlowNode node={child} />
+                    <FlowNode node={child} onInspect={onInspect} />
                     {/* Terminate indicator */}
                     <div style={{ width: 2, height: 10, background: 'linear-gradient(var(--line-strong), transparent)' }} />
                     <div style={{ width: 6, height: 6, borderRadius: '50%', border: `1px solid ${STATUS_STYLE[child.status]?.bg || 'var(--line-strong)'}`, background: 'var(--bg-deep)' }} />
@@ -1172,7 +1188,7 @@ function BranchColumn({ branch }) {
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-              <FlowNode node={children[0]} />
+              <FlowNode node={children[0]} onInspect={onInspect} />
               <div style={{ width: 2, height: 12, background: 'linear-gradient(var(--line-strong), transparent)' }} />
               <div style={{ width: 6, height: 6, borderRadius: '50%', border: `1px solid ${STATUS_STYLE[children[0].status]?.bg || 'var(--line-strong)'}`, background: 'var(--bg-deep)' }} />
             </div>
@@ -1193,11 +1209,16 @@ function FlowChartSub() {
   const D = window.PD_DATA;
   const root = D.traces[0];
   const branches = root?.children || [];
+  const [selectedNode, setSelectedNode] = useStateM(root || null);
 
   const running = branches.filter(b => b.status === 'run');
   const gated   = branches.filter(b => b.status === 'gated');
   const failed  = branches.filter(b => b.status === 'fail' || (b.children || []).some(c => c.status === 'fail'));
   const activeBranch = running[0] || null;
+  const inspectNode = (node) => {
+    setSelectedNode(node);
+    openTraceObject(node);
+  };
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
@@ -1216,7 +1237,7 @@ function FlowChartSub() {
 
         {/* root node */}
         <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 0 }}>
-          <FlowNode node={root} isRoot />
+          <FlowNode node={root} isRoot onInspect={inspectNode} />
         </div>
 
         {/* trunk line down to horizontal bus */}
@@ -1251,7 +1272,7 @@ function FlowChartSub() {
                   {branch.status === 'run' && <animate attributeName="stroke-dashoffset" from="0" to="-12" dur="0.9s" repeatCount="indefinite" />}
                 </line>
               </svg>
-              <BranchColumn branch={branch} />
+              <BranchColumn branch={branch} onInspect={inspectNode} />
             </div>
           ))}
         </div>
@@ -1261,9 +1282,9 @@ function FlowChartSub() {
       {/* right inspector */}
       <aside className="inspector">
         <div className="tabs">
-          <button className="tab active" onClick={() => uiCommand('tree-detail', { target: D.traceMeta?.selectedTarget || '', title: 'Tree detail' })}>DETAIL</button>
-          <button className="tab" onClick={() => uiCommand('tree-verifier', { target: D.traceMeta?.selectedTarget || '', title: 'Tree verifier view' })}>VERIFIER</button>
-          <button className="tab" onClick={() => uiCommand('tree-routing', { target: D.traceMeta?.selectedTarget || '', title: 'Tree routing view' })}>ROUTING</button>
+          <button className="tab active" onClick={() => selectedNode && openTraceObject(selectedNode)}>DETAIL</button>
+          <button className="tab" onClick={() => selectedNode && openTraceObject(selectedNode, { tab: 'related' })}>RELATED</button>
+          <button className="tab" onClick={() => selectedNode && openTraceObject(selectedNode, { tab: 'raw' })}>RAW</button>
         </div>
         <div className="panel-body" style={{ padding: 12, gap: 12, display: 'flex', flexDirection: 'column', fontSize: 11.5 }}>
           <div>
@@ -1272,6 +1293,13 @@ function FlowChartSub() {
             <div className="dim mono" style={{ fontSize: 10.5 }}>{activeBranch ? `${activeBranch.task || activeBranch.id} · running · ${activeBranch.model || activeBranch.route || 'route pending'}` : (root?.idle_reason || 'no unfinished task run confirms an active branch')}</div>
             {activeBranch && <div className="loadbar" style={{ marginTop: 8 }} />}
           </div>
+          {selectedNode && (
+            <div className="kv">
+              <span className="k">selected</span><span className="v">{selectedNode.kind || 'node'}</span>
+              <span className="k">object</span><span className="v mono">{selectedNode.inspect_id || selectedNode.id || '—'}</span>
+              <span className="k">summary</span><span className="v">{selectedNode.summary || '—'}</span>
+            </div>
+          )}
           <div className="kv">
             <span className="k">branches</span><span className="v">{branches.length} from root</span>
             <span className="k">running</span><span className="v">{running.length}</span>

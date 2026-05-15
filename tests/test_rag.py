@@ -7,8 +7,8 @@ import unittest
 from unittest.mock import patch
 
 from primordial.config import AppConfig
-from primordial.core.domain.enums import EvidenceType, ScopeProfile, VerificationStatus
-from primordial.core.domain.models import EvidenceRecord, Target
+from primordial.core.domain.enums import AgentRole, EvidenceType, MethodologyPhase, ScopeProfile, TaskKind, VerificationStatus
+from primordial.core.domain.models import EvidenceRecord, Target, Task
 from primordial.core.providers.ollama import OllamaEmbeddingResponse, OllamaModelListResult
 from primordial.core.rag import DeterministicHashEmbeddingProvider, DocumentIngestionError, DocumentIngestionService
 from primordial.core.rag.citations import disallowed_rag_synthesis_model, validate_rag_citations
@@ -236,7 +236,106 @@ class RagIngestionTests(unittest.TestCase):
         self.assertEqual(payload["embeddings_inserted"], 1)
         self.assertTrue(search["results"])
         self.assertEqual(search["results"][0]["citation_id"], "rag:chunk_test_api_1")
+        self.assertEqual(search["citation_map"][0]["source_display"], "Broken Object Level Authorization (owasp-api.md)")
         self.assertEqual(runtime.store.list_targets(), [self.target])
+        runtime.shutdown()
+
+    def test_role_aware_rag_pack_filters_and_gates_restricted_sources(self) -> None:
+        chunks_dir = self._write_preprocessed_chunks(
+            [
+                {
+                    "chunk_id": "chunk_api_safe",
+                    "doc_id": "source_api",
+                    "source_file": "owasp-api.md",
+                    "source_sha256": "d" * 64,
+                    "domain": "api_security",
+                    "chunk_index": 0,
+                    "chunk_type": "docling_hybrid",
+                    "title": "API authorization",
+                    "section": "BOLA checklist",
+                    "retrieval_text": "context anchor BOLA authorization checks object ownership safely.",
+                    "raw_text": "context anchor BOLA authorization checks object ownership safely.",
+                    "requires_authorized_scope": True,
+                    "risk_level": "safe_planning",
+                    "planner_visibility": "normal",
+                },
+                {
+                    "chunk_id": "chunk_kernel_restricted",
+                    "doc_id": "source_kernel",
+                    "source_file": "guide-to-kernel-exploitation.pdf",
+                    "source_sha256": "e" * 64,
+                    "domain": "kernel_security",
+                    "chunk_index": 0,
+                    "chunk_type": "docling_hybrid",
+                    "title": "Kernel exploitation",
+                    "section": "Applicability review",
+                    "retrieval_text": "context anchor kernel exploitation source for applicability review only.",
+                    "raw_text": "context anchor kernel exploitation source for applicability review only.",
+                    "requires_authorized_scope": True,
+                    "requires_operator_approval": True,
+                    "risk_level": "exploit_validation",
+                    "planner_visibility": "restricted",
+                },
+                {
+                    "chunk_id": "chunk_attack_taxonomy",
+                    "doc_id": "source_attack",
+                    "source_file": "mitre-enterprise-attack.json",
+                    "source_sha256": "f" * 64,
+                    "domain": "mitre_attack",
+                    "chunk_index": 0,
+                    "chunk_type": "attack_technique",
+                    "title": "ATT&CK technique",
+                    "section": "Technique mapping",
+                    "retrieval_text": "context anchor MITRE ATT&CK taxonomy for reporting and detection mapping.",
+                    "raw_text": "context anchor MITRE ATT&CK taxonomy for reporting and detection mapping.",
+                    "requires_authorized_scope": True,
+                    "risk_level": "safe_planning",
+                    "planner_visibility": "taxonomy_only",
+                },
+            ]
+        )
+        runtime = PrimordialRuntime(self.config)
+        runtime.initialize()
+        runtime.rag_import_chunks(chunks_dir)
+
+        fast_pack = runtime.build_rag_context_pack(
+            "context anchor authorization exploitation taxonomy",
+            purpose="worker_ai_review",
+            role="local_fast",
+            target=self.target,
+            limit=5,
+        )
+        code_task = Task(
+            target_id=self.target.id,
+            phase=MethodologyPhase.EXPLOITATION,
+            kind=TaskKind.POC_APPLICABILITY_VALIDATION,
+            title="PoC applicability review",
+            summary="Review restricted source only for gated applicability.",
+            role=AgentRole.CODE_WORKER,
+            metadata={"allow_ai_review": True},
+        )
+        runtime.set_operator_intent("htb_lab")
+        code_pack = runtime.build_rag_context_pack(
+            "context anchor kernel exploitation applicability",
+            purpose="worker_ai_review",
+            role="local_code",
+            task=code_task,
+            limit=5,
+        )
+        action_pack = runtime.build_rag_context_pack(
+            "context anchor taxonomy",
+            purpose="action_selection",
+            role="local_deep",
+            target=self.target,
+            limit=5,
+        )
+
+        self.assertIn("chunk_api_safe", {item["chunk_id"] for item in fast_pack["chunks"]})
+        self.assertNotIn("chunk_kernel_restricted", {item["chunk_id"] for item in fast_pack["chunks"]})
+        self.assertTrue(any(item["chunk_id"] == "chunk_kernel_restricted" for item in fast_pack["omitted_sources"]))
+        self.assertIn("chunk_kernel_restricted", {item["chunk_id"] for item in code_pack["chunks"]})
+        self.assertTrue(any(item["chunk_id"] == "chunk_attack_taxonomy" for item in action_pack["omitted_sources"]))
+        self.assertTrue(code_pack["prompt_context"])
         runtime.shutdown()
 
     def test_importer_dry_run_and_duplicate_embedding_skip(self) -> None:

@@ -324,6 +324,44 @@ class RagChunkImporter:
             "raw_text_sha256": hashlib.sha256(raw_text.encode("utf-8")).hexdigest() if raw_text else "",
             "source_sha256": record.get("source_sha256"),
         }
+        for key in (
+            "vuln_id",
+            "cve_id",
+            "ghsa_ids",
+            "osv_ids",
+            "aliases",
+            "alias",
+            "cwe",
+            "cwe_ids",
+            "cvss",
+            "cvss_severity",
+            "kev",
+            "epss_probability",
+            "epss_percentile",
+            "affected_vendors",
+            "affected_products",
+            "affected_packages",
+            "affected_versions",
+            "fixed_versions",
+            "fixed_version_known",
+            "package",
+            "ecosystem",
+            "cpe",
+            "purl",
+            "source_kind",
+            "source_priority",
+            "card_type",
+            "output_mode",
+            "blocked_output_modes",
+            "safety_level",
+            "content_hash",
+            "embedding_policy",
+            "source_refs",
+        ):
+            if key in record:
+                metadata[key] = record[key]
+            elif key in nested:
+                metadata[key] = nested[key]
         if domain == "mitre_attack":
             metadata["planner_visibility"] = "taxonomy_only"
             metadata["allowed_uses"] = [
@@ -393,6 +431,8 @@ class RagChunkImporter:
                 "methodology_standards": "methodology_standards",
                 "mitre_attack": "mitre_attack",
                 "systems_exploitation": "binary_exploitation",
+                "vulnerability_intel": "vuln_intel",
+                "vuln_intel": "vuln_intel",
             }.get(normalized, normalized if normalized in DocumentIngestionService.CORPUS_TYPES else "general_security"),
         )
 

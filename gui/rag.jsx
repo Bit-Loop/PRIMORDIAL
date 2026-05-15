@@ -56,6 +56,7 @@ function RagMode() {
   const [chunkDetail, setChunkDetail] = useStateR(null);
   const [sourceProfile, setSourceProfile] = useStateR(null);
   const [synthesis, setSynthesis] = useStateR(null);
+  const [citationTab, setCitationTab] = useStateR('readable');
   const [evalQueries, setEvalQueries] = useStateR('What is the difference between BOLA and BFLA?\nMap this finding to OWASP and MITRE ATT&CK.');
   const [evalResult, setEvalResult] = useStateR(null);
 
@@ -206,6 +207,8 @@ function RagMode() {
   const embeddingModel = status?.embedding_models?.[0] || {};
   const lastImport = status?.last_import || {};
   const validation = synthesis?.validation || {};
+  const citationMap = synthesis?.citation_map || searchResult?.citation_map || [];
+  const citedIds = new Set(validation.cited_ids || []);
 
   return (
     <>
@@ -317,14 +320,45 @@ function RagMode() {
             </div>
           </Panel>
 
-          <Panel title="Citation Inspector" sub={synthesis?.status || 'not run'} actions={<button className="btn sm" onClick={runSynthesis} disabled={!results.length || busy === 'synthesize'}>{busy === 'synthesize' ? 'RUNNING' : 'SYNTHESIZE'}</button>}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-              <div><div className="kpi-k">retrieved ids</div><div className="mono strong">{(synthesis?.retrieved_ids || []).length}</div></div>
-              <div><div className="kpi-k">cited ids</div><div className="mono strong">{(validation.cited_ids || []).length}</div></div>
+          <Panel title="Answer Citations" sub={synthesis?.status || 'not run'} actions={<button className="btn sm" onClick={runSynthesis} disabled={!results.length || busy === 'synthesize'}>{busy === 'synthesize' ? 'RUNNING' : 'SYNTHESIZE'}</button>}>
+            <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+              <button className={`btn ghost sm ${citationTab === 'readable' ? 'active' : ''}`} onClick={() => setCitationTab('readable')}>READABLE</button>
+              <button className={`btn ghost sm ${citationTab === 'raw' ? 'active' : ''}`} onClick={() => setCitationTab('raw')}>RAW</button>
             </div>
-            <pre className="mono" style={{ margin: '10px 0 0', maxHeight: 180, overflow: 'auto', fontSize: 10.5, whiteSpace: 'pre-wrap' }}>{synthesis?.answer || 'No synthesized answer.'}</pre>
-            {synthesis && (
-              <pre className="mono" style={{ margin: '8px 0 0', maxHeight: 140, overflow: 'auto', fontSize: 10.5, whiteSpace: 'pre-wrap' }}>{JSON.stringify(validation, null, 2)}</pre>
+            {citationTab === 'readable' ? (
+              <>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  <div><div className="kpi-k">retrieved ids</div><div className="mono strong">{(synthesis?.retrieved_ids || results.map(row => row.citation_id)).filter(Boolean).length}</div></div>
+                  <div><div className="kpi-k">cited ids</div><div className="mono strong">{(validation.cited_ids || []).length}</div></div>
+                </div>
+                <pre className="mono" style={{ margin: '10px 0 0', maxHeight: 145, overflow: 'auto', fontSize: 10.5, whiteSpace: 'pre-wrap' }}>{synthesis?.answer || 'Run synthesis to validate cited answer text. Search results below are still inspectable source context.'}</pre>
+                {synthesis && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                    <Pill tone={validation.valid ? 'green' : 'amber'}>{validation.valid ? 'VALID' : 'CHECK'}</Pill>
+                    {(validation.invented_ids || []).length ? <Pill tone="red">invented {(validation.invented_ids || []).length}</Pill> : null}
+                    {(validation.missing_citations || []).length ? <Pill tone="amber">missing citations</Pill> : null}
+                    {(validation.blocked_source_use || []).length ? <Pill tone="red">blocked source use</Pill> : null}
+                  </div>
+                )}
+                <div style={{ marginTop: 10, display: 'grid', gap: 8 }}>
+                  {citationMap.length ? citationMap.map(item => (
+                    <div key={item.citation_id || item.chunk_id} style={{ border: '1px solid rgba(255,255,255,0.12)', borderRadius: 8, padding: 8, background: 'rgba(255,255,255,0.03)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                        <strong>{item.source_display || item.title || item.source_file || item.chunk_id}</strong>
+                        <span className="mono dim">{item.citation_id}</span>
+                      </div>
+                      <div className="dim mono" style={{ fontSize: 10.5 }}>
+                        {item.domain || 'unknown'} · {item.usage_policy || 'advisory'} · {item.section || item.source_file || 'source'}
+                        {item.page_start ? ` · p.${item.page_start}${item.page_end && item.page_end !== item.page_start ? `-${item.page_end}` : ''}` : ''}
+                      </div>
+                      <div className="dim" style={{ marginTop: 4 }}>{shortValue(item.excerpt, 140, 28)}</div>
+                      {synthesis ? <Pill tone={citedIds.has(item.citation_id) ? 'green' : 'gray'}>{citedIds.has(item.citation_id) ? 'cited' : 'retrieved only'}</Pill> : null}
+                    </div>
+                  )) : <div className="dim">No citation map yet. Run a search or synthesis.</div>}
+                </div>
+              </>
+            ) : (
+              <pre className="mono" style={{ margin: '8px 0 0', maxHeight: 360, overflow: 'auto', fontSize: 10.5, whiteSpace: 'pre-wrap' }}>{JSON.stringify({ validation, citation_map: citationMap, synthesis }, null, 2)}</pre>
             )}
           </Panel>
         </div>

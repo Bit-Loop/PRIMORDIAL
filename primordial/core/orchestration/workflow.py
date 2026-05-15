@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 import json
 import re
 import subprocess
+import traceback
 from datetime import timedelta
 from pathlib import Path
 from typing import Callable, Protocol
@@ -138,6 +139,7 @@ class WorkflowOrchestrator:
         credentials_status_loader: Callable[[], dict[str, object]] | None = None,
         active_intent_policy_loader: Callable[[], OperatorIntentPolicy] | None = None,
         active_intent_id_loader: Callable[[], str] | None = None,
+        rag_context_builder: Callable[..., dict[str, object]] | None = None,
         resource_status_loader: Callable[[], dict[str, object]] | None = None,
         resource_reserve_loader: Callable[[], dict[str, object]] | None = None,
         event_bus: EventBus | None = None,
@@ -157,6 +159,7 @@ class WorkflowOrchestrator:
         self.credentials_status_loader = credentials_status_loader
         self.active_intent_policy_loader = active_intent_policy_loader
         self.active_intent_id_loader = active_intent_id_loader
+        self.rag_context_builder = rag_context_builder
         self.resource_status_loader = resource_status_loader
         self.resource_reserve_loader = resource_reserve_loader
         self.event_bus = event_bus
@@ -1146,7 +1149,8 @@ class WorkflowOrchestrator:
             task.id
             for task in self.store.list_tasks(target_id=target.id, statuses=[TaskStatus.NEEDS_APPROVAL], limit=50)
         ]
-        rag_context = self._planner_rag_context(target, query=question, limit=5)
+        rag_context_pack = self._planner_rag_context_pack(target, query=question, limit=5)
+        rag_context = rag_context_pack.get("chunks", []) if isinstance(rag_context_pack.get("chunks"), list) else []
         return {
             "handoff_type": "planner_uncertainty_review",
             "target": {"id": target.id, "handle": target.handle, "profile": target.profile.value},
@@ -1157,6 +1161,13 @@ class WorkflowOrchestrator:
             "service_facts": list(surface.service_facts),
             "credentialed_access_surface": surface.as_payload(),
             "rag_context": rag_context,
+            "rag_context_policy": {
+                "purpose": rag_context_pack.get("purpose", "planner_review"),
+                "role": rag_context_pack.get("role", "local_deep"),
+                "citation_map": rag_context_pack.get("citation_map", []),
+                "omitted_sources": rag_context_pack.get("omitted_sources", []),
+                "warnings": rag_context_pack.get("warnings", []),
+            },
             "rejected_proposals": rejected_proposals[:8],
             "blockers": blockers[:12],
             "invalid_existing_tasks": invalid_existing_tasks[:8],
@@ -1180,6 +1191,40 @@ class WorkflowOrchestrator:
                 "Remote review cannot execute tools.",
                 "Remote review cannot override Operator Intent or deterministic policy.",
             ],
+        }
+
+    def _planner_rag_context_pack(self, target: Target, *, query: str, limit: int = 5) -> dict[str, object]:
+        if self.rag_context_builder is not None:
+            try:
+                return self.rag_context_builder(
+                    query,
+                    purpose="planner_review",
+                    role="local_deep",
+                    target=target,
+                    limit=limit,
+                )
+            except Exception as exc:  # noqa: BLE001 - RAG is advisory and must not block planner review packets
+                return {
+                    "query": query,
+                    "purpose": "planner_review",
+                    "role": "local_deep",
+                    "target_id": target.id,
+                    "chunks": [],
+                    "citation_map": [],
+                    "omitted_sources": [],
+                    "warnings": [str(exc)],
+                    "prompt_context": "",
+                }
+        return {
+            "query": query,
+            "purpose": "planner_review",
+            "role": "local_deep",
+            "target_id": target.id,
+            "chunks": self._planner_rag_context(target, query=query, limit=limit),
+            "citation_map": [],
+            "omitted_sources": [],
+            "warnings": [],
+            "prompt_context": "",
         }
 
     def _planner_rag_context(self, target: Target, *, query: str, limit: int = 5) -> list[dict[str, object]]:
@@ -3043,6 +3088,8 @@ class WorkflowOrchestrator:
         report: OrchestrationReport,
     ) -> None:
         now = utc_now()
+        exception_type = type(exc).__name__
+        traceback_text = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
         timed_out = self._is_timeout_exception(exc)
         transient = False if timed_out else self._is_transient_exception(exc)
         if timed_out:
@@ -3056,6 +3103,8 @@ class WorkflowOrchestrator:
             task.status = TaskStatus.PENDING if task.attempts < task.max_attempts else TaskStatus.FAILED
         task.updated_at = now
         task.metadata["execution_exception"] = str(exc)
+        task.metadata["exception_type"] = exception_type
+        task.metadata["traceback"] = traceback_text
         task.metadata["last_exception_transient"] = transient
         if timed_out:
             task.metadata["last_run_timed_out"] = True
@@ -3065,6 +3114,8 @@ class WorkflowOrchestrator:
         run.finished_at = now
         run.heartbeat_at = now
         run.metadata["execution_exception"] = True
+        run.metadata["exception_type"] = exception_type
+        run.metadata["traceback"] = traceback_text
         if timed_out:
             run.metadata["timed_out"] = True
         self.store.insert_trace(
@@ -3073,7 +3124,13 @@ class WorkflowOrchestrator:
                 role=task.role,
                 status="failed",
                 summary=f"Execution crashed before result persistence: {exc}",
-                metadata={"execution_exception": True, "error": str(exc), "model": task.provider_model},
+                metadata={
+                    "execution_exception": True,
+                    "error": str(exc),
+                    "exception_type": exception_type,
+                    "traceback": traceback_text,
+                    "model": task.provider_model,
+                },
             )
         )
         self.store.guarded_update_task_run(run, from_statuses=[TaskRunStatus.RUNNING])
@@ -3082,7 +3139,13 @@ class WorkflowOrchestrator:
             task,
             run,
             summary="execution exception checkpoint",
-            payload={"task": task.as_payload(), "run": run.as_payload(), "error": str(exc)},
+            payload={
+                "task": task.as_payload(),
+                "run": run.as_payload(),
+                "error": str(exc),
+                "exception_type": exception_type,
+                "traceback": traceback_text,
+            },
             phase="exception",
         )
         event = EventRecord(
@@ -3090,7 +3153,12 @@ class WorkflowOrchestrator:
             summary=f"Execution crashed: {task.title}",
             target_id=task.target_id,
             task_id=task.id,
-            metadata={"error": str(exc), "execution_exception": True},
+            metadata={
+                "error": str(exc),
+                "execution_exception": True,
+                "exception_type": exception_type,
+                "traceback": traceback_text,
+            },
         )
         self.store.insert_event(event)
         report.events.append(event)

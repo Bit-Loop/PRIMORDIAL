@@ -54,7 +54,7 @@ const EMPTY_PD_DATA = {
   },
   notes: { targets: [], syncStatus: { ok: false, lastSync: 'never', pendingJobs: 0, failedJobs: 0 }, folders: [], pages: {} },
   interests: { surfaces: [], findings: [], pocs: [], artifacts: [] },
-  caido: { connection: { configured: false, ok: false }, requests: [], replays: [], savedFilters: [] },
+  caido: { connection: { configured: false, ok: false }, requests: [], importedCaptures: [], replays: [], savedFilters: [] },
   rag: { status: null, config: null },
   approvalChat: [],
   inquiryChat: [],
@@ -112,12 +112,164 @@ async function apiRequest(path, options = {}) {
   }
 }
 
+function ObjectInspectorModal({ state, setState, openInspector }) {
+  if (!state?.open) return null;
+  const payload = state.payload || {};
+  const record = payload.record || {};
+  const related = payload.related || {};
+  const duplicate = payload.duplicate_group || {};
+  const members = Array.isArray(duplicate.members) ? duplicate.members : [];
+  const memberCursor = members.length ? Math.min(Math.max(Number(state.memberCursor || 0), 0), members.length - 1) : 0;
+  const currentMember = members[memberCursor] || null;
+  const errorDetail = payload.error_detail || {};
+  const preview = payload.artifact_preview || {};
+  const tab = state.tab || 'overview';
+  const tabs = ['overview', 'raw', 'related', 'duplicates', 'error', 'artifact'];
+  const close = () => setState({ open: false, loading: false, payload: null, error: '', tab: 'overview' });
+  const switchTab = (nextTab) => setState(previous => ({ ...previous, tab: nextTab }));
+  const copyRaw = () => {
+    try {
+      navigator.clipboard?.writeText(JSON.stringify(payload, null, 2));
+    } catch (_err) {
+      // Clipboard is a convenience only.
+    }
+  };
+  return (
+    <div className="object-inspector-backdrop" onMouseDown={close}>
+      <section className="object-inspector" onMouseDown={event => event.stopPropagation()}>
+        <header className="object-inspector-head">
+          <div>
+            <div className="upper">runtime inspector</div>
+            <h3>{state.loading ? 'Loading record' : (payload.title || state.title || 'Runtime object')}</h3>
+            <div className="mono dim">{payload.kind || state.kind || 'object'} · {payload.id || state.objectId || ''}</div>
+          </div>
+          <div className="row gap-6" style={{ marginLeft: 'auto' }}>
+            <button className="btn ghost sm" onClick={copyRaw} disabled={!payload.id}>COPY JSON</button>
+            <button className="btn ghost sm" onClick={close}>CLOSE</button>
+          </div>
+        </header>
+        <nav className="object-inspector-tabs">
+          {tabs.map(name => (
+            <button key={name} className={tab === name ? 'active' : ''} onClick={() => switchTab(name)}>
+              {name.toUpperCase()}
+            </button>
+          ))}
+        </nav>
+        <div className="object-inspector-body">
+          {state.loading && <div className="dim mono">Loading from backend...</div>}
+          {state.error && <div className="pd-error mono">{state.error}</div>}
+          {!state.loading && !state.error && tab === 'overview' && (
+            <div className="object-inspector-grid">
+              <div className="kv">
+                <span className="k">kind</span><span className="v">{payload.kind || 'object'}</span>
+                <span className="k">id</span><span className="v mono">{payload.id || '—'}</span>
+                <span className="k">summary</span><span className="v">{payload.summary || record.summary || record.title || '—'}</span>
+                <span className="k">target</span><span className="v mono">{record.target_id || related.target?.handle || related.target?.id || '—'}</span>
+                <span className="k">task</span><span className="v mono">{record.task_id || related.task?.id || '—'}</span>
+                <span className="k">status</span><span className="v mono">{record.status || '—'}</span>
+              </div>
+              <pre className="object-inspector-pre small">{JSON.stringify(record.metadata || {}, null, 2)}</pre>
+            </div>
+          )}
+          {!state.loading && !state.error && tab === 'raw' && (
+            <pre className="object-inspector-pre">{JSON.stringify(payload, null, 2)}</pre>
+          )}
+          {!state.loading && !state.error && tab === 'related' && (
+            <div className="object-related-list">
+              {Object.entries(related).map(([key, value]) => (
+                <div key={key} className="object-related-item">
+                  <div className="upper">{key}</div>
+                  <pre className="object-inspector-pre small">{JSON.stringify(value, null, 2)}</pre>
+                </div>
+              ))}
+              {!Object.keys(related).length && <div className="dim mono">No related records were found.</div>}
+            </div>
+          )}
+          {!state.loading && !state.error && tab === 'duplicates' && (
+            <div className="object-related-list">
+              {members.length > 0 && (
+                <div className="row gap-6" style={{ justifyContent: 'space-between' }}>
+                  <button
+                    className="btn ghost sm"
+                    onClick={() => setState(previous => ({ ...previous, memberCursor: Math.max(0, memberCursor - 1) }))}
+                    disabled={memberCursor <= 0}
+                  >
+                    PREV
+                  </button>
+                  <span className="mono dim">{memberCursor + 1} / {members.length}</span>
+                  <button
+                    className="btn ghost sm"
+                    onClick={() => setState(previous => ({ ...previous, memberCursor: Math.min(members.length - 1, memberCursor + 1) }))}
+                    disabled={memberCursor >= members.length - 1}
+                  >
+                    NEXT
+                  </button>
+                  <button
+                    className="btn primary sm"
+                    onClick={() => currentMember?.id && openInspector(currentMember.kind || duplicate.kind || 'task', currentMember.id)}
+                    disabled={!currentMember?.id}
+                  >
+                    OPEN SELECTED
+                  </button>
+                </div>
+              )}
+              {members.map((member, index) => (
+                <button
+                  key={`${member.kind || 'object'}:${member.id || index}`}
+                  className={`object-member-row ${index === memberCursor ? 'active' : ''}`}
+                  onClick={() => member.id && openInspector(member.kind || duplicate.kind || 'task', member.id)}
+                >
+                  <span className="mono">{index + 1}</span>
+                  <span>{member.kind || duplicate.kind || 'object'}</span>
+                  <span className="mono dim">{member.id || 'missing id'}</span>
+                </button>
+              ))}
+              {!members.length && <div className="dim mono">This object is not a duplicate group.</div>}
+            </div>
+          )}
+          {!state.loading && !state.error && tab === 'error' && (
+            <div className="object-related-list">
+              {errorDetail.messages?.length ? errorDetail.messages.map((item, index) => (
+                <div key={`message-${index}`} className="object-error-card">
+                  <div className="mono dim">{item.source} · {item.key}</div>
+                  <div>{item.message}</div>
+                </div>
+              )) : <div className="dim mono">{errorDetail.stack_note || 'No error metadata was recorded.'}</div>}
+              {errorDetail.tracebacks?.map((item, index) => (
+                <div key={`traceback-${index}`} className="object-error-card">
+                  <div className="mono dim">{item.source} · {item.key}</div>
+                  <pre className="object-inspector-pre">{item.traceback}</pre>
+                </div>
+              ))}
+            </div>
+          )}
+          {!state.loading && !state.error && tab === 'artifact' && (
+            preview?.available ? (
+              <div className="object-related-list">
+                <div className="kv">
+                  <span className="k">path</span><span className="v mono">{preview.path}</span>
+                  <span className="k">size</span><span className="v">{preview.size_bytes} bytes</span>
+                  <span className="k">truncated</span><span className="v">{preview.truncated ? 'yes' : 'no'}</span>
+                </div>
+                <pre className="object-inspector-pre">{preview.text}</pre>
+              </div>
+            ) : (
+              <div className="dim mono">{preview?.error || 'No artifact preview is available for this object.'}</div>
+            )
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function App() {
   const [mode, setMode] = useStateApp('trace');
   const [tweaks, setTweak] = window.useTweaks ? window.useTweaks(TWEAKS) : [TWEAKS, () => {}];
   const [data, setData] = useStateApp(() => mergePDData(window.__PD_BOOTSTRAP));
   const [error, setError] = useStateApp('');
   const [busy, setBusy] = useStateApp('');
+  const [inspector, setInspector] = useStateApp({ open: false, loading: false, payload: null, error: '', tab: 'overview' });
   const activeRefreshes = React.useRef(0);
   const activeMetricRefreshes = React.useRef(0);
 
@@ -291,6 +443,36 @@ function App() {
     return 'full';
   };
 
+  const openInspector = useCallbackApp(async (kind, objectId, options = {}) => {
+    const safeKind = String(kind || '').trim();
+    const safeId = String(objectId || '').trim();
+    if (!safeKind || !safeId) return null;
+    setInspector({
+      open: true,
+      loading: true,
+      payload: null,
+      error: '',
+      tab: options.tab || 'overview',
+      kind: safeKind,
+      objectId: safeId,
+      title: options.title || '',
+    });
+    try {
+      const path = safeKind === 'group'
+        ? `/api/inspect/group/${encodeURIComponent(safeId)}`
+        : `/api/inspect/${encodeURIComponent(safeKind)}/${encodeURIComponent(safeId)}`;
+      const payload = await apiRequest(path, { timeoutMs: REQUEST_TIMEOUT_MS });
+      setInspector(previous => ({ ...previous, loading: false, payload, error: '' }));
+      setError('');
+      return payload;
+    } catch (err) {
+      const message = err.message || String(err);
+      setInspector(previous => ({ ...previous, loading: false, error: message }));
+      setError(message);
+      return null;
+    }
+  }, []);
+
   const api = useMemoApp(() => ({
     busy,
     refresh: () => loadReal().catch(() => null),
@@ -306,6 +488,8 @@ function App() {
     ragEval: (body = {}) => apiRequest('/api/rag/eval', { method: 'POST', body, timeoutMs: REQUEST_TIMEOUT_MS }),
     ragInspectChunk: (chunkId) => apiRequest(`/api/rag/chunks/${encodeURIComponent(chunkId)}`, { timeoutMs: REQUEST_TIMEOUT_MS }),
     ragSourceProfile: (docId) => apiRequest(`/api/rag/sources/${encodeURIComponent(docId)}`, { timeoutMs: REQUEST_TIMEOUT_MS }),
+    inspectObject: openInspector,
+    openInspector,
     action: async (name, body = {}) => {
       setBusy(name);
       try {
@@ -370,7 +554,7 @@ function App() {
         setBusy('');
       }
     },
-  }), [busy, loadReal, applyActionPayload, refreshInBackground, refreshCredentials, refreshCaido]);
+  }), [busy, loadReal, applyActionPayload, refreshInBackground, refreshCredentials, refreshCaido, openInspector]);
 
   window.PD_DATA = data;
   window.PD_API = api;
@@ -436,6 +620,7 @@ function App() {
         {mode === 'caido'     && <CaidoMode     tweaks={tweaks} />}
         {mode === 'rag'       && <RagMode       tweaks={tweaks} />}
       </div>
+      <ObjectInspectorModal state={inspector} setState={setInspector} openInspector={openInspector} />
 
       {window.TweaksPanel && (
         <window.TweaksPanel title="Tweaks">

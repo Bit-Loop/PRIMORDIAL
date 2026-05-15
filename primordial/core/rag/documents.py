@@ -89,6 +89,9 @@ class DocumentIngestionService:
         "hardware_security",
         "formal_methods",
         "platform_metadata",
+        "vuln_intel",
+        "package_security",
+        "cloud_security",
         "general_security",
     }
     CORPUS_ALIASES = {
@@ -104,6 +107,9 @@ class DocumentIngestionService:
         "protocol_verification": "formal_methods",
         "string_analysis": "formal_methods",
         "tool_usage": "powershell_ops",
+        "vulnerability_intel": "vuln_intel",
+        "vulnerability": "vuln_intel",
+        "vuln": "vuln_intel",
     }
     HINT_POLICIES = {"advisory", "direct_task_hints", "disabled"}
     TEXT_SUFFIXES = {".md", ".markdown", ".txt", ".text", ".qmd", ".rmd", ".json", ".yaml", ".yml", ".csv", ".log"}

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 from threading import Lock, RLock
@@ -69,6 +70,21 @@ class PrimordialWebApp:
             return self._json_response(self.runtime.rag_status())
         if method == "GET" and path == "/api/rag/config":
             return self._json_response(self.runtime.rag_config_payload())
+        if method == "GET" and path.startswith("/api/inspect/group/"):
+            group_id = unquote(path.rsplit("/", 1)[-1])
+            try:
+                return self._json_response(self._inspect_group_payload(group_id))
+            except ValueError as exc:
+                return self._json_response({"ok": False, "error": str(exc)}, status=404)
+        if method == "GET" and path.startswith("/api/inspect/"):
+            parts = path[len("/api/inspect/"):].split("/", 1)
+            if len(parts) != 2:
+                return self._json_response({"ok": False, "error": "inspect kind and id are required"}, status=400)
+            kind, object_id = (unquote(parts[0]), unquote(parts[1]))
+            try:
+                return self._json_response(self.runtime.inspect_object(kind, object_id))
+            except ValueError as exc:
+                return self._json_response({"ok": False, "error": str(exc)}, status=404)
         if method == "GET" and path.startswith("/api/rag/chunks/"):
             chunk_id = unquote(path.rsplit("/", 1)[-1])
             try:
@@ -922,12 +938,33 @@ class PrimordialWebApp:
             "risk_family",
             "output_mode",
             "source_priority",
+            "vuln_id",
+            "cve_id",
+            "ghsa_id",
+            "osv_id",
+            "alias",
+            "ecosystem",
+            "package",
+            "vendor",
+            "product",
+            "cpe",
+            "purl",
+            "cwe",
+            "cvss_severity",
+            "source_kind",
+            "safety_level",
         ):
             values = self._payload_list(payload, key)
             if values:
                 filters[key] = values
         if "requires_authorized_scope" in payload:
             filters["requires_authorized_scope"] = bool(payload.get("requires_authorized_scope"))
+        for key in ("kev", "fixed_version_known", "asset_match", "watchlist_match"):
+            if key in payload:
+                filters[key] = bool(payload.get(key))
+        for key in ("epss_probability", "epss_percentile"):
+            if key in payload:
+                filters[key] = payload.get(key)
         return filters
 
     def _rag_chunk_api_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1307,17 +1344,18 @@ class PrimordialWebApp:
         return ""
 
     def _group_task_items(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        grouped: dict[tuple[str, str, str, str], list[dict[str, Any]]] = {}
+        groupable_statuses = {"done", "failed", "blocked"}
+        grouped: dict[tuple[str, ...], list[dict[str, Any]]] = {}
         for item in items:
-            if item.get("status") != "done":
+            if item.get("status") not in groupable_statuses:
                 continue
             key = self._task_group_key(item)
             grouped.setdefault(key, []).append(item)
 
         result: list[dict[str, Any]] = []
-        emitted: set[tuple[str, str, str, str]] = set()
+        emitted: set[tuple[str, ...]] = set()
         for item in items:
-            if item.get("status") != "done":
+            if item.get("status") not in groupable_statuses:
                 result.append(item)
                 continue
             key = self._task_group_key(item)
@@ -1329,19 +1367,30 @@ class PrimordialWebApp:
                 continue
             emitted.add(key)
             first = members[0]
+            status = str(first.get("status") or "done")
+            verb = {"done": "completed", "failed": "failed", "blocked": "blocked"}.get(status, "repeated")
+            member_ids = [str(member.get("id") or "") for member in members if member.get("id")]
+            group_id = self._stable_group_id("task", key)
             result.append(
                 {
                     **first,
-                    "id": f"group:{key[0]}:{key[1]}:{key[2]}:{key[3]}",
-                    "title": f"{first.get('kind', 'task')} completed {len(members)} times",
+                    "id": group_id,
+                    "title": f"{first.get('kind', 'task')} {verb} {len(members)} times",
                     "grouped": True,
                     "grouped_count": len(members),
-                    "raw": {"grouped_task_ids": [member.get("id") for member in members], "sample": first.get("raw", {})},
+                    "duplicate_group_id": group_id,
+                    "member_ids": member_ids,
+                    "raw": {
+                        "grouped_task_ids": member_ids,
+                        "group_key": list(key),
+                        "group_status": status,
+                        "sample": first.get("raw", {}),
+                    },
                 }
             )
         return result
 
-    def _task_group_key(self, item: dict[str, Any]) -> tuple[str, str, str, str]:
+    def _task_group_key(self, item: dict[str, Any]) -> tuple[str, ...]:
         raw = item.get("raw", {}) if isinstance(item.get("raw"), dict) else {}
         metadata = raw.get("metadata", {}) if isinstance(raw.get("metadata"), dict) else {}
         generation = str(raw.get("active_ip_generation") or metadata.get("active_ip_generation") or "")
@@ -1350,7 +1399,73 @@ class PrimordialWebApp:
             str(item.get("kind") or "task"),
             str(item.get("route") or ""),
             generation,
+            str(item.get("status") or ""),
         )
+
+    def _stable_group_id(self, prefix: str, key: tuple[str, ...]) -> str:
+        digest = hashlib.sha256(json.dumps(list(key), sort_keys=True).encode("utf-8")).hexdigest()[:16]
+        return f"group:{prefix}:{digest}"
+
+    def _inspect_group_payload(self, group_id: str) -> dict[str, Any]:
+        payload = self._control_plane_payload(live_metrics=False)
+        for item in payload.get("tasks", []) if isinstance(payload.get("tasks", []), list) else []:
+            if not isinstance(item, dict) or str(item.get("id") or "") != group_id:
+                continue
+            raw = item.get("raw") if isinstance(item.get("raw"), dict) else {}
+            member_ids = raw.get("grouped_task_ids") if isinstance(raw.get("grouped_task_ids"), list) else item.get("member_ids")
+            if not isinstance(member_ids, list) or not member_ids:
+                break
+            result = self.runtime.inspect_many("task", [str(member_id) for member_id in member_ids])
+            result.update(
+                {
+                    "id": group_id,
+                    "title": str(item.get("title") or "Task group"),
+                    "summary": str(item.get("title") or ""),
+                    "duplicate_group": {
+                        "id": group_id,
+                        "kind": "task",
+                        "count": len(member_ids),
+                        "members": [{"kind": "task", "id": str(member_id)} for member_id in member_ids],
+                        "sample": raw.get("sample", {}),
+                    },
+                }
+            )
+            return result
+
+        for node in self._iter_trace_nodes(payload.get("traces", [])):
+            if str(node.get("id") or "") != group_id:
+                continue
+            member_ids = node.get("member_ids") if isinstance(node.get("member_ids"), list) else []
+            if not member_ids:
+                break
+            result = self.runtime.inspect_many("trace", [str(member_id) for member_id in member_ids])
+            result.update(
+                {
+                    "id": group_id,
+                    "title": str(node.get("summary") or node.get("kind") or "Trace group"),
+                    "summary": str(node.get("summary") or ""),
+                    "duplicate_group": {
+                        "id": group_id,
+                        "kind": "trace",
+                        "count": len(member_ids),
+                        "members": [{"kind": "trace", "id": str(member_id)} for member_id in member_ids],
+                        "representative_id": str(node.get("representative_id") or ""),
+                    },
+                }
+            )
+            return result
+        raise ValueError(f"group not found: {group_id}")
+
+    def _iter_trace_nodes(self, nodes: object) -> list[dict[str, Any]]:
+        if not isinstance(nodes, list):
+            return []
+        result: list[dict[str, Any]] = []
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            result.append(node)
+            result.extend(self._iter_trace_nodes(node.get("children", [])))
+        return result
 
     def _approvals_view(self, work_status: dict[str, Any], tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
         pending = []
@@ -1507,10 +1622,11 @@ class PrimordialWebApp:
             route = str(metadata.get("route") or metadata.get("provider_route") or task.get("route") or "")
             model = str(metadata.get("model") or task.get("model") or "")
             created_at = str(trace.get("created_at") or "")
+            trace_id = str(trace.get("id") or f"trace_{index}")
             key = (target, task_id, kind, summary, status)
             if key not in grouped:
                 grouped[key] = {
-                    "id": str(trace.get("id") or f"trace_{index}"),
+                    "id": trace_id,
                     "kind": kind,
                     "status": status,
                     "time": self._time_label(created_at),
@@ -1524,6 +1640,10 @@ class PrimordialWebApp:
                     "last_at": created_at,
                     "latest_status": status,
                     "repeated": False,
+                    "representative_id": trace_id,
+                    "member_ids": [trace_id],
+                    "inspect_kind": "trace",
+                    "inspect_id": trace_id,
                 }
             else:
                 item = grouped[key]
@@ -1532,6 +1652,14 @@ class PrimordialWebApp:
                 item["time"] = self._time_label(item["last_at"])
                 item["latest_status"] = status
                 item["repeated"] = True
+                members = item.get("member_ids") if isinstance(item.get("member_ids"), list) else []
+                members.append(trace_id)
+                item["member_ids"] = members
+                group_id = self._stable_group_id("trace", key)
+                item["id"] = group_id
+                item["duplicate_group_id"] = group_id
+                item["inspect_kind"] = "group"
+                item["inspect_id"] = group_id
         children = sorted(grouped.values(), key=lambda item: str(item.get("last_at") or ""), reverse=True)[:40]
         if not children:
             children = [
@@ -1546,6 +1674,9 @@ class PrimordialWebApp:
                     "route": item.get("route", ""),
                     "model": item.get("model", ""),
                     "count": 1,
+                    "member_ids": [str(item.get("id") or "")],
+                    "inspect_kind": "task",
+                    "inspect_id": str(item.get("id") or ""),
                 }
                 for index, item in enumerate(tasks[:16])
                 if not selected_target or item.get("target") == selected_target
@@ -1577,6 +1708,8 @@ class PrimordialWebApp:
                 "target": selected_target or "*",
                 "active": bool(active),
                 "idle_reason": None if active else idle_reason,
+                "inspect_kind": "group",
+                "inspect_id": "tr_root",
                 "children": children,
             }
         ]
@@ -1745,38 +1878,47 @@ class PrimordialWebApp:
                 "task": str(item.get("task_id") or ""),
                 "title": str(item.get("title") or item.get("path") or "Artifact"),
                 "target": str(item.get("target_id") or ""),
-                "size": str(item.get("size") or ""),
+                "size": str(item.get("size") or item.get("size_bytes") or ""),
                 "downloadable": False,
+                "inspect_kind": "artifact",
+                "inspect_id": str(item.get("id") or ""),
             }
             for item in records.get("artifacts", []) if isinstance(item, dict)
         ]
         return {"surfaces": surfaces, "findings": findings, "pocs": pocs, "artifacts": artifacts}
 
     def _caido_view(self, status: dict[str, Any], records: dict[str, Any], targets: list[dict[str, Any]]) -> dict[str, Any]:
-        scope_rows = self._scope_view(targets)
-        host = scope_rows[0]["handle"] if scope_rows else ""
         presets_payload = self.runtime.caido_httpql_presets()
-        requests = [
-            {
-                "id": str(item.get("id") or f"req_{index}"),
-                "caidoRequestId": str(item.get("metadata", {}).get("caido_request_id") or ""),
-                "method": str(item.get("metadata", {}).get("method") or item.get("type") or "GET"),
-                "host": str(item.get("metadata", {}).get("host") or host),
-                "path": str(item.get("metadata", {}).get("path") or item.get("title") or "/"),
-                "status": int(item.get("metadata", {}).get("status_code", 0) or 0),
-                "length": len(str(item.get("metadata", {}).get("response_snippet") or "")),
-                "time": self._time_label(item.get("created_at")),
-                "source": "imported",
-                "mime": str(item.get("metadata", {}).get("content_type") or ""),
-                "requestSnippet": str(item.get("metadata", {}).get("request_snippet") or ""),
-                "responseSnippet": str(item.get("metadata", {}).get("response_snippet") or ""),
-            }
-            for index, item in enumerate(records.get("evidence", []) if isinstance(records.get("evidence", []), list) else [])
-            if isinstance(item, dict) and str(item.get("type", "")).lower() == "http_replay"
-        ][:50]
+        imported_captures = []
+        evidence_rows = records.get("evidence", []) if isinstance(records.get("evidence", []), list) else []
+        for index, item in enumerate(evidence_rows):
+            if not isinstance(item, dict) or str(item.get("type", "")).lower() != "http_replay":
+                continue
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            caido_request_id = str(metadata.get("caido_request_id") or "")
+            if not caido_request_id:
+                continue
+            imported_captures.append(
+                {
+                    "id": str(item.get("id") or f"imported_{index}"),
+                    "caidoRequestId": caido_request_id,
+                    "method": str(metadata.get("method") or "HTTP"),
+                    "host": str(metadata.get("host") or ""),
+                    "path": str(metadata.get("path") or item.get("title") or "/"),
+                    "status": int(metadata.get("status_code", 0) or 0),
+                    "length": len(str(metadata.get("response_snippet") or "")),
+                    "time": self._time_label(item.get("created_at")),
+                    "source": "imported",
+                    "mime": str(metadata.get("content_type") or ""),
+                    "requestSnippet": str(metadata.get("request_snippet") or ""),
+                    "responseSnippet": str(metadata.get("response_snippet") or ""),
+                    "evidenceId": str(item.get("id") or ""),
+                }
+            )
         return {
             "connection": status,
-            "requests": requests,
+            "requests": [],
+            "importedCaptures": imported_captures[:50],
             "replays": [],
             "savedFilters": presets_payload.get("presets", []),
             "targetOptions": presets_payload.get("targets", []),

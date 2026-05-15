@@ -1,0 +1,10 @@
+vendor_advisories:
+  # Remote sources are disabled until an operator explicitly allowlists them.
+  remote_fetch_enabled: false
+  sources:
+    - name: "example-local-vendor-advisories"
+      enabled: false
+      kind: "local_directory"
+      path: "primordial-rag-preprocess/data_raw/vuln/advisories/markdown"
+      publisher: "Example Vendor"
+      notes: "Enable only for advisories the operator has rights to process locally."

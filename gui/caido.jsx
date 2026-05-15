@@ -33,6 +33,17 @@ function replayTemplate(req) {
   return `${req.method || 'GET'} ${path} HTTP/1.1\nHost: ${host}\nConnection: close\n\n`;
 }
 
+function targetReplayTemplate(D, handle) {
+  const target = (D.targetOptions || []).find(t => t.handle === handle);
+  const host = target?.terms?.[0] || target?.handle || handle;
+  if (!host) return '';
+  return `GET / HTTP/1.1\nHost: ${host}\nConnection: close\n\n`;
+}
+
+function dedupeMessages(items) {
+  return [...new Set((items || []).map(item => String(item?.error || item || '').trim()).filter(Boolean))];
+}
+
 function caidoAuthFailed(conn) {
   const errorText = String(conn?.error || '').toLowerCase();
   return !!conn?.auth_error || conn?.status_code === 401 || conn?.status_code === 403 || errorText.includes('unauthorized') || errorText.includes('forbidden');
@@ -120,6 +131,8 @@ function CaidoMode() {
   const [draft, setDraft] = useStateCA(null);
   const [confirmed, setConfirmed] = useStateCA(false);
   const [connection, setConnection] = useStateCA(() => D.connection || {});
+  const [healthMessage, setHealthMessage] = useStateCA('');
+  const [searchMeta, setSearchMeta] = useStateCA(null);
 
   useEffectCA(() => {
     if (!target && firstTarget(D)) setTarget(firstTarget(D));
@@ -136,18 +149,27 @@ function CaidoMode() {
         ? await API.refreshCaido({ checkHealth: true })
         : await API.request('/api/integrations/caido?check_health=1');
       setConnection(payload || {});
-      if (payload?.error && !payload?.ok) setError(payload.error);
+      if (payload?.ok) {
+        setHealthMessage('Health OK: Caido GraphQL, auth, and schema answered.');
+        if (error === payload?.error) setError('');
+      } else {
+        const message = payload?.error || 'Caido health check failed.';
+        setHealthMessage(`Health failed: ${message}`);
+        setError(message);
+      }
       return payload;
     } catch (err) {
       const message = err.message || String(err);
       setConnection(prev => ({ ...prev, ok: false, checked: true, error: message }));
       setError(message);
+      setHealthMessage(`Health failed: ${message}`);
       return null;
     } finally {
       setBusy('');
     }
   }
 
+  const importedCaptures = D.importedCaptures || [];
   const selectedRows = useMemoCA(
     () => results.filter(r => checkedIds.includes(r.id)),
     [results, checkedIds],
@@ -157,6 +179,10 @@ function CaidoMode() {
   const schemaCaps = conn.schema?.capabilities || {};
   const schemaLabel = connectionState.authFailed ? 'auth-blocked' : (schemaCaps.requests_by_offset || schemaCaps.requests ? 'search' : 'unknown');
   const replayLabel = connectionState.authFailed ? 'auth-blocked' : (schemaCaps.start_replay_task ? 'send' : 'unknown');
+  const requestArgs = conn.schema?.request_args || {};
+  const searchLabel = searchMeta?.query_field
+    ? `${searchMeta.query_field} ${searchMeta.filter_strategy || ''}`.trim()
+    : 'not searched';
 
   async function runSearch(nextHttpql = httpql) {
     setBusy('search');
@@ -168,6 +194,7 @@ function CaidoMode() {
       });
       setResults(payload.requests || []);
       setHttpql(payload.httpql || nextHttpql || '');
+      setSearchMeta(payload);
       setCheckedIds([]);
       setSelectedId(null);
       setDetail(null);
@@ -226,11 +253,15 @@ function CaidoMode() {
       const requestIds = checkedIds.map(id => {
         const local = results.find(r => r.id === id);
         return local?.caidoRequestId || id;
-      });
+      }).filter(Boolean);
+      if (!requestIds.length) {
+        setError('Select live Caido rows before importing.');
+        return;
+      }
       const payload = await API.post('/api/integrations/caido/import', { target, request_ids: requestIds, httpql });
       const imported = payload.result?.imported || [];
       const errors = payload.result?.errors || [];
-      if (errors.length) setError(errors.map(e => e.error).join('; '));
+      if (errors.length) setError(dedupeMessages(errors).join('; '));
       if (imported.length && API.refresh) API.refresh();
       setCheckedIds([]);
     } catch (err) {
@@ -290,6 +321,17 @@ function CaidoMode() {
     setHttpql(next);
   };
 
+  const seedTargetReplay = () => {
+    const raw = targetReplayTemplate(D, target);
+    if (!raw) {
+      setError('Select an in-scope target before seeding Replay.');
+      return;
+    }
+    setReplayRaw(raw);
+    setDraft(null);
+    setConfirmed(false);
+  };
+
   return (
     <>
       <window.TopBar
@@ -297,7 +339,7 @@ function CaidoMode() {
         stats={[
           { k: 'results', v: results.length },
           { k: 'selected', v: checkedIds.length },
-          { k: 'imports', v: (D.requests || []).length },
+          { k: 'imports', v: importedCaptures.length },
           { k: 'status', v: connectionState.stat },
         ]}
       />
@@ -323,11 +365,22 @@ function CaidoMode() {
                 {conn.error}
               </div>
             )}
+            {healthMessage && (
+              <div className="mono" style={{ fontSize: 10, color: healthMessage.startsWith('Health OK') ? 'var(--green)' : 'var(--red)', overflowWrap: 'anywhere' }}>
+                {healthMessage}
+              </div>
+            )}
             <div className="dim mono" style={{ fontSize: 10 }}>
               schema {schemaLabel} | replay {replayLabel}
             </div>
+            <div className="dim mono" style={{ fontSize: 10, overflowWrap: 'anywhere' }}>
+              search {searchLabel}
+            </div>
+            <div className="dim mono" style={{ fontSize: 10, overflowWrap: 'anywhere' }}>
+              args {Object.keys(requestArgs).join(', ') || 'unknown'}
+            </div>
             <button className="btn ghost sm" onClick={refreshConnection} disabled={busy === 'health'}>
-              HEALTH CHECK
+              {busy === 'health' ? 'CHECKING' : 'HEALTH CHECK'}
             </button>
           </div>
 
@@ -363,6 +416,13 @@ function CaidoMode() {
             <button className="btn primary sm" style={{ width: '100%', marginTop: 8 }} onClick={importSelected} disabled={!checkedIds.length || busy === 'import'}>
               IMPORT SELECTED
             </button>
+            <div className="upper" style={{ color: 'var(--txt-mute)', margin: '14px 0 6px' }}>IMPORTED CAPTURES</div>
+            {importedCaptures.length ? importedCaptures.slice(0, 8).map(r => (
+              <div key={r.id} className="mono" style={{ fontSize: 10.5, padding: '6px 0', borderBottom: '1px solid var(--line)' }}>
+                <span style={{ color: METHOD_COLOR[r.method] || 'var(--txt-mute)', fontWeight: 700 }}>{r.method}</span> {r.host}{r.path}
+                <div className="dim">Caido {r.caidoRequestId} | evidence {r.evidenceId}</div>
+              </div>
+            )) : <div className="dim mono" style={{ fontSize: 11 }}>No imported Caido captures.</div>}
           </div>
         </aside>
 
@@ -390,9 +450,15 @@ function CaidoMode() {
                 <tr><th></th><th>METHOD</th><th>HOST</th><th>PATH</th><th>STATUS</th><th>LEN</th><th>SOURCE</th></tr>
               </thead>
               <tbody>
-                {results.map(r => (
+                {results.length ? results.map(r => (
                   <ReqRow key={r.id} r={r} selected={selectedId} checked={checkedIds.includes(r.id)} onOpen={openDetail} onToggle={toggleId} />
-                ))}
+                )) : (
+                  <tr>
+                    <td colSpan="7" className="dim mono" style={{ padding: 18, textAlign: 'center' }}>
+                      {busy === 'search' ? 'SEARCHING CAIDO TRAFFIC' : 'NO LIVE CAIDO TRAFFIC FOR CURRENT FILTER'}
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -427,6 +493,7 @@ function CaidoMode() {
             <div style={{ display: 'flex', gap: 6 }}>
               <button className="btn sm" onClick={draftReplay} disabled={!replayRaw.trim() || busy === 'draft'}>DRAFT</button>
               <button className="btn primary sm" onClick={sendReplay} disabled={!draft?.parsed || !confirmed || busy === 'send'}>SEND ONE</button>
+              <button className="btn ghost sm" onClick={seedTargetReplay}>SEED TARGET GET</button>
               <button className="btn ghost sm" onClick={() => { setReplayRaw(''); setDraft(null); setConfirmed(false); }} style={{ marginLeft: 'auto' }}>CLEAR</button>
             </div>
           </div>

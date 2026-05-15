@@ -18,6 +18,7 @@ function SurfaceRow({ s, sel, onSel }) {
 }
 
 function FindingRow({ f, sel, onSel }) {
+  const API = window.PD_API || {};
   return (
     <div
       onClick={() => onSel(f.id)}
@@ -31,6 +32,7 @@ function FindingRow({ f, sel, onSel }) {
         <Pill tone={SEV_TONE[f.severity] || 'gray'}>{f.severity.toUpperCase()}</Pill>
         <Pill tone={STATUS_TONE[f.status] || 'gray'}>{f.status.toUpperCase()}</Pill>
         <span className="strong" style={{ flex: 1, fontSize: 12 }}>{f.title}</span>
+        <button className="btn ghost sm" onClick={(event) => { event.stopPropagation(); API.openInspector?.('finding', f.id, { title: f.title }); }}>INSPECT</button>
         <span className="dim mono" style={{ fontSize: 10 }}>{f.id}</span>
       </div>
       <div className="dim" style={{ fontSize: 11.5 }}>{f.desc}</div>
@@ -82,9 +84,10 @@ function ArtifactRow({ a }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: 11 }}>
       <span style={{ width: 10, height: 10, borderRadius: 2, background: kindColor[a.kind] || 'var(--txt-mute)', flex: '0 0 10px' }} />
-      <span className="strong" style={{ flex: 1 }}>{a.title}</span>
+      <button className="linklike strong" style={{ flex: 1, textAlign: 'left' }} onClick={() => API.openInspector?.('artifact', a.id, { title: a.title })}>{a.title}</button>
       <span className="dim" style={{ width: 70 }}>{a.task}</span>
       <span style={{ color: 'var(--txt-mute)', width: 54, textAlign: 'right' }}>{a.size}</span>
+      <button className="btn ghost sm" onClick={() => API.openInspector?.('artifact', a.id, { title: a.title })}>INSPECT</button>
       <button className="btn ghost sm" style={{ marginLeft: 4 }} onClick={() => API.command?.('export-artifact', { artifact_id: a.id, task_id: a.task, title: `Export ${a.title}` })}>↓</button>
     </div>
   );

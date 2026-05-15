@@ -1147,6 +1147,10 @@ class RuntimeStore:
             rows = self._query("SELECT * FROM task_runs ORDER BY started_at DESC LIMIT %s", (limit,))
         return [self._task_run_from_row(row) for row in rows]
 
+    def get_task_run(self, run_id: str) -> TaskRun | None:
+        row = self._query_one("SELECT * FROM task_runs WHERE id = %s", (run_id,))
+        return self._task_run_from_row(row) if row else None
+
     def recover_stale_task_run(
         self,
         *,
@@ -1270,6 +1274,10 @@ class RuntimeStore:
             rows = self._query("SELECT * FROM task_handoffs ORDER BY created_at DESC LIMIT %s", (limit,))
         return [self._handoff_from_row(row) for row in rows]
 
+    def get_handoff(self, handoff_id: str) -> TaskHandoff | None:
+        row = self._query_one("SELECT * FROM task_handoffs WHERE id = %s", (handoff_id,))
+        return self._handoff_from_row(row) if row else None
+
     def consume_handoffs_for_task(self, task: Task, *, limit: int = 100) -> int:
         if not task.target_id:
             return 0
@@ -1388,6 +1396,10 @@ class RuntimeStore:
             rows = self._query("SELECT * FROM evidence ORDER BY created_at DESC LIMIT %s", (limit,))
         return [self._evidence_from_row(row) for row in rows]
 
+    def get_evidence(self, evidence_id: str) -> EvidenceRecord | None:
+        row = self._query_one("SELECT * FROM evidence WHERE id = %s", (evidence_id,))
+        return self._evidence_from_row(row) if row else None
+
     def insert_note(self, note: Note) -> None:
         self._execute(
             """
@@ -1419,6 +1431,10 @@ class RuntimeStore:
         else:
             rows = self._query("SELECT * FROM notes ORDER BY created_at DESC LIMIT %s", (limit,))
         return [self._note_from_row(row) for row in rows]
+
+    def get_note(self, note_id: str) -> Note | None:
+        row = self._query_one("SELECT * FROM notes WHERE id = %s", (note_id,))
+        return self._note_from_row(row) if row else None
 
     def insert_interest(self, interest: Interest) -> None:
         self._execute(
@@ -1452,6 +1468,10 @@ class RuntimeStore:
             rows = self._query("SELECT * FROM interests ORDER BY created_at DESC LIMIT %s", (limit,))
         return [self._interest_from_row(row) for row in rows]
 
+    def get_interest(self, interest_id: str) -> Interest | None:
+        row = self._query_one("SELECT * FROM interests WHERE id = %s", (interest_id,))
+        return self._interest_from_row(row) if row else None
+
     def insert_finding(self, finding: Finding) -> None:
         self._execute(
             """
@@ -1484,6 +1504,10 @@ class RuntimeStore:
         else:
             rows = self._query("SELECT * FROM findings ORDER BY created_at DESC LIMIT %s", (limit,))
         return [self._finding_from_row(row) for row in rows]
+
+    def get_finding(self, finding_id: str) -> Finding | None:
+        row = self._query_one("SELECT * FROM findings WHERE id = %s", (finding_id,))
+        return self._finding_from_row(row) if row else None
 
     def insert_memory_entry(self, entry: MemoryEntry) -> None:
         self._execute(
@@ -1530,6 +1554,10 @@ class RuntimeStore:
             (*params, limit),
         )
         return [self._memory_from_row(row) for row in rows]
+
+    def get_memory_entry(self, memory_id: str) -> MemoryEntry | None:
+        row = self._query_one("SELECT * FROM memory_entries WHERE id = %s", (memory_id,))
+        return self._memory_from_row(row) if row else None
 
     def insert_policy_decision(self, decision: PolicyDecision) -> None:
         self._execute(
@@ -1619,6 +1647,10 @@ class RuntimeStore:
         else:
             rows = self._query("SELECT * FROM artifacts ORDER BY created_at DESC LIMIT %s", (limit,))
         return [self._artifact_from_row(row) for row in rows]
+
+    def get_artifact(self, artifact_id: str) -> ArtifactRecord | None:
+        row = self._query_one("SELECT * FROM artifacts WHERE id = %s", (artifact_id,))
+        return self._artifact_from_row(row) if row else None
 
     def insert_document_chunk(self, chunk: DocumentChunk) -> None:
         self._execute(
@@ -1848,6 +1880,25 @@ class RuntimeStore:
             "output_mode": ["output_mode"],
             "source_priority": ["source_priority"],
             "requires_authorized_scope": ["requires_authorized_scope"],
+            "vuln_id": ["vuln_id"],
+            "cve_id": ["cve_id"],
+            "ghsa_id": ["ghsa_ids", "aliases", "alias"],
+            "osv_id": ["osv_ids", "aliases", "alias"],
+            "alias": ["aliases", "alias", "cve_id", "ghsa_ids", "osv_ids"],
+            "ecosystem": ["ecosystem"],
+            "package": ["package"],
+            "vendor": ["affected_vendors"],
+            "product": ["affected_products"],
+            "cpe": ["cpe", "affected_cpes"],
+            "purl": ["purl", "affected_purls"],
+            "cwe": ["cwe", "cwe_ids"],
+            "cvss_severity": ["cvss_severity"],
+            "kev": ["kev"],
+            "fixed_version_known": ["fixed_version_known"],
+            "asset_match": ["asset_match"],
+            "watchlist_match": ["watchlist_match"],
+            "source_kind": ["source_kind"],
+            "safety_level": ["safety_level"],
         }
         for key, json_keys in mapping.items():
             if key not in metadata_filters:
@@ -1862,10 +1913,31 @@ class RuntimeStore:
                     params.extend([item, "true" if value else "false"])
                 continue
             values = [str(item) for item in value] if isinstance(value, list | tuple | set) else [str(value)]
-            clauses = [f"{prefix}metadata->>%s = ANY(%s)" for _item in json_keys]
+            clauses = [
+                f"({prefix}metadata->>%s = ANY(%s) OR COALESCE({prefix}metadata->%s, '[]'::jsonb) ?| %s)"
+                for _item in json_keys
+            ]
             where.append("(" + " OR ".join(clauses) + ")")
             for item in json_keys:
-                params.extend([item, values])
+                params.extend([item, values, item, values])
+        numeric_thresholds = {
+            "epss_probability": "epss_probability",
+            "epss_percentile": "epss_percentile",
+        }
+        for key, json_key in numeric_thresholds.items():
+            if key not in metadata_filters:
+                continue
+            value = metadata_filters[key]
+            if isinstance(value, dict):
+                threshold = value.get("gte")
+            else:
+                threshold = value
+            try:
+                numeric = float(threshold)
+            except (TypeError, ValueError):
+                continue
+            where.append(f"NULLIF({prefix}metadata->>%s, '')::double precision >= %s")
+            params.extend([json_key, numeric])
 
     def insert_notification(self, notification: NotificationRecord) -> None:
         self._execute(
@@ -1907,6 +1979,10 @@ class RuntimeStore:
             rows = self._query("SELECT * FROM notifications ORDER BY created_at DESC LIMIT %s", (limit,))
         return [self._notification_from_row(row) for row in rows]
 
+    def get_notification(self, notification_id: str) -> NotificationRecord | None:
+        row = self._query_one("SELECT * FROM notifications WHERE id = %s", (notification_id,))
+        return self._notification_from_row(row) if row else None
+
     def insert_external_sync_job(self, job: ExternalSyncJob) -> None:
         self._execute(
             """
@@ -1946,6 +2022,10 @@ class RuntimeStore:
                 (limit,),
             )
         return [self._sync_job_from_row(row) for row in rows]
+
+    def get_external_sync_job(self, job_id: str) -> ExternalSyncJob | None:
+        row = self._query_one("SELECT * FROM external_sync_jobs WHERE id = %s", (job_id,))
+        return self._sync_job_from_row(row) if row else None
 
     def claim_next_external_sync_job(
         self,
@@ -2108,6 +2188,10 @@ class RuntimeStore:
     def list_checkpoints(self, limit: int = 100) -> list[CheckpointRecord]:
         rows = self._query("SELECT * FROM checkpoints ORDER BY created_at DESC LIMIT %s", (limit,))
         return [self._checkpoint_from_row(row) for row in rows]
+
+    def get_checkpoint(self, checkpoint_id: str) -> CheckpointRecord | None:
+        row = self._query_one("SELECT * FROM checkpoints WHERE id = %s", (checkpoint_id,))
+        return self._checkpoint_from_row(row) if row else None
 
     @staticmethod
     def _normalize_trace_metadata(trace: AgentTrace) -> dict[str, object]:
@@ -2435,6 +2519,10 @@ class RuntimeStore:
             rows = self._query("SELECT * FROM agent_traces ORDER BY created_at DESC LIMIT %s", (limit,))
         return [self._trace_from_row(row) for row in rows]
 
+    def get_trace(self, trace_id: str) -> AgentTrace | None:
+        row = self._query_one("SELECT * FROM agent_traces WHERE id = %s", (trace_id,))
+        return self._trace_from_row(row) if row else None
+
     def insert_event(self, event: EventRecord) -> None:
         self._execute(
             """
@@ -2457,6 +2545,10 @@ class RuntimeStore:
     def list_events(self, limit: int = 100) -> list[EventRecord]:
         rows = self._query("SELECT * FROM events ORDER BY created_at DESC LIMIT %s", (limit,))
         return [self._event_from_row(row) for row in rows]
+
+    def get_event(self, event_id: str) -> EventRecord | None:
+        row = self._query_one("SELECT * FROM events WHERE id = %s", (event_id,))
+        return self._event_from_row(row) if row else None
 
     def insert_operator_message(self, message: OperatorMessage) -> None:
         self._execute(

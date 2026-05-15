@@ -1,0 +1,66 @@
+vuln_stream:
+  enabled: true
+
+  pollers:
+    cvelist_v5:
+      enabled: true
+      repo_path: "primordial-rag-preprocess/data_raw/vuln/structured/cve_v5"
+      interval_minutes: 15
+      history_start_year: 2020
+
+    nvd:
+      enabled: true
+      interval_minutes: 120
+      api_key_env: "NVD_API_KEY"
+      safety_overlap_minutes: 15
+      max_results_per_page: 2000
+
+    osv:
+      enabled: true
+      interval_minutes: 30
+      ecosystems:
+        - PyPI
+        - npm
+        - Go
+        - Maven
+        - Rust
+        - GitHub Actions
+        - Debian
+        - Alpine
+
+    ghsa:
+      enabled: true
+      interval_minutes: 60
+      token_env: "GITHUB_TOKEN"
+      mode: "api_or_repo"
+
+    kev:
+      enabled: true
+      interval_minutes: 30
+      source: "github_mirror_or_cisa_json"
+
+    epss:
+      enabled: true
+      interval_hours: 24
+      mode: "csv_or_api"
+
+    vendor_advisories:
+      enabled: true
+      interval_minutes: 60
+      sources_config: "primordial-rag-preprocess/config/vendor_advisory_sources.yaml"
+
+  relevance:
+    embed_all: false
+    epss_percentile_threshold: 0.90
+    cvss_severities:
+      - HIGH
+      - CRITICAL
+    watchlists_enabled: true
+    asset_matching_enabled: true
+    recent_days_window: 30
+
+  safety:
+    emit_hints_only: true
+    block_action_selection: true
+    block_scope_expansion: true
+    require_operator_confirmation_for_review_proposals: true

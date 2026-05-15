@@ -1,7 +1,9 @@
 # helix.htb Evidence Index
 
-Generated: 2026-05-15T06:12:13.461050+00:00
+Generated: 2026-05-15T19:49:49.258746+00:00
 
+- `evidence_4caa6aeeef3c` DNS enumeration: helix.htb: DNS enumeration queried helix.htb via 10.129.64.253; parsed 0 record(s). AXFR did not succeed.
+- `evidence_b3ff3d45169c` TCP service discovery: helix.htb: TCP connect checks completed against 2 host(s) and 38 port(s); no open services were observed in the bounded port set.
 - `evidence_4a6541a6713b` PoC applicability validation: helix.htb: Classified 29 retained public PoC candidate(s): 14 ready for gated review, 15 blocked or research-only. No PoC was executed and no exploit code was generated.
 - `evidence_19aae821c612` Exploit research: helix.htb: Searchsploit research found 29 non-DoS candidate(s), suppressed 10 DoS/crash-oriented result(s), and retained 4 example excerpt(s): Ingress-NGINX 4.11.0 - Remote Code Execution (RCE), OpenSSH < 6.6 SFTP (x64) - Command Execution, OpenSSH < 6.6 SFTP - Command Execution, SSH (x2) - Remote Command Execution, PHP-FPM + Nginx - Remote Code Execution.
 - `evidence_1656c5228a85` TCP service discovery: helix.htb: TCP service discovery observed 4 open service(s): 10.129.55.37:22/ssh, 10.129.55.37:80/http, helix.htb:22/ssh, helix.htb:80/http.
