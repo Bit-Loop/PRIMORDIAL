@@ -38,7 +38,13 @@ class OperatorIntentCatalogAutonomyTests(unittest.TestCase):
         self.assertTrue(htb_lab.exploit_code_generation)
         self.assertTrue(htb_lab.poc_execution)
         self.assertTrue(htb_lab.credential_policy.credential_validation_allowed)
+        self.assertTrue(htb_lab.credential_policy.credential_guessing_allowed)
+        self.assertTrue(htb_lab.credential_policy.credential_spraying_allowed)
+        self.assertTrue(htb_lab.credential_policy.hash_cracking_allowed)
+        self.assertTrue(htb_lab.kerberos_policy.asrep_roast_check_allowed)
+        self.assertTrue(htb_lab.kerberos_policy.kerberoast_check_allowed)
         self.assertTrue(htb_lab.lab_policy.lab_flag_collection_allowed)
+        self.assertTrue(htb_lab.lab_policy.htb_lab_behavior_allowed)
         self.assertTrue(htb_lab.lab_policy.reverse_shell_allowed)
         ad_intent = registry.get("ad_lab")
         self.assertIn("In-House AD Attack Path", ad_intent.label)
@@ -149,6 +155,7 @@ class OperatorIntentCatalogAutonomyTests(unittest.TestCase):
             runtime = PrimordialRuntime(config)
             runtime.initialize()
             runtime.import_scope(scope_path, ScopeProfile.HACK_THE_BOX)
+            runtime.set_operator_intent("recon_only")
             target = runtime.store.list_targets()[0]
             runtime.store.insert_evidence(
                 EvidenceRecord(
@@ -181,6 +188,24 @@ class OperatorIntentCatalogAutonomyTests(unittest.TestCase):
             ]
             self.assertTrue(blocked)
             self.assertEqual(blocked[0].metadata["active_intent"], "recon_only")
+            runtime.shutdown()
+
+    def test_htb_scope_defaults_to_htb_lab_intent(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = AppConfig.from_env(project_root=root)
+            config.manifests_dir = MANIFESTS_DIR
+            config.catalog_dir = CATALOG_DIR
+            config.ensure_directories()
+            scope_path = write_scope_file(
+                root,
+                targets=[{"handle": "target.htb", "assets": [{"asset": "10.10.10.10", "asset_type": "ip"}]}],
+            )
+            runtime = PrimordialRuntime(config)
+            runtime.initialize()
+            runtime.import_scope(scope_path, ScopeProfile.HACK_THE_BOX)
+
+            self.assertEqual(runtime.active_operator_intent().id, "htb_lab")
             runtime.shutdown()
 
     def test_htb_lab_intent_allows_exploit_research_planning(self) -> None:

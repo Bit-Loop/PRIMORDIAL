@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import json
 import re
+import subprocess
 from datetime import timedelta
 from pathlib import Path
 from typing import Callable, Protocol
@@ -165,44 +166,39 @@ class WorkflowOrchestrator:
             reason = self._stale_run_reason(task, run, now)
             if reason is None:
                 continue
-            run.status = TaskRunStatus.CANCELLED
-            run.error = f"recovered stale execution state: {reason}"
-            run.finished_at = now
-            run.heartbeat_at = now
-            run.metadata["recovered_stale_execution"] = True
-            run.metadata["recovery_reason"] = reason
-            self.store.insert_task_run(run)
+            next_task_status = None
             if task is not None:
-                task.metadata["recovered_stale_execution"] = True
-                task.metadata["recovery_reason"] = reason
                 if task.status == TaskStatus.RUNNING:
-                    task.status = TaskStatus.PENDING if task.attempts < task.max_attempts else TaskStatus.FAILED
-                task.updated_at = now
-                self.store.insert_task(task)
-            self.store.insert_trace(
-                AgentTrace(
-                    task_id=run.task_id,
-                    role=task.role if task is not None else AgentRole.ORCHESTRATOR,
-                    status="failed",
-                    summary=f"Recovered stale execution state: {reason}",
-                    metadata={"recovered_stale_execution": True, "recovery_reason": reason},
-                )
+                    next_task_status = TaskStatus.PENDING if task.attempts < task.max_attempts else TaskStatus.FAILED
+            trace = AgentTrace(
+                task_id=run.task_id,
+                role=task.role if task is not None else AgentRole.ORCHESTRATOR,
+                status="failed",
+                summary=f"Recovered stale execution state: {reason}",
+                metadata={"recovered_stale_execution": True, "recovery_reason": reason},
             )
-            self.store.insert_event(
-                EventRecord(
-                    type=EventType.TASK_FAILED,
-                    summary=f"Recovered stale execution state for {task.title if task else run.task_id}",
-                    target_id=task.target_id if task is not None else None,
-                    task_id=run.task_id,
-                    metadata={"reason": reason, "recovered_stale_execution": True},
-                )
+            event = EventRecord(
+                type=EventType.TASK_FAILED,
+                summary=f"Recovered stale execution state for {task.title if task else run.task_id}",
+                target_id=task.target_id if task is not None else None,
+                task_id=run.task_id,
+                metadata={"reason": reason, "recovered_stale_execution": True},
             )
-            recovered += 1
+            if self.store.recover_stale_task_run(
+                run=run,
+                task=task,
+                task_status=next_task_status,
+                reason=reason,
+                trace=trace,
+                event=event,
+            ):
+                recovered += 1
         return recovered
 
     def tick(self, max_executions: int = 3) -> OrchestrationReport:
         report = OrchestrationReport()
         self.recover_stale_execution_state(limit=500)
+        self.store.expire_handoffs()
         self.resume_tracker.resume_due_tasks(limit=200)
         targets = self.store.list_targets()
         active_session = self.store.get_active_session()
@@ -255,7 +251,15 @@ class WorkflowOrchestrator:
                 "proposal_resolved_at": task.updated_at.isoformat(),
             }
             event_type = EventType.APPROVAL_GRANTED if approved else EventType.APPROVAL_DENIED
-            self.store.insert_task(task)
+            updated = self.store.update_task_status(
+                task.id,
+                from_statuses=[TaskStatus.NEEDS_APPROVAL],
+                to_status=task.status,
+                metadata_patch=task.metadata,
+                requires_approval=False,
+            )
+            if updated is not None:
+                task = updated
             self.store.insert_event(
                 EventRecord(
                     type=event_type,
@@ -289,7 +293,15 @@ class WorkflowOrchestrator:
         else:
             task.status = TaskStatus.CANCELLED
             event_type = EventType.APPROVAL_DENIED
-        self.store.insert_task(task)
+        updated = self.store.update_task_status(
+            task.id,
+            from_statuses=[TaskStatus.NEEDS_APPROVAL],
+            to_status=task.status,
+            metadata_patch=task.metadata,
+            requires_approval=False,
+        )
+        if updated is not None:
+            task = updated
         self.store.insert_event(
             EventRecord(
                 type=event_type,
@@ -901,7 +913,15 @@ class WorkflowOrchestrator:
         task.updated_at = utc_now()
         task.metadata["invalidated_by_planner"] = True
         task.metadata["invalidation_reason"] = reason
-        self.store.insert_task(task)
+        updated = self.store.update_task_status(
+            task.id,
+            from_statuses=[TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.WAITING, TaskStatus.NEEDS_APPROVAL],
+            to_status=TaskStatus.BLOCKED,
+            metadata_patch=task.metadata,
+            requires_approval=False,
+        )
+        if updated is not None:
+            task = updated
         event = EventRecord(
             type=EventType.TASK_BLOCKED,
             summary=event_summary,
@@ -2250,6 +2270,8 @@ class WorkflowOrchestrator:
                 metadata={"status": task.status.value, "reason": decision.reason},
             )
         )
+        if task.status != TaskStatus.BLOCKED:
+            self.store.consume_handoffs_for_task(task)
         if auto_approved and task.status != TaskStatus.BLOCKED:
             approval_event = EventRecord(
                 type=EventType.APPROVAL_GRANTED,
@@ -2380,6 +2402,24 @@ class WorkflowOrchestrator:
                 return
             target = self.store.get_target(task.target_id)
             if self._execution_target_is_invalid(task, target, report):
+                continue
+            task_decision = self.policy_engine.evaluate_task(task, target)
+            self.store.insert_policy_decision(task_decision)
+            if task_decision.verdict != PolicyVerdict.ALLOW:
+                self.policy_engine.apply_decision_to_task(task, task_decision)
+                task.updated_at = utc_now()
+                self.store.guarded_update_task(task, from_statuses=[TaskStatus.RUNNING])
+                event = EventRecord(
+                    type=EventType.TASK_NEEDS_APPROVAL
+                    if task_decision.verdict == PolicyVerdict.NEEDS_APPROVAL
+                    else EventType.TASK_BLOCKED,
+                    summary=f"Task gated before execution: {task_decision.reason}",
+                    target_id=task.target_id,
+                    task_id=task.id,
+                    metadata={"reason": task_decision.reason, "pre_dispatch_policy_recheck": True},
+                )
+                self.store.insert_event(event)
+                report.events.append(event)
                 continue
             resource_block = self._resource_reserve_block(task)
             if resource_block is not None:
@@ -2627,13 +2667,15 @@ class WorkflowOrchestrator:
             reason = "target record is missing"
         elif not target.handle.strip():
             reason = "target handle is empty"
+        elif not target.in_scope:
+            reason = "target is out of scope"
         if not reason:
             return False
         task.status = TaskStatus.BLOCKED
         task.updated_at = utc_now()
         task.metadata["invalid_target"] = True
         task.metadata["invalid_target_reason"] = reason
-        self.store.insert_task(task)
+        self.store.guarded_update_task(task, from_statuses=[TaskStatus.RUNNING])
         event = EventRecord(
             type=EventType.TASK_BLOCKED,
             summary=f"Task blocked before execution: {reason}",
@@ -2775,6 +2817,7 @@ class WorkflowOrchestrator:
                     escalation_task.metadata["remote_premium_policy_approval_required"] = True
                 self._register_task(escalation_task, self.store.get_target(task.target_id), report)
 
+        result_timed_out = self._result_timed_out(result)
         if result.success:
             task.status = TaskStatus.SUCCEEDED
             run.status = TaskRunStatus.SUCCEEDED
@@ -2787,7 +2830,7 @@ class WorkflowOrchestrator:
             task.attempts += 1
             if task.attempts < task.max_attempts:
                 task.status = TaskStatus.PENDING
-                run.status = TaskRunStatus.FAILED
+                run.status = TaskRunStatus.TIMED_OUT if result_timed_out else TaskRunStatus.FAILED
                 self.store.insert_event(
                     EventRecord(
                         type=EventType.TASK_RETRIED,
@@ -2798,15 +2841,18 @@ class WorkflowOrchestrator:
                 )
             else:
                 task.status = TaskStatus.FAILED
-                run.status = TaskRunStatus.FAILED
+                run.status = TaskRunStatus.TIMED_OUT if result_timed_out else TaskRunStatus.FAILED
             run.error = result.error
             run.trace_summary = result.error or result.summary
+            if result_timed_out:
+                run.metadata["timed_out"] = True
+                task.metadata["last_run_timed_out"] = True
 
         run.finished_at = utc_now()
         run.heartbeat_at = utc_now()
-        self.store.insert_task_run(run)
+        self.store.guarded_update_task_run(run, from_statuses=[TaskRunStatus.RUNNING])
         task.updated_at = utc_now()
-        self.store.insert_task(task)
+        self.store.guarded_update_task(task, from_statuses=[TaskStatus.RUNNING])
         self._write_checkpoint(
             task,
             run,
@@ -2843,6 +2889,15 @@ class WorkflowOrchestrator:
         # so burning a retry budget on them is incorrect.
         return isinstance(exc, (OSError, TimeoutError))
 
+    @staticmethod
+    def _is_timeout_exception(exc: Exception) -> bool:
+        return isinstance(exc, (TimeoutError, subprocess.TimeoutExpired))
+
+    @staticmethod
+    def _result_timed_out(result) -> bool:
+        text = " ".join(str(item or "") for item in (getattr(result, "error", None), getattr(result, "summary", None))).lower()
+        return "timed out" in text or "timeout" in text
+
     def _persist_execution_exception(
         self,
         task: Task,
@@ -2851,8 +2906,12 @@ class WorkflowOrchestrator:
         report: OrchestrationReport,
     ) -> None:
         now = utc_now()
-        transient = self._is_transient_exception(exc)
-        if transient:
+        timed_out = self._is_timeout_exception(exc)
+        transient = False if timed_out else self._is_transient_exception(exc)
+        if timed_out:
+            task.attempts += 1
+            task.status = TaskStatus.PENDING if task.attempts < task.max_attempts else TaskStatus.FAILED
+        elif transient:
             # Network/IO glitch: reset to PENDING without consuming retry budget.
             task.status = TaskStatus.PENDING
         else:
@@ -2861,12 +2920,16 @@ class WorkflowOrchestrator:
         task.updated_at = now
         task.metadata["execution_exception"] = str(exc)
         task.metadata["last_exception_transient"] = transient
-        run.status = TaskRunStatus.FAILED
+        if timed_out:
+            task.metadata["last_run_timed_out"] = True
+        run.status = TaskRunStatus.TIMED_OUT if timed_out else TaskRunStatus.FAILED
         run.error = str(exc)
         run.trace_summary = f"execution crashed: {exc}"
         run.finished_at = now
         run.heartbeat_at = now
         run.metadata["execution_exception"] = True
+        if timed_out:
+            run.metadata["timed_out"] = True
         self.store.insert_trace(
             AgentTrace(
                 task_id=task.id,
@@ -2876,8 +2939,8 @@ class WorkflowOrchestrator:
                 metadata={"execution_exception": True, "error": str(exc), "model": task.provider_model},
             )
         )
-        self.store.insert_task_run(run)
-        self.store.insert_task(task)
+        self.store.guarded_update_task_run(run, from_statuses=[TaskRunStatus.RUNNING])
+        self.store.guarded_update_task(task, from_statuses=[TaskStatus.RUNNING])
         self._write_checkpoint(
             task,
             run,

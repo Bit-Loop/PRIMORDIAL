@@ -180,6 +180,8 @@ class CredentialStore:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 json.dump(payload, handle, indent=2, sort_keys=True)
                 handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
         except Exception:
             try:
                 tmp_path.unlink()
@@ -187,6 +189,14 @@ class CredentialStore:
                 raise
         os.replace(tmp_path, self.path)
         self.path.chmod(0o600)
+        try:
+            dir_fd = os.open(self.path.parent, os.O_RDONLY)
+        except OSError:
+            return
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
 
     def _status_hint(self, field: CredentialField, value: str) -> str:
         if not value:

@@ -28,9 +28,10 @@ from primordial.core.domain.enums import (
     TaskStatus,
     VerificationStatus,
 )
-from primordial.core.domain.models import AgentTrace, EvidenceRecord, Interest, NotificationRecord, PrimitiveManifest, Task
+from primordial.core.domain.models import AgentTrace, EvidenceRecord, Interest, NotificationRecord, OperatorMessage, PrimitiveManifest, Task
 from primordial.core.providers.ollama import OllamaModelListResult, OllamaPreloadResult, OllamaResponse
-from primordial.core.web.app import PrimordialWebApp
+from primordial.core.web.app import PrimordialWebApp, WebResponse
+from primordial.core.web.server import _WebConsoleRequestHandler
 from primordial.runtime import PrimordialRuntime
 from tests.support import build_probe_fixture, write_scope_file
 
@@ -400,6 +401,11 @@ class WebConsoleTests(unittest.TestCase):
         self.assertTrue(wrapper["local_wrapper_available"])
         self.assertEqual(wrapper["status"], "local wrapper")
         self.assertTrue(wrapper["remote_premium_policy_gate_bypassed_for_wrapper"])
+        self.assertEqual(payload["plan"]["intent"]["id"], "htb_lab")
+        self.assertTrue(payload["plan"]["intent"]["flags"]["credential_guessing"])
+        self.assertTrue(payload["plan"]["intent"]["flags"]["credential_spraying"])
+        self.assertTrue(payload["plan"]["intent"]["flags"]["hash_cracking"])
+        self.assertTrue(payload["plan"]["intent"]["flags"]["reverse_shell"])
 
     def test_control_plane_marks_wrapper_backed_claude_gpt_tasks(self) -> None:
         target = self.runtime.store.list_targets()[0]
@@ -776,8 +782,14 @@ class WebConsoleTests(unittest.TestCase):
                 "Scope profile",
                 "ADVANCED ASSETS",
                 "Operator Intent still gates actions",
+                "/api/runtime-control",
+                "/api/credentials",
+                "/api/integrations/caido",
                 "http://127.0.0.1:8650/graphql",
                 "AUTH FAILED",
+                "HEALTH CHECK",
+                "refreshCredentials",
+                "refreshCaido",
                 "auth-blocked",
                 "USE TARGET SCOPE",
                 "SAVE CREDENTIALS",
@@ -789,7 +801,10 @@ class WebConsoleTests(unittest.TestCase):
                 self.assertIn(token, text)
             self.assertNotIn("pirate.htb scope", text)
             self.assertNotIn("http://127.0.0.1:8080/graphql", text)
+            self.assertNotIn("live_metrics=1", text)
+            self.assertNotIn("FULL_REFRESH_MS", text)
         self.assertIn("aria-label={`Edit ${activeCredentialGroup.n} ${label}`}", generated)
+        self.assertIn("runtimeDraftDirty", generated)
         self.assertIn("aria-label", bundle_text)
         self.assertNotIn("'integrations', 'credentials'", generated)
         self.assertNotIn("dangerouslySetInnerHTML", generated)
@@ -816,6 +831,9 @@ class WebConsoleTests(unittest.TestCase):
         self.assertEqual(payload["result"]["target"]["handle"], "pirate.htb")
         self.assertEqual(payload["result"]["target"]["metadata"]["active_ip"], "10.129.47.117")
         self.assertEqual(payload["result"]["target"]["metadata"]["target_kind"], "htb_lab")
+        self.assertIn("scope", payload)
+        self.assertIn("scopePayload", payload)
+        self.assertIn("scopeProfiles", payload)
         self.assertNotIn("control_plane", payload)
         scope = json.loads(self.app.dispatch("GET", "/api/scope").body)
         self.assertTrue(any(item["target"]["handle"] == "pirate.htb" for item in scope["targets"]))
@@ -1333,6 +1351,27 @@ class WebConsoleTests(unittest.TestCase):
         self.assertIn("Primordial is waiting on recon tasks.", serialized_logs)
         generate.assert_called_once()
 
+    def test_operator_chat_view_surfaces_wrapper_model_label(self) -> None:
+        self.runtime.store.insert_operator_message(
+            OperatorMessage(role="operator", body="test", target_id=None)
+        )
+        self.runtime.store.insert_operator_message(
+            OperatorMessage(
+                role="assistant",
+                body="wrapper response",
+                target_id=None,
+                model="agent_chat_api:claude:provider-default",
+            )
+        )
+
+        response = self.app.dispatch("GET", "/api/control-plane")
+        payload = json.loads(response.body)
+        rows = payload["inquiryChat"]
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(rows[-1]["text"], "wrapper response")
+        self.assertEqual(rows[-1]["model"], "agent_chat_api:claude:provider-default")
+
     def test_long_operator_chat_does_not_block_fast_runtime_endpoints(self) -> None:
         started = threading.Event()
         release = threading.Event()
@@ -1367,6 +1406,97 @@ class WebConsoleTests(unittest.TestCase):
 
         self.assertLess(elapsed, 0.5)
         self.assertEqual(responses[0].status, 200)
+
+    def test_full_control_plane_render_does_not_block_lightweight_endpoints(self) -> None:
+        started = threading.Event()
+        release = threading.Event()
+        responses = []
+
+        def slow_control_plane(**kwargs):
+            started.set()
+            release.wait(timeout=2)
+            return {"mode": "real", "runtime": {}}
+
+        with patch.object(self.app, "_control_plane_payload", side_effect=slow_control_plane):
+            thread = threading.Thread(
+                target=lambda: responses.append(self.app.dispatch("GET", "/api/control-plane"))
+            )
+            thread.start()
+            self.assertTrue(started.wait(timeout=1))
+
+            started_at = time.monotonic()
+            for path in (
+                "/api/work-status",
+                "/api/execution-mode",
+                "/api/runtime-settings",
+                "/api/operator-intent",
+                "/api/credentials",
+                "/api/integrations/caido?check_health=1",
+            ):
+                response = self.app.dispatch("GET", path)
+                self.assertEqual(response.status, 200)
+            elapsed = time.monotonic() - started_at
+
+            release.set()
+            thread.join(timeout=2)
+
+        self.assertLess(elapsed, 0.5)
+        self.assertEqual(responses[0].status, 200)
+
+    def test_continuous_tick_does_not_block_population_endpoints(self) -> None:
+        started = threading.Event()
+        release = threading.Event()
+
+        class _Report:
+            summary = "slow tick"
+            completed_runs = []
+
+        def slow_tick(max_executions: int = 1):
+            started.set()
+            release.wait(timeout=2)
+            return _Report()
+
+        self.runtime.update_execution_mode("continuous", interval_seconds=7)
+        with patch.object(self.runtime, "run_tick", side_effect=slow_tick):
+            thread = threading.Thread(target=self.app.continuous_tick_once)
+            thread.start()
+            self.assertTrue(started.wait(timeout=1))
+
+            started_at = time.monotonic()
+            for path in ("/api/control-plane", "/api/scope", "/api/models", "/api/storage-status"):
+                response = self.app.dispatch("GET", path)
+                self.assertEqual(response.status, 200)
+            elapsed = time.monotonic() - started_at
+
+            skipped = self.app.continuous_tick_once()
+            release.set()
+            thread.join(timeout=2)
+
+        self.assertLess(elapsed, 0.5)
+        self.assertFalse(skipped["ran"])
+        self.assertTrue(skipped["busy"])
+
+    def test_aborted_browser_response_writes_are_ignored(self) -> None:
+        handler = object.__new__(_WebConsoleRequestHandler)
+        response = WebResponse(
+            status=200,
+            body=b"{}",
+            content_type="application/json; charset=utf-8",
+            headers={"Cache-Control": "no-store"},
+        )
+        calls = []
+
+        def broken_send_response(status):
+            calls.append(status)
+            raise BrokenPipeError("browser went away")
+
+        handler.send_response = broken_send_response
+        handler.send_header = lambda *args: None
+        handler.end_headers = lambda: None
+        handler.wfile = io.BytesIO()
+
+        handler._write_response(response)
+        self.assertEqual(calls, [200])
 
     def test_operator_status_chat_uses_deterministic_state_guard(self) -> None:
         with patch.object(
@@ -1821,6 +1951,36 @@ class WebConsoleTests(unittest.TestCase):
         self.assertEqual(mode["mode"], "continuous")
         self.assertEqual(mode["interval_seconds"], 7)
         self.assertEqual(dashboard["execution_mode"]["mode"], "continuous")
+
+    def test_runtime_control_endpoint_persists_mode_and_intent_without_full_payload(self) -> None:
+        response = self.app.dispatch(
+            "POST",
+            "/api/runtime-control",
+            json.dumps(
+                {
+                    "mode": "continuous",
+                    "interval_seconds": 9,
+                    "intent_id": "recon_only",
+                }
+            ).encode("utf-8"),
+        )
+        payload = json.loads(response.body)
+        mode_response = json.loads(self.app.dispatch("GET", "/api/execution-mode").body)
+        intent_response = json.loads(self.app.dispatch("GET", "/api/operator-intent").body)
+
+        self.assertEqual(response.status, 200)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["action"], "runtime-control")
+        self.assertEqual(payload["execution_mode"]["mode"], "continuous")
+        self.assertEqual(payload["execution_mode"]["interval_seconds"], 9)
+        self.assertEqual(payload["operator_intent"]["active"]["id"], "recon_only")
+        self.assertIn("work_status", payload)
+        self.assertNotIn("control_plane", payload)
+        self.assertNotIn("runtime", payload)
+        self.assertNotIn("result", payload)
+        self.assertEqual(mode_response["mode"], "continuous")
+        self.assertEqual(intent_response["active"]["id"], "recon_only")
+        self.assertIsNotNone(self.runtime.store.get_active_session())
 
     def test_runtime_settings_endpoint_persists_and_surfaces_on_dashboard(self) -> None:
         update_response = self.app.dispatch(

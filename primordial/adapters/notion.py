@@ -7,7 +7,7 @@ from urllib import error, request
 from primordial.core.credentials import CredentialStore
 from primordial.core.findings_context import FindingsContextService
 from primordial.core.events.bus import EventBus, RuntimeSignal
-from primordial.core.domain.enums import EventType, ExternalSyncStatus
+from primordial.core.domain.enums import EventType, ExternalSyncKind, ExternalSyncStatus
 from primordial.core.domain.models import EventRecord, NotionPage
 from primordial.core.storage.runtime import RuntimeStore
 
@@ -27,9 +27,11 @@ class NotionSyncService:
         self.base_url = os.getenv("NOTION_API_BASE_URL", "https://api.notion.com/v1").rstrip("/")
 
     def process_pending(self, limit: int = 10) -> int:
-        jobs = self.store.list_external_sync_jobs(status=ExternalSyncStatus.PENDING, limit=limit)
         completed = 0
-        for job in jobs:
+        for _ in range(limit):
+            job = self.store.claim_next_external_sync_job(kind=ExternalSyncKind.NOTION)
+            if job is None:
+                break
             target = self.store.get_target(job.target_id)
             if not target:
                 job.status = ExternalSyncStatus.FAILED

@@ -430,6 +430,14 @@ class RuntimeStore:
                     target.updated_at.isoformat(),
                 ),
             ).fetchone()
+            if not target.in_scope and row is not None:
+                self._block_active_tasks_for_target_in_connection(
+                    connection,
+                    target_id=str(row["id"]),
+                    reason="target was marked out of scope",
+                    source="target_scope_update",
+                    now=target.updated_at,
+                )
             connection.commit()
         if row is not None:
             target.id = str(row["id"])
@@ -482,6 +490,298 @@ class RuntimeStore:
             total = cursor.rowcount
             connection.commit()
             return total
+
+    def replace_target_scope_assets(
+        self,
+        *,
+        handle: str,
+        display_name: str,
+        profile: ScopeProfile,
+        in_scope: bool,
+        active_ip: str | None,
+        asset_rows: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        now = utc_now()
+        with closing(self.connect()) as connection:
+            existing_row = connection.execute(
+                """
+                SELECT * FROM targets
+                WHERE handle = %s AND profile = %s
+                ORDER BY created_at DESC
+                LIMIT 1
+                FOR UPDATE
+                """,
+                (handle, profile.value),
+            ).fetchone()
+            existing = self._target_from_row(existing_row) if existing_row else None
+            metadata = dict(existing.metadata) if existing else {}
+            previous_ip = str(metadata.get("active_ip") or "").strip()
+            ip_changed = bool(active_ip) and previous_ip != str(active_ip)
+            generation = int(metadata.get("active_ip_generation", 0) or 0)
+            if active_ip:
+                generation += 1 if ip_changed else 0
+                metadata.update(
+                    {
+                        "active_ip": active_ip,
+                        "operator_confirmed_ip": active_ip,
+                        "operator_confirmed_ip_at": now.isoformat(),
+                        "active_ip_generation": generation,
+                        "stale_evidence_before": now.isoformat()
+                        if ip_changed
+                        else metadata.get("stale_evidence_before", now.isoformat()),
+                        "active_ip_source": "scope_editor",
+                    }
+                )
+
+            if existing is None:
+                target = Target(
+                    handle=handle,
+                    display_name=display_name,
+                    profile=profile,
+                    in_scope=in_scope,
+                    metadata=metadata,
+                )
+                target.created_at = now
+                target.updated_at = now
+                target_row = connection.execute(
+                    """
+                    INSERT INTO targets
+                    (id, handle, display_name, profile, in_scope, metadata, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING *
+                    """,
+                    (
+                        target.id,
+                        target.handle,
+                        target.display_name,
+                        target.profile.value,
+                        target.in_scope,
+                        _dump(target.metadata),
+                        target.created_at.isoformat(),
+                        target.updated_at.isoformat(),
+                    ),
+                ).fetchone()
+            else:
+                target_row = connection.execute(
+                    """
+                    UPDATE targets
+                    SET display_name = %s, in_scope = %s, metadata = %s, updated_at = %s
+                    WHERE id = %s
+                    RETURNING *
+                    """,
+                    (display_name, in_scope, _dump(metadata), now.isoformat(), existing.id),
+                ).fetchone()
+            target = self._target_from_row(target_row)
+            invalidated_task_count = 0
+            if not target.in_scope:
+                invalidated_task_count = self._block_active_tasks_for_target_in_connection(
+                    connection,
+                    target_id=target.id,
+                    reason="target was marked out of scope",
+                    source="scope_editor",
+                    now=now,
+                )
+
+            connection.execute("DELETE FROM scope_assets WHERE target_id = %s", (target.id,))
+            inserted_assets = 0
+            for row in asset_rows:
+                raw_asset = str(row["asset"]).strip()
+                if not raw_asset:
+                    continue
+                asset = ScopeAsset(
+                    target_id=target.id,
+                    asset=raw_asset,
+                    asset_type=str(row.get("asset_type") or "domain"),
+                    metadata=dict(row.get("metadata", {})) if isinstance(row.get("metadata", {}), dict) else {},
+                )
+                connection.execute(
+                    """
+                    INSERT INTO scope_assets
+                    (id, target_id, asset, asset_type, metadata, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        asset.id,
+                        asset.target_id,
+                        asset.asset,
+                        asset.asset_type,
+                        _dump(asset.metadata),
+                        asset.created_at.isoformat(),
+                    ),
+                )
+                inserted_assets += 1
+
+            if active_ip and ip_changed:
+                note = Note(
+                    target_id=target.id,
+                    title="Operator-confirmed active target IP",
+                    body=(
+                        f"Active IP for `{target.handle}` is `{active_ip}`. "
+                        "Prior recon evidence may still reference older IPs and should be treated as historical "
+                        "until refreshed recon tasks complete."
+                    ),
+                    confidence=1.0,
+                    freshness=1.0,
+                    metadata={
+                        "class": "operator_correction",
+                        "active_ip": active_ip,
+                        "previous_ip": previous_ip,
+                        "active_ip_generation": generation,
+                        "source": "scope_editor",
+                    },
+                )
+                connection.execute(
+                    """
+                    INSERT INTO notes
+                    (id, target_id, task_id, title, body, confidence, freshness, metadata, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        note.id,
+                        note.target_id,
+                        note.task_id,
+                        note.title,
+                        note.body,
+                        note.confidence,
+                        note.freshness,
+                        _dump(note.metadata),
+                        note.created_at.isoformat(),
+                        note.updated_at.isoformat(),
+                    ),
+                )
+
+            summary = (
+                f"Active IP set for {target.handle}: {active_ip}"
+                if active_ip and ip_changed
+                else f"Scope assets replaced for {target.handle}: {inserted_assets} asset(s)"
+            )
+            event = EventRecord(
+                type=EventType.SCOPE_UPDATED,
+                summary=summary,
+                target_id=target.id,
+                metadata={
+                    "asset_count": inserted_assets,
+                    "profile": profile.value,
+                    "active_ip": active_ip,
+                    "previous_ip": previous_ip,
+                    "active_ip_generation": generation if active_ip else metadata.get("active_ip_generation"),
+                    "source": "scope_editor",
+                },
+            )
+            connection.execute(
+                """
+                INSERT INTO events
+                (id, event_type, target_id, task_id, summary, metadata, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    event.id,
+                    event.type.value,
+                    event.target_id,
+                    event.task_id,
+                    event.summary,
+                    _dump(event.metadata),
+                    event.created_at.isoformat(),
+                ),
+            )
+            connection.commit()
+        return {
+            "target": target,
+            "asset_count": inserted_assets,
+            "active_ip": active_ip,
+            "previous_ip": previous_ip,
+            "active_ip_generation": generation if active_ip else None,
+            "ip_changed": ip_changed,
+            "invalidated_task_count": invalidated_task_count,
+        }
+
+    def _block_active_tasks_for_target_in_connection(
+        self,
+        connection: _PostgresConnection,
+        *,
+        target_id: str,
+        reason: str,
+        source: str,
+        now,
+    ) -> int:
+        metadata_patch = {
+            "scope_invalidated": True,
+            "scope_invalidation_reason": reason,
+            "scope_invalidated_at": now.isoformat(),
+            "scope_invalidation_source": source,
+        }
+        rows = list(
+            connection.execute(
+                """
+                UPDATE tasks
+                SET status = %s,
+                    requires_approval = false,
+                    updated_at = %s,
+                    metadata = metadata || %s
+                WHERE target_id = %s
+                  AND status IN (%s, %s, %s, %s)
+                RETURNING id
+                """,
+                (
+                    TaskStatus.BLOCKED.value,
+                    now.isoformat(),
+                    _dump(metadata_patch),
+                    target_id,
+                    TaskStatus.PENDING.value,
+                    TaskStatus.RUNNING.value,
+                    TaskStatus.WAITING.value,
+                    TaskStatus.NEEDS_APPROVAL.value,
+                ),
+            )
+        )
+        if rows:
+            task_ids = [str(row["id"]) for row in rows]
+            task_placeholders = ", ".join("%s" for _ in task_ids)
+            connection.execute(
+                f"""
+                UPDATE task_runs
+                SET status = %s,
+                    error = %s,
+                    finished_at = %s,
+                    heartbeat_at = %s,
+                    metadata = metadata || %s
+                WHERE task_id IN ({task_placeholders})
+                  AND status IN (%s, %s)
+                """,
+                (
+                    TaskRunStatus.CANCELLED.value,
+                    reason,
+                    now.isoformat(),
+                    now.isoformat(),
+                    _dump(metadata_patch),
+                    *task_ids,
+                    TaskRunStatus.CLAIMED.value,
+                    TaskRunStatus.RUNNING.value,
+                ),
+            )
+            event = EventRecord(
+                type=EventType.TASK_BLOCKED,
+                summary=f"Blocked {len(rows)} active task(s): {reason}",
+                target_id=target_id,
+                metadata={**metadata_patch, "task_ids": task_ids, "blocked_count": len(rows)},
+            )
+            connection.execute(
+                """
+                INSERT INTO events
+                (id, event_type, target_id, task_id, summary, metadata, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    event.id,
+                    event.type.value,
+                    event.target_id,
+                    event.task_id,
+                    event.summary,
+                    _dump(event.metadata),
+                    event.created_at.isoformat(),
+                ),
+            )
+        return len(rows)
 
     def list_scope_assets(self, target_id: str | None = None) -> list[ScopeAsset]:
         if target_id:
@@ -543,6 +843,92 @@ class RuntimeStore:
         task.updated_at = parse_datetime(task.updated_at.isoformat()) if isinstance(task.updated_at, str) else task.updated_at
         self.insert_task(task)
 
+    def update_task_status(
+        self,
+        task_id: str,
+        *,
+        from_statuses: Iterable[TaskStatus],
+        to_status: TaskStatus,
+        metadata_patch: dict[str, Any] | None = None,
+        requires_approval: bool | None = None,
+    ) -> Task | None:
+        statuses = list(from_statuses)
+        if not statuses:
+            raise ValueError("from_statuses is required")
+        now = utc_now()
+        set_clauses = ["status = %s", "updated_at = %s", "metadata = metadata || %s"]
+        params: list[Any] = [to_status.value, now.isoformat(), _dump(metadata_patch or {})]
+        if requires_approval is not None:
+            set_clauses.append("requires_approval = %s")
+            params.append(bool(requires_approval))
+        params.append(task_id)
+        params.extend(status.value for status in statuses)
+        placeholders = ", ".join("%s" for _ in statuses)
+        with closing(self.connect()) as connection:
+            row = connection.execute(
+                f"""
+                UPDATE tasks
+                SET {", ".join(set_clauses)}
+                WHERE id = %s AND status IN ({placeholders})
+                RETURNING *
+                """,
+                tuple(params),
+            ).fetchone()
+            connection.commit()
+        return self._task_from_row(row) if row else None
+
+    def guarded_update_task(self, task: Task, *, from_statuses: Iterable[TaskStatus]) -> Task | None:
+        statuses = list(from_statuses)
+        if not statuses:
+            raise ValueError("from_statuses is required")
+        task.updated_at = parse_datetime(task.updated_at.isoformat()) if isinstance(task.updated_at, str) else task.updated_at
+        params: list[Any] = [
+            task.target_id,
+            task.session_id,
+            task.phase.value,
+            task.kind.value,
+            task.title,
+            task.summary,
+            task.role.value,
+            task.methodology.value,
+            _dump(task.required_capabilities),
+            _dump(task.evidence_refs),
+            _dump(task.metadata),
+            task.status.value,
+            task.priority,
+            task.risk_tier.value,
+            task.attempts,
+            task.max_attempts,
+            bool(task.requires_approval),
+            task.provider_route.value if task.provider_route else None,
+            task.provider_model,
+            task.parent_task_id,
+            task.latest_run_id,
+            task.created_at.isoformat(),
+            task.updated_at.isoformat(),
+            task.id,
+        ]
+        params.extend(status.value for status in statuses)
+        placeholders = ", ".join("%s" for _ in statuses)
+        with closing(self.connect()) as connection:
+            row = connection.execute(
+                f"""
+                UPDATE tasks
+                SET target_id = %s, session_id = %s, phase = %s, kind = %s,
+                    title = %s, summary = %s, role = %s, methodology = %s,
+                    required_capabilities = %s, evidence_refs = %s, metadata = %s,
+                    status = %s, priority = %s, risk_tier = %s, attempts = %s,
+                    max_attempts = %s, requires_approval = %s, provider_route = %s,
+                    provider_model = %s, parent_task_id = %s, latest_run_id = %s,
+                    created_at = %s, updated_at = %s
+                WHERE id = %s AND status IN ({placeholders})
+                RETURNING *
+                """,
+                tuple(params),
+            ).fetchone()
+            connection.commit()
+        return self._task_from_row(row) if row else None
+
     def get_task(self, task_id: str) -> Task | None:
         row = self._query_one("SELECT * FROM tasks WHERE id = %s", (task_id,))
         return self._task_from_row(row) if row else None
@@ -588,10 +974,10 @@ class RuntimeStore:
             rows = list(connection.execute(
                 """
                 UPDATE tasks SET status = %s, updated_at = %s
-                WHERE id = %s
+                WHERE id = %s AND status = %s
                 RETURNING *
                 """,
-                (TaskStatus.RUNNING.value, utc_now().isoformat(), row["id"]),
+                (TaskStatus.RUNNING.value, utc_now().isoformat(), row["id"], TaskStatus.PENDING.value),
             ))
             connection.commit()
         if not rows:
@@ -664,6 +1050,87 @@ class RuntimeStore:
             ),
         )
 
+    def update_task_run_status(
+        self,
+        run_id: str,
+        *,
+        from_statuses: Iterable[TaskRunStatus],
+        to_status: TaskRunStatus,
+        metadata_patch: dict[str, Any] | None = None,
+        error: str | None = None,
+        trace_summary: str | None = None,
+        finished: bool = False,
+    ) -> TaskRun | None:
+        statuses = list(from_statuses)
+        if not statuses:
+            raise ValueError("from_statuses is required")
+        now = utc_now()
+        set_clauses = ["status = %s", "heartbeat_at = %s", "metadata = metadata || %s"]
+        params: list[Any] = [to_status.value, now.isoformat(), _dump(metadata_patch or {})]
+        if error is not None:
+            set_clauses.append("error = %s")
+            params.append(error)
+        if trace_summary is not None:
+            set_clauses.append("trace_summary = %s")
+            params.append(trace_summary)
+        if finished:
+            set_clauses.append("finished_at = %s")
+            params.append(now.isoformat())
+        params.append(run_id)
+        params.extend(status.value for status in statuses)
+        placeholders = ", ".join("%s" for _ in statuses)
+        with closing(self.connect()) as connection:
+            row = connection.execute(
+                f"""
+                UPDATE task_runs
+                SET {", ".join(set_clauses)}
+                WHERE id = %s AND status IN ({placeholders})
+                RETURNING *
+                """,
+                tuple(params),
+            ).fetchone()
+            connection.commit()
+        return self._task_run_from_row(row) if row else None
+
+    def guarded_update_task_run(self, run: TaskRun, *, from_statuses: Iterable[TaskRunStatus]) -> TaskRun | None:
+        statuses = list(from_statuses)
+        if not statuses:
+            raise ValueError("from_statuses is required")
+        params: list[Any] = [
+            run.task_id,
+            run.status.value,
+            run.attempt_number,
+            run.role.value,
+            run.provider_route.value,
+            run.model_name,
+            bool(run.cold_path),
+            run.heartbeat_at.isoformat() if run.heartbeat_at else None,
+            run.lease_expires_at.isoformat() if run.lease_expires_at else None,
+            run.started_at.isoformat(),
+            run.finished_at.isoformat() if run.finished_at else None,
+            run.trace_summary,
+            run.error,
+            _dump(run.metadata),
+            run.id,
+        ]
+        params.extend(status.value for status in statuses)
+        placeholders = ", ".join("%s" for _ in statuses)
+        with closing(self.connect()) as connection:
+            row = connection.execute(
+                f"""
+                UPDATE task_runs
+                SET task_id = %s, status = %s, attempt_number = %s, role = %s,
+                    provider_route = %s, model_name = %s, cold_path = %s,
+                    heartbeat_at = %s, lease_expires_at = %s, started_at = %s,
+                    finished_at = %s, trace_summary = %s, error = %s, metadata = %s
+                WHERE id = %s AND status IN ({placeholders})
+                RETURNING *
+                """,
+                tuple(params),
+            ).fetchone()
+            connection.commit()
+        return self._task_run_from_row(row) if row else None
+
     def list_running_task_runs(self) -> list[TaskRun]:
         rows = self._query(
             "SELECT * FROM task_runs WHERE status = %s ORDER BY started_at DESC",
@@ -680,6 +1147,91 @@ class RuntimeStore:
         else:
             rows = self._query("SELECT * FROM task_runs ORDER BY started_at DESC LIMIT %s", (limit,))
         return [self._task_run_from_row(row) for row in rows]
+
+    def recover_stale_task_run(
+        self,
+        *,
+        run: TaskRun,
+        task: Task | None,
+        task_status: TaskStatus | None,
+        reason: str,
+        trace: AgentTrace,
+        event: EventRecord,
+    ) -> bool:
+        now = utc_now()
+        with closing(self.connect()) as connection:
+            connection.execute("BEGIN")
+            run_row = connection.execute(
+                """
+                UPDATE task_runs
+                SET status = %s, error = %s, finished_at = %s, heartbeat_at = %s,
+                    metadata = metadata || %s
+                WHERE id = %s AND status IN (%s, %s) AND finished_at IS NULL
+                RETURNING *
+                """,
+                (
+                    TaskRunStatus.CANCELLED.value,
+                    f"recovered stale execution state: {reason}",
+                    now.isoformat(),
+                    now.isoformat(),
+                    _dump({"recovered_stale_execution": True, "recovery_reason": reason}),
+                    run.id,
+                    TaskRunStatus.CLAIMED.value,
+                    TaskRunStatus.RUNNING.value,
+                ),
+            ).fetchone()
+            if run_row is None:
+                connection.rollback()
+                return False
+            if task is not None and task_status is not None:
+                connection.execute(
+                    """
+                    UPDATE tasks
+                    SET status = %s, updated_at = %s, metadata = metadata || %s
+                    WHERE id = %s AND status = %s
+                    """,
+                    (
+                        task_status.value,
+                        now.isoformat(),
+                        _dump({"recovered_stale_execution": True, "recovery_reason": reason}),
+                        task.id,
+                        TaskStatus.RUNNING.value,
+                    ),
+                )
+            connection.execute(
+                """
+                INSERT INTO agent_traces
+                (id, task_id, role, status, summary, metadata, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    trace.id,
+                    trace.task_id,
+                    trace.role.value,
+                    trace.status,
+                    trace.summary,
+                    _dump(self._normalize_trace_metadata(trace)),
+                    trace.created_at.isoformat(),
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO events
+                (id, event_type, target_id, task_id, summary, metadata, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    event.id,
+                    event.type.value,
+                    event.target_id,
+                    event.task_id,
+                    event.summary,
+                    _dump(event.metadata),
+                    event.created_at.isoformat(),
+                ),
+            )
+            connection.commit()
+        return True
 
     def insert_handoff(self, handoff: TaskHandoff) -> None:
         self._execute(
@@ -718,6 +1270,87 @@ class RuntimeStore:
         else:
             rows = self._query("SELECT * FROM task_handoffs ORDER BY created_at DESC LIMIT %s", (limit,))
         return [self._handoff_from_row(row) for row in rows]
+
+    def consume_handoffs_for_task(self, task: Task, *, limit: int = 100) -> int:
+        if not task.target_id:
+            return 0
+        now = utc_now()
+        with closing(self.connect()) as connection:
+            rows = list(
+                connection.execute(
+                    """
+                    UPDATE task_handoffs AS handoff
+                    SET status = %s, consumed_at = %s, metadata = handoff.metadata || %s
+                    FROM tasks AS source_task
+                    WHERE handoff.task_id = source_task.id
+                      AND source_task.target_id = %s
+                      AND handoff.destination_agent = %s
+                      AND handoff.status = %s
+                      AND handoff.id IN (
+                          SELECT h.id
+                          FROM task_handoffs h
+                          JOIN tasks st ON st.id = h.task_id
+                          WHERE st.target_id = %s
+                            AND h.destination_agent = %s
+                            AND h.status = %s
+                          ORDER BY h.created_at ASC
+                          LIMIT %s
+                      )
+                    RETURNING handoff.*
+                    """,
+                    (
+                        HandoffStatus.CONSUMED.value,
+                        now.isoformat(),
+                        _dump({"consumed_by_task_id": task.id, "consumed_by_task_kind": task.kind.value}),
+                        task.target_id,
+                        task.role.value,
+                        HandoffStatus.OPEN.value,
+                        task.target_id,
+                        task.role.value,
+                        HandoffStatus.OPEN.value,
+                        limit,
+                    ),
+                )
+            )
+            connection.commit()
+        return len(rows)
+
+    def expire_handoffs(self, *, now: Any | None = None, limit: int = 500) -> int:
+        effective_now = now or utc_now()
+        with closing(self.connect()) as connection:
+            rows = list(
+                connection.execute(
+                    """
+                    UPDATE task_handoffs
+                    SET status = %s, consumed_at = %s, metadata = metadata || %s
+                    WHERE status = %s
+                      AND deadline_at IS NOT NULL
+                      AND deadline_at <= %s
+                      AND id IN (
+                          SELECT id
+                          FROM task_handoffs
+                          WHERE status = %s
+                            AND deadline_at IS NOT NULL
+                            AND deadline_at <= %s
+                          ORDER BY deadline_at ASC
+                          LIMIT %s
+                      )
+                    RETURNING *
+                    """,
+                    (
+                        HandoffStatus.EXPIRED.value,
+                        effective_now.isoformat(),
+                        _dump({"expired_at": effective_now.isoformat()}),
+                        HandoffStatus.OPEN.value,
+                        effective_now.isoformat(),
+                        HandoffStatus.OPEN.value,
+                        effective_now.isoformat(),
+                        limit,
+                    ),
+                )
+            )
+            connection.commit()
+        return len(rows)
 
     def insert_evidence(self, evidence: EvidenceRecord) -> None:
         self._execute(
@@ -1194,6 +1827,51 @@ class RuntimeStore:
                 (limit,),
             )
         return [self._sync_job_from_row(row) for row in rows]
+
+    def claim_next_external_sync_job(
+        self,
+        *,
+        kind: ExternalSyncKind | None = None,
+    ) -> ExternalSyncJob | None:
+        params: list[Any] = [ExternalSyncStatus.PENDING.value]
+        kind_clause = ""
+        if kind is not None:
+            kind_clause = "AND kind = %s"
+            params.append(kind.value)
+        with closing(self.connect()) as connection:
+            connection.execute("BEGIN")
+            row = connection.execute(
+                f"""
+                SELECT *
+                FROM external_sync_jobs
+                WHERE status = %s
+                  {kind_clause}
+                ORDER BY created_at ASC
+                LIMIT 1
+                FOR UPDATE SKIP LOCKED
+                """,
+                tuple(params),
+            ).fetchone()
+            if row is None:
+                connection.commit()
+                return None
+            claimed = connection.execute(
+                """
+                UPDATE external_sync_jobs
+                SET status = %s, updated_at = %s, metadata = metadata || %s
+                WHERE id = %s AND status = %s
+                RETURNING *
+                """,
+                (
+                    ExternalSyncStatus.RUNNING.value,
+                    utc_now().isoformat(),
+                    _dump({"claimed_for_sync": True}),
+                    row["id"],
+                    ExternalSyncStatus.PENDING.value,
+                ),
+            ).fetchone()
+            connection.commit()
+        return self._sync_job_from_row(claimed) if claimed else None
 
     def insert_notion_page(self, page: NotionPage) -> None:
         self._execute(

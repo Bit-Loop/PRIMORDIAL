@@ -191,6 +191,22 @@ class PolicyEngine:
         checks["request_bounded"] = 0 < max_requests <= self.settings.max_poc_requests
         if not all(checks.values()):
             return None
+        if self.settings.mode == AutonomyMode.SUPERVISED_AUTO and task.metadata.get("operator_approved") is not True:
+            return PolicyDecision(
+                action_kind=task.kind.value,
+                verdict=PolicyVerdict.NEEDS_APPROVAL,
+                reason="supervised-auto exploitative or high-risk task requires operator approval in addition to agent safety approval",
+                target_id=task.target_id,
+                task_id=task.id,
+                metadata={
+                    "mode": self.settings.mode.value,
+                    "approval_source": reviewer,
+                    "safety_checks": checks,
+                    "timeout_seconds": timeout_seconds,
+                    "max_requests": max_requests,
+                    "operator_approval_required": True,
+                },
+            )
         return PolicyDecision(
             action_kind=task.kind.value,
             verdict=PolicyVerdict.ALLOW,

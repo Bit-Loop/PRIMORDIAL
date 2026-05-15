@@ -1,7 +1,7 @@
 /* global React, ReactDOM, DashboardMode, TraceMode, ChatMode, PlanMode, NotesMode, InterestsMode, CaidoMode, Rail */
 const { useState: useStateApp, useEffect: useEffectApp, useMemo: useMemoApp, useCallback: useCallbackApp } = React;
 const LIVE_REFRESH_MS = 2000;
-const FULL_REFRESH_MS = 8000;
+const WORK_REFRESH_MS = 3000;
 const REQUEST_TIMEOUT_MS = 60000;
 const REFRESH_TIMEOUT_MS = 6000;
 const WORK_STATUS_TIMEOUT_MS = 3000;
@@ -31,7 +31,7 @@ const EMPTY_PD_DATA = {
     workStatus: { counts: { active: 0, queued: 0, waiting: 0 }, summary: 'Loading runtime state.' },
   },
   models: [],
-  modelPayload: { available_models: [], roles: [], role_metrics: {}, eval_history: [], ollama: {} },
+  modelPayload: { available_models: [], roles: [], role_metrics: {}, eval_history: [], ollama: {}, wrapper_mode: {} },
   tasks: [],
   approvals: [],
   events: [],
@@ -139,8 +139,35 @@ function App() {
         next.runtime.operatorIntent = payload.operator_intent;
         next.runtime.intent = payload.operator_intent?.active?.id || payload.operator_intent?.default || next.runtime.intent;
       }
+      if (payload.scope) next.scope = payload.scope;
+      if (payload.scopePayload) next.scopePayload = payload.scopePayload;
+      if (payload.scopeProfiles) next.scopeProfiles = payload.scopeProfiles;
       if (payload.credentials) next.credentials = payload.credentials;
+      if (payload.caido) next.caido = { ...next.caido, ...payload.caido };
       if (payload.models) next.modelPayload = payload.models;
+      window.PD_DATA = next;
+      return next;
+    });
+  }, []);
+
+  const applyCredentialsPayload = useCallbackApp((payload) => {
+    if (!payload || typeof payload !== 'object') return;
+    setData(previous => {
+      const next = mergePDData(previous);
+      next.credentials = payload;
+      window.PD_DATA = next;
+      return next;
+    });
+  }, []);
+
+  const applyCaidoPayload = useCallbackApp((payload) => {
+    if (!payload || typeof payload !== 'object') return;
+    setData(previous => {
+      const next = mergePDData(previous);
+      next.caido = {
+        ...next.caido,
+        connection: payload,
+      };
       window.PD_DATA = next;
       return next;
     });
@@ -168,7 +195,7 @@ function App() {
     activeRefreshes.current += 1;
     if (!silent) setBusy('refresh');
     try {
-      const payload = await apiRequest('/api/control-plane?live_metrics=1', {
+      const payload = await apiRequest('/api/control-plane', {
         timeoutMs: options.timeoutMs || (silent ? REFRESH_TIMEOUT_MS : REQUEST_TIMEOUT_MS),
       });
       const merged = mergePDData(payload);
@@ -177,7 +204,7 @@ function App() {
       setError('');
       return merged;
     } catch (err) {
-      setError(err.message || String(err));
+      if (!silent) setError(err.message || String(err));
       throw err;
     } finally {
       activeRefreshes.current = Math.max(0, activeRefreshes.current - 1);
@@ -193,57 +220,82 @@ function App() {
       applyMetricsPayload(payload);
       return payload;
     } catch (err) {
-      if (!document.hidden) setError(err.message || String(err));
       return null;
     } finally {
       activeMetricRefreshes.current = Math.max(0, activeMetricRefreshes.current - 1);
     }
   }, [applyMetricsPayload]);
 
+  const refreshWorkStatus = useCallbackApp(async () => {
+    const payload = await apiRequest('/api/work-status', { timeoutMs: WORK_STATUS_TIMEOUT_MS });
+    applyActionPayload({ work_status: payload });
+    return payload;
+  }, [applyActionPayload]);
+
+  const refreshCredentials = useCallbackApp(async () => {
+    const payload = await apiRequest('/api/credentials', { timeoutMs: WORK_STATUS_TIMEOUT_MS });
+    applyCredentialsPayload(payload);
+    return payload;
+  }, [applyCredentialsPayload]);
+
+  const refreshCaido = useCallbackApp(async (options = {}) => {
+    const checkHealth = options.checkHealth !== false;
+    const suffix = checkHealth ? '?check_health=1' : '';
+    const payload = await apiRequest(`/api/integrations/caido${suffix}`, {
+      timeoutMs: options.timeoutMs || REFRESH_TIMEOUT_MS,
+    });
+    applyCaidoPayload(payload);
+    return payload;
+  }, [applyCaidoPayload]);
+
   useEffectApp(() => {
     loadReal({ silent: true, timeoutMs: REQUEST_TIMEOUT_MS }).catch(() => {});
     loadMetrics();
+    refreshWorkStatus().catch(() => {});
     const metricsTimer = window.setInterval(() => loadMetrics(), LIVE_REFRESH_MS);
-    const fullTimer = window.setInterval(() => loadReal({ silent: true }).catch(() => {}), FULL_REFRESH_MS);
+    const workTimer = window.setInterval(() => refreshWorkStatus().catch(() => {}), WORK_REFRESH_MS);
     const refreshOnFocus = () => {
       if (!document.hidden) {
         loadMetrics();
-        loadReal({ silent: true }).catch(() => {});
+        refreshWorkStatus().catch(() => {});
       }
     };
     document.addEventListener('visibilitychange', refreshOnFocus);
     return () => {
       window.clearInterval(metricsTimer);
-      window.clearInterval(fullTimer);
+      window.clearInterval(workTimer);
       document.removeEventListener('visibilitychange', refreshOnFocus);
     };
-  }, [loadMetrics, loadReal]);
-
-  const refreshWorkStatus = useCallbackApp(async () => {
-    const payload = await apiRequest('/api/work-status', { timeoutMs: WORK_STATUS_TIMEOUT_MS });
-    applyActionPayload({ work_status: payload });
-    setError('');
-    return payload;
-  }, [applyActionPayload]);
+  }, [loadMetrics, loadReal, refreshWorkStatus]);
 
   const refreshInBackground = useCallbackApp((kind = 'full') => {
+    if (kind === 'none') return;
     const worker = kind === 'work'
       ? refreshWorkStatus()
       : loadReal({ silent: true, timeoutMs: REFRESH_TIMEOUT_MS });
-    worker.catch(err => setError(err.message || String(err)));
+    worker.catch(() => {});
   }, [loadReal, refreshWorkStatus]);
 
-  const refreshKindForPath = (path) => (
-    path === '/api/execution-mode'
-    || path === '/api/runtime-settings'
-    || path === '/api/operator-intent'
-    || path.startsWith('/api/actions/')
-  ) ? 'work' : 'full';
+  const refreshKindForPath = (path) => {
+    if (
+      path === '/api/execution-mode'
+      || path === '/api/runtime-control'
+      || path === '/api/runtime-settings'
+      || path === '/api/operator-intent'
+      || path.startsWith('/api/actions/')
+      || path === '/api/targets'
+      || path === '/api/scope/import'
+    ) return 'work';
+    if (path.startsWith('/api/credentials/') || path.startsWith('/api/integrations/caido')) return 'none';
+    return 'full';
+  };
 
   const api = useMemoApp(() => ({
     busy,
     refresh: () => loadReal().catch(() => null),
     request: apiRequest,
+    refreshCredentials,
+    refreshCaido,
     action: async (name, body = {}) => {
       setBusy(name);
       try {
@@ -283,7 +335,7 @@ function App() {
       try {
         const payload = await apiRequest(path, { method: 'DELETE' });
         applyActionPayload(payload);
-        refreshInBackground('full');
+        refreshInBackground(path.startsWith('/api/credentials/') ? 'none' : 'full');
         setError('');
         return payload;
       } catch (err) {
@@ -308,7 +360,7 @@ function App() {
         setBusy('');
       }
     },
-  }), [busy, loadReal, applyActionPayload, refreshInBackground]);
+  }), [busy, loadReal, applyActionPayload, refreshInBackground, refreshCredentials, refreshCaido]);
 
   window.PD_DATA = data;
   window.PD_API = api;

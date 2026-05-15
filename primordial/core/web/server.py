@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
+from pathlib import Path
 from threading import Event, Thread
 from typing import Any
 
@@ -27,6 +29,26 @@ class _WebConsoleRequestHandler(BaseHTTPRequestHandler):
 
     def _handle(self, method: str) -> None:
         try:
+            if method == "POST" and self.path.split("?", 1)[0] == "/api/server/stop":
+                body = self._read_body()
+                payload = json.loads(body.decode("utf-8")) if body else {}
+                if payload.get("confirm") != "stop":
+                    response = WebResponse(
+                        status=400,
+                        body=json.dumps({"ok": False, "error": "confirm=stop is required"}).encode("utf-8"),
+                        content_type="application/json; charset=utf-8",
+                        headers={"Cache-Control": "no-store"},
+                    )
+                else:
+                    response = WebResponse(
+                        status=200,
+                        body=json.dumps({"ok": True, "action": "server-stop"}).encode("utf-8"),
+                        content_type="application/json; charset=utf-8",
+                        headers={"Cache-Control": "no-store"},
+                    )
+                    Thread(target=self.server.shutdown, name="primordial-web-stop", daemon=True).start()
+                self._write_response(response)
+                return
             body = self._read_body()
             response = self.web_app.dispatch(method, self.path, body, headers=dict(self.headers.items()))
         except ValueError as exc:
@@ -54,12 +76,15 @@ class _WebConsoleRequestHandler(BaseHTTPRequestHandler):
         return self.rfile.read(length) if length else b""
 
     def _write_response(self, response: WebResponse) -> None:
-        self.send_response(response.status)
-        self.send_header("Content-Type", response.content_type)
-        for key, value in response.headers.items():
-            self.send_header(key, value)
-        self.end_headers()
-        self.wfile.write(response.body)
+        try:
+            self.send_response(response.status)
+            self.send_header("Content-Type", response.content_type)
+            for key, value in response.headers.items():
+                self.send_header(key, value)
+            self.end_headers()
+            self.wfile.write(response.body)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            return
 
     def log_message(self, format: str, *args: Any) -> None:
         return
@@ -76,6 +101,10 @@ def build_web_console_server(
     server = ThreadingHTTPServer((host, port), _WebConsoleRequestHandler)
     server.web_app = web_app  # type: ignore[attr-defined]
     return server
+
+
+def web_console_pid_path(runtime: PrimordialRuntime, port: int) -> Path:
+    return runtime.config.runtime_dir / f"primordial-web-{port}.pid"
 
 
 class WebConsoleThread:
@@ -147,6 +176,9 @@ def serve_web_console(
     web_app = PrimordialWebApp(runtime)
     tick_runner = _ContinuousTickRunner(web_app)
     server = build_web_console_server(runtime, host=host, port=port, web_app=web_app)
+    pid_path = web_console_pid_path(runtime, port)
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
+    pid_path.write_text(str(os.getpid()) + "\n", encoding="utf-8")
     print(f"Primordial web console listening on http://{host}:{port}")
     try:
         tick_runner.start()
@@ -156,3 +188,8 @@ def serve_web_console(
     finally:
         tick_runner.stop()
         server.server_close()
+        try:
+            if pid_path.exists() and pid_path.read_text(encoding="utf-8").strip() == str(os.getpid()):
+                pid_path.unlink()
+        except OSError:
+            pass

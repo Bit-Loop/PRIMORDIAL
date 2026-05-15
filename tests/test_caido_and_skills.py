@@ -11,6 +11,7 @@ from unittest.mock import patch
 from primordial.adapters.caido import CaidoIntegrationService
 from primordial.config import AppConfig
 from primordial.core.credentials import CredentialStore
+from primordial.core.domain.enums import ScopeProfile
 from primordial.runtime import PrimordialRuntime
 
 
@@ -304,6 +305,46 @@ class CaidoAndSkillTests(unittest.TestCase):
             self.assertEqual(payload["skills"][0]["id"], "caido-httpql")
             self.assertIn("Caido HTTPQL", payload["skills"][0]["summary"])
             self.assertIn("caido-httpql", runtime.skills.context_digest())
+            runtime.shutdown()
+
+    def test_caido_import_adds_active_generation_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = AppConfig.from_env(project_root=root)
+            config.ensure_directories()
+            runtime = PrimordialRuntime(config)
+            runtime.initialize()
+            target = runtime.register_target(
+                handle="pirate.htb",
+                profile=ScopeProfile.HACK_THE_BOX,
+                assets=["pirate.htb"],
+                metadata={"active_ip": "10.129.244.95", "active_ip_generation": 3},
+                emit_event=False,
+            )
+
+            class FakeCaido:
+                def request_detail(self, request_id: str) -> dict[str, object]:
+                    return {
+                        "ok": True,
+                        "request": {
+                            "id": request_id,
+                            "host": "pirate.htb",
+                            "method": "GET",
+                            "path": "/",
+                            "status": 200,
+                            "request_sha256": "req",
+                            "response_sha256": "resp",
+                        },
+                    }
+
+            runtime.modules._modules["caido"].instance = FakeCaido()
+
+            result = runtime.caido_import_requests(target=target.handle, request_ids=["42"])
+            evidence = runtime.store.list_evidence(target_id=target.id, limit=10)[0]
+
+            self.assertEqual(len(result["imported"]), 1)
+            self.assertEqual(evidence.metadata["active_ip"], "10.129.244.95")
+            self.assertEqual(evidence.metadata["active_ip_generation"], 3)
             runtime.shutdown()
 
 

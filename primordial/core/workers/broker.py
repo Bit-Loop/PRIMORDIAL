@@ -294,8 +294,7 @@ class WorkerBroker:
 
     def _expected_processor(self, route: ProviderRoute) -> str:
         # LOCAL_COMPACT runs on CPU (phi4-mini / compact models).
-        # LOCAL_CODE is GPU-accelerated cold path per CLAUDE.md model topology.
-        # COLD_REVIEW is GPU-accelerated offline review.
-        if route in {ProviderRoute.LOCAL_COMPACT}:
+        # COLD_REVIEW is the cold CPU lane for exploit/code work using the local_code model.
+        if route in {ProviderRoute.LOCAL_COMPACT, ProviderRoute.COLD_REVIEW}:
             return "cpu"
         return "gpu"

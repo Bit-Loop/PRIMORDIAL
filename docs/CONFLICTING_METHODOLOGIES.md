@@ -75,9 +75,9 @@ Keep chat as an input surface, not an authority. Chat may propose target changes
 
 **Source of difference:** safety default vs useful authorized-security capability.
 
-**Snippet A: "Default to `recon_only`; do not infer authorization from a profile label."**
+**Snippet A: "Default generic sessions to `recon_only`; make HTB lab authorization explicit."**
 
-This is the safety-first posture. A scope profile such as `hack_the_box` should not automatically unlock public PoC research, Kerberos checks, credential validation, or flag collection.
+This is the safety-first posture for generic or bug-bounty targets. The current HTB exception is explicit rather than implicit: the built-in `hack_the_box` profile defaults the session to the `htb_lab` Operator Intent, and the UI surfaces those flags.
 
 **Snippet B: "A security runtime that cannot advance beyond recon is not operationally useful."**
 
@@ -113,7 +113,7 @@ Primordial's long-term value is controlled capability, not blanket refusal. The 
 
 **Resolution idea**
 
-Keep `recon_only` as the durable default. Unlock stronger behaviors only through active Operator Intent plus task policy checks. The UI should explain blocked work in terms of the missing intent, not silently skip or imply the task was impossible.
+Keep `recon_only` as the generic durable default. For built-in HTB scopes, default the active Operator Intent to `htb_lab` so lab workflows are useful immediately, while still routing stronger behavior through active intent, scope, evidence, approval, and task policy checks. The UI should explain blocked work in terms of the missing intent or missing evidence, not silently skip or imply the task was impossible.
 
 ## 3. Explicit State Machines vs Evidence-Driven Methodology Planning
 

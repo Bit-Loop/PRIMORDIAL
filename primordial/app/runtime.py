@@ -9,6 +9,7 @@ import re
 from threading import RLock
 import shutil
 import subprocess
+import sys
 import time
 from urllib import parse as urlparse
 
@@ -63,14 +64,15 @@ from primordial.core.providers.router import ProviderRouter
 from primordial.core.providers.agent_chat import AgentChatClient, AgentChatPremiumReviewRunner, AgentChatSettings
 from primordial.core.providers.lmstudio import LMStudioClient
 from primordial.core.providers.lmstudio_tuning import LMStudioPerformanceTuner
-from primordial.core.providers.ollama import OllamaClient
+from primordial.core.providers.ollama import OllamaClient, OllamaModelListResult
 from primordial.core.providers.model_eval import ModelEvaluationService
+from primordial.core.providers.wrapper_prompts import WRAPPER_ROLE_PERSONALITY_PROMPTS, build_wrapper_system_prompt
 from primordial.core.rag import DocumentIngestionService
 from primordial.core.recovery.crash_journal import CrashJournal
 from primordial.core.recovery.resume_tracker import ResumeTracker
 from primordial.core.providers.scheduler import ModelScheduler
 from primordial.core.skills import RuntimeSkillRegistry
-from primordial.core.storage.runtime import RuntimeStore
+from primordial.core.storage.runtime import RuntimeStore, _SCHEMA_VERSION
 from primordial.core.validation import build_default_validation_registry
 from primordial.core.workers import InProcessWorkerRunner, WorkerBroker, WorkerContract
 from primordial.modes.security.module import SecurityModeServices, build_security_mode_services
@@ -82,6 +84,8 @@ class PrimordialRuntime:
     EXECUTION_MODES = {"tick", "continuous"}
     DEFAULT_EXECUTION_INTERVAL_SECONDS = 30
     RUNTIME_TUNING_SETTING = "runtime_tuning"
+    MODEL_WRAPPER_MODE_SETTING = "model_wrapper_mode"
+    AGENT_CHAT_PROCESS_SETTING = "agent_chat_api_process"
     DEFAULT_WORKER_AI_TIMEOUT_SECONDS_GPU = 120
     DEFAULT_WORKER_AI_TIMEOUT_SECONDS_CPU = 300
     DEFAULT_STALE_RUN_TIMEOUT_SECONDS = 3600
@@ -164,6 +168,12 @@ class PrimordialRuntime:
         self.findings_context = FindingsContextService(config.findings_dir, config.notion_exports_dir)
         self.rag = DocumentIngestionService(self.store, config.artifacts_dir)
         self.resume_tracker = ResumeTracker(self.store, self.event_bus)
+        self._last_recovery_status: dict[str, object] = {
+            "previous_unclean_shutdown": False,
+            "backoff_applied_seconds": 0.0,
+            "recovered_runs": 0,
+            "resumed_tasks": 0,
+        }
         self.worker_broker = WorkerBroker(self.event_bus)
         self._metrics_lock = RLock()
         self._cpu_sample: tuple[int, int] | None = None
@@ -230,7 +240,12 @@ class PrimordialRuntime:
         self._recover_runtime_state()
         self._apply_runtime_tuning()
         self._validate_topology_models()
-        self.repair_execution_state()
+        repair = self.repair_execution_state()
+        self._last_recovery_status = {
+            "previous_unclean_shutdown": recovery.previous_unclean_shutdown,
+            "backoff_applied_seconds": recovery.backoff_applied_seconds,
+            **repair,
+        }
         for target in self.store.list_targets():
             self.findings_context.ensure_target(target)
         self.store.insert_event(
@@ -280,13 +295,15 @@ class PrimordialRuntime:
         previous_intent = None
         if previous_session is not None:
             previous_intent = previous_session.metadata.get("operator_intent_id")
+        default_intent = self._default_operator_intent_for_profile(profile)
+        selected_intent = str(previous_intent) if previous_intent and previous_intent != OperatorIntentRegistry.DEFAULT_INTENT_ID else default_intent
         self.store.pause_active_sessions()
         session = Session(
             methodology=methodology,
             profile=profile,
             autonomy_mode=self.config.autonomy.mode.value,
             title=title,
-            metadata={"operator_intent_id": str(previous_intent or OperatorIntentRegistry.DEFAULT_INTENT_ID)},
+            metadata={"operator_intent_id": selected_intent},
         )
         self.store.insert_session(session)
         self.store.insert_event(
@@ -341,6 +358,25 @@ class PrimordialRuntime:
         )
         return self.operator_intent_payload()
 
+    def update_runtime_control(
+        self,
+        *,
+        mode: str,
+        interval_seconds: int | None = None,
+        intent_id: str,
+    ) -> dict[str, object]:
+        selected_mode = str(mode).strip().lower()
+        if selected_mode not in self.EXECUTION_MODES:
+            raise ValueError(f"unsupported execution mode: {mode}")
+        self._load_operator_intents()
+        intent = self.operator_intents.get(intent_id)
+        execution_mode = self.update_execution_mode(selected_mode, interval_seconds=interval_seconds)
+        operator_intent = self.set_operator_intent(intent.id)
+        return {
+            "execution_mode": execution_mode,
+            "operator_intent": operator_intent,
+        }
+
     def _load_operator_intents(self) -> None:
         if self.operator_intents.all():
             return
@@ -366,6 +402,8 @@ class PrimordialRuntime:
         if not isinstance(targets, list):
             raise ValueError("scope payload targets must be a list")
         session = self.store.get_active_session() or self.start_session(profile=payload_profile)
+        self._ensure_profile_default_operator_intent(payload_profile)
+        session = self.store.get_active_session() or session
         imported_targets = 0
         imported_assets = 0
         for target_payload in targets:
@@ -723,6 +761,7 @@ class PrimordialRuntime:
                 in_scope=in_scope,
                 metadata=dict(metadata or {}),
             )
+        self._ensure_profile_default_operator_intent(profile)
         self.store.insert_target(target)
         self.findings_context.ensure_target(target)
 
@@ -908,56 +947,38 @@ class PrimordialRuntime:
         if not handle:
             raise ValueError("target handle is required")
         display_name = str(display_name or handle).strip() or handle
-        existing = self.store.get_target_by_handle(handle, profile)
-        if existing is None:
-            target = self.register_target(
-                handle=handle,
-                display_name=display_name or handle,
-                profile=profile,
-                in_scope=in_scope,
-                assets=[],
-                emit_event=False,
-            )
-        else:
-            target = existing
-            target.display_name = display_name or target.display_name
-            target.in_scope = in_scope
-            target.updated_at = utc_now()
-            self.store.insert_target(target)
-
-        self.store.delete_scope_assets_for_target(target.id)
-
+        parsed_active_ip = self._validated_optional_ip(active_ip) if active_ip else None
+        self._ensure_profile_default_operator_intent(profile)
+        normalized_rows: list[dict[str, object]] = []
         for row in asset_rows:
             raw_asset = str(row["asset"]).strip()
             if not raw_asset:
                 continue
-            asset_type = str(row.get("asset_type") or self._infer_asset_type(raw_asset))
-            meta: dict[str, object] = {
-                "ports": str(row.get("ports") or "*"),
-                "scope_rule": str(row.get("scope_rule") or "allow"),
-                "operator_managed": True,
-            }
-            self.store.insert_scope_asset(
-                ScopeAsset(
-                    target_id=target.id,
-                    asset=raw_asset,
-                    asset_type=asset_type,
-                    metadata=meta,
-                )
+            normalized_rows.append(
+                {
+                    "asset": raw_asset,
+                    "asset_type": str(row.get("asset_type") or self._infer_asset_type(raw_asset)),
+                    "metadata": {
+                        "ports": str(row.get("ports") or "*"),
+                        "scope_rule": str(row.get("scope_rule") or "allow"),
+                        "operator_managed": True,
+                    },
+                }
             )
 
-        if active_ip:
-            target = self.set_target_active_ip(target, active_ip, source="scope_editor")
+        outcome = self.store.replace_target_scope_assets(
+            handle=handle,
+            display_name=display_name,
+            profile=profile,
+            in_scope=in_scope,
+            active_ip=parsed_active_ip,
+            asset_rows=normalized_rows,
+        )
+        target = outcome["target"]
+        if outcome.get("ip_changed"):
+            self.memory.supersede_stale_generation_entries(target.id, str(outcome.get("active_ip_generation") or ""))
 
         self.findings_context.ensure_target(target)
-        self.store.insert_event(
-            EventRecord(
-                type=EventType.SCOPE_UPDATED,
-                summary=f"Scope assets replaced for {target.handle}: {len(asset_rows)} asset(s)",
-                target_id=target.id,
-                metadata={"asset_count": len(asset_rows), "profile": profile.value},
-            )
-        )
         return target
 
     def diagnose_payload(self) -> dict[str, object]:
@@ -1535,7 +1556,7 @@ class PrimordialRuntime:
         if not question:
             raise ValueError("message is required")
         target_record = self._resolve_operator_chat_target(target, question)
-        route_model = self.config.topology.local_deep
+        route_model = self._wrapper_model_label() if self._use_only_wrapper_mode() else self.config.topology.local_deep
         route_num_gpu = self._role_num_gpu("local_deep")
         model = route_model
         operator_message = OperatorMessage(
@@ -1608,17 +1629,30 @@ class PrimordialRuntime:
             error = None
         else:
             try:
-                response = self.ollama.generate(
-                    model=route_model,
-                    system=system,
-                    prompt=prompt,
-                    num_gpu=route_num_gpu,
-                )
-                assistant_body = response.text
+                if self._use_only_wrapper_mode():
+                    response_payload = self._wrapper_ai_generate(
+                        role="operator_chat",
+                        system=system,
+                        prompt=prompt,
+                        persist=False,
+                    )
+                    assistant_body = str(response_payload["text"])
+                    model = str(response_payload["model"])
+                    elapsed_seconds = response_payload.get("elapsed_seconds")
+                else:
+                    response = self.ollama.generate(
+                        model=route_model,
+                        system=system,
+                        prompt=prompt,
+                        num_gpu=route_num_gpu,
+                    )
+                    assistant_body = response.text
+                    model = route_model
+                    elapsed_seconds = response.elapsed_seconds
                 metadata = {
-                    "elapsed_seconds": response.elapsed_seconds,
+                    "elapsed_seconds": elapsed_seconds,
                     "ok": True,
-                    "mode": "local_model",
+                    "mode": "wrapper_only" if self._use_only_wrapper_mode() else "local_model",
                     "route_num_gpu": route_num_gpu,
                     "rag_context_ids": self._rag_context_ids(rag_context_for_answer),
                 }
@@ -1759,23 +1793,62 @@ class PrimordialRuntime:
         }
 
     def health_payload(self) -> dict[str, object]:
+        storage = self.storage_status_payload()
+        try:
+            operator_intent = self.active_operator_intent().id
+        except Exception:  # noqa: BLE001 - health should surface degraded storage instead of failing
+            operator_intent = "unknown"
         return {
-            "status": "ok",
+            "status": "ok" if storage.get("ok") else "degraded",
             "runtime_dir": str(self.config.runtime_dir),
-            "database": {
-                "driver": "postgres",
-                "url": self.config.redacted_database_url,
-                "schema": self.config.database_schema or "default",
-                "pgvector_required": True,
-            },
+            "database": storage["database"],
+            "storage": storage,
+            "recovery": dict(self._last_recovery_status),
             "autonomy_mode": self.config.autonomy.mode.value,
-            "operator_intent": self.active_operator_intent().id,
+            "operator_intent": operator_intent,
             "active_modules": self.modules.active_modules(),
-            "targets": len(self.store.list_targets()),
+            "targets": int(storage.get("counts", {}).get("targets", 0)) if isinstance(storage.get("counts"), dict) else 0,
             "skills": len(self.skills.list()),
             "findings_dir": str(self.config.findings_dir),
             "notion_exports_dir": str(self.config.notion_exports_dir),
         }
+
+    def storage_status_payload(self) -> dict[str, object]:
+        database = {
+            "driver": "postgres",
+            "url": self.config.redacted_database_url,
+            "schema": self.config.database_schema or "default",
+            "pgvector_required": True,
+        }
+        try:
+            with self.store.connect() as connection:
+                version_row = connection.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1").fetchone()
+                vector_row = connection.execute("SELECT extname FROM pg_extension WHERE extname = 'vector'").fetchone()
+                counts: dict[str, int] = {}
+                for table in ("targets", "scope_assets", "tasks", "task_runs", "evidence", "notes", "app_settings"):
+                    row = connection.execute(f"SELECT COUNT(*) AS count FROM {table}").fetchone()
+                    counts[table] = int(row["count"]) if row else 0
+            schema_version = int(version_row["version"]) if version_row else None
+            return {
+                "ok": schema_version == _SCHEMA_VERSION and bool(vector_row),
+                "database": database,
+                "schema_version": schema_version,
+                "expected_schema_version": _SCHEMA_VERSION,
+                "pgvector_installed": bool(vector_row),
+                "counts": counts,
+                "recovery": dict(self._last_recovery_status),
+            }
+        except Exception as exc:  # noqa: BLE001 - surfaced as operator diagnostics
+            return {
+                "ok": False,
+                "database": database,
+                "schema_version": None,
+                "expected_schema_version": _SCHEMA_VERSION,
+                "pgvector_installed": False,
+                "counts": {},
+                "error": str(exc),
+                "recovery": dict(self._last_recovery_status),
+            }
 
     def credentials_payload(self) -> dict[str, object]:
         return self.credentials.status()
@@ -1790,6 +1863,7 @@ class PrimordialRuntime:
                 "label": "Hack The Box",
                 "base_profile": ScopeProfile.HACK_THE_BOX.value,
                 "description": "Lab/CTF profile. Allows HTB-style workflows while still blocking DoS and unsafe primitives.",
+                "default_intent": "htb_lab",
                 "builtin": True,
             },
             {
@@ -1797,6 +1871,7 @@ class PrimordialRuntime:
                 "label": "HackerOne",
                 "base_profile": ScopeProfile.HACKERONE.value,
                 "description": "Bug bounty profile. Requires stricter scope and program-rule awareness.",
+                "default_intent": OperatorIntentRegistry.DEFAULT_INTENT_ID,
                 "builtin": True,
             },
         ]
@@ -2036,6 +2111,27 @@ class PrimordialRuntime:
             method = str(request_payload.get("method") or "HTTP").upper()
             path = str(request_payload.get("path") or "/")
             status = int(request_payload.get("status") or 0)
+            evidence_metadata = {
+                "kind": ArtifactKind.CAIDO_CAPTURE.value,
+                "caido_request_id": request_id,
+                "httpql": httpql,
+                "method": method,
+                "host": host,
+                "path": path,
+                "status_code": status,
+                "request_sha256": request_payload.get("request_sha256") or "",
+                "response_sha256": request_payload.get("response_sha256") or "",
+                "request_snippet": request_payload.get("request_snippet") or "",
+                "response_snippet": request_payload.get("response_snippet") or "",
+                "request_truncated": bool(request_payload.get("request_truncated")),
+                "response_truncated": bool(request_payload.get("response_truncated")),
+                "raw_bodies_stored": False,
+                "artifact_id": artifact.id,
+            }
+            if target_record.metadata.get("active_ip_generation") is not None:
+                evidence_metadata["active_ip_generation"] = target_record.metadata["active_ip_generation"]
+            if target_record.metadata.get("active_ip"):
+                evidence_metadata["active_ip"] = target_record.metadata["active_ip"]
             evidence = EvidenceRecord(
                 target_id=target_record.id,
                 type=EvidenceType.HTTP_REPLAY,
@@ -2046,23 +2142,7 @@ class PrimordialRuntime:
                 confidence=0.75,
                 freshness=0.85,
                 artifact_path=artifact.path,
-                metadata={
-                    "kind": ArtifactKind.CAIDO_CAPTURE.value,
-                    "caido_request_id": request_id,
-                    "httpql": httpql,
-                    "method": method,
-                    "host": host,
-                    "path": path,
-                    "status_code": status,
-                    "request_sha256": request_payload.get("request_sha256") or "",
-                    "response_sha256": request_payload.get("response_sha256") or "",
-                    "request_snippet": request_payload.get("request_snippet") or "",
-                    "response_snippet": request_payload.get("response_snippet") or "",
-                    "request_truncated": bool(request_payload.get("request_truncated")),
-                    "response_truncated": bool(request_payload.get("response_truncated")),
-                    "raw_bodies_stored": False,
-                    "artifact_id": artifact.id,
-                },
+                metadata=evidence_metadata,
             )
             self.store.insert_evidence(evidence)
             imported.append({"request_id": request_id, "evidence": evidence.as_payload(), "artifact": artifact.as_payload()})
@@ -2159,7 +2239,15 @@ class PrimordialRuntime:
         return result
 
     def models_payload(self) -> dict[str, object]:
-        installed = self.ollama.list_models()
+        wrapper_mode = self.model_wrapper_mode_payload()
+        if wrapper_mode["use_only_wrapper"]:
+            installed = OllamaModelListResult(
+                ok=False,
+                models=[],
+                error="Ollama model listing skipped because use-only-wrapper mode is active.",
+            )
+        else:
+            installed = self.ollama.list_models()
         selected = self._current_model_roles()
         processors = self._current_model_role_processors()
         role_metrics = self.store.latest_model_eval_role_metrics()
@@ -2182,6 +2270,7 @@ class PrimordialRuntime:
                     "default_processor": config["processor"],
                     "processor_options": ["gpu", "cpu"],
                     "metrics": role_metrics.get(role),
+                    "wrapper_personality": WRAPPER_ROLE_PERSONALITY_PROMPTS.get(role, ""),
                 }
             )
         return {
@@ -2189,7 +2278,9 @@ class PrimordialRuntime:
                 "ok": installed.ok,
                 "base_url": self.ollama.base_url,
                 "error": installed.error,
+                "disabled_by_wrapper_mode": bool(wrapper_mode["use_only_wrapper"]),
             },
+            "wrapper_mode": wrapper_mode,
             "available_models": available_models,
             "roles": roles,
             "role_metrics": role_metrics,
@@ -2200,10 +2291,18 @@ class PrimordialRuntime:
         self,
         selections: dict[str, str],
         processors: dict[str, str] | None = None,
+        wrapper_mode: dict[str, object] | None = None,
     ) -> dict[str, object]:
         current = self._current_model_roles()
         current_processors = self._current_model_role_processors()
-        installed = self.ollama.list_models()
+        current_wrapper_mode = self._current_model_wrapper_mode()
+        if wrapper_mode is not None:
+            current_wrapper_mode = self._normalize_model_wrapper_mode(wrapper_mode, current=current_wrapper_mode)
+        installed = (
+            OllamaModelListResult(ok=False, models=[], error="validation skipped in use-only-wrapper mode")
+            if current_wrapper_mode.get("use_only_wrapper")
+            else self.ollama.list_models()
+        )
         installed_models = set(installed.models)
         changed: dict[str, str] = {}
         for role, model in selections.items():
@@ -2212,7 +2311,7 @@ class PrimordialRuntime:
             selected = str(model).strip()
             if not selected:
                 continue
-            if installed.ok and selected not in installed_models:
+            if not current_wrapper_mode.get("use_only_wrapper") and installed.ok and selected not in installed_models:
                 raise ValueError(f"model is not installed in Ollama: {selected}")
             current[role] = selected
             changed[role] = selected
@@ -2227,12 +2326,19 @@ class PrimordialRuntime:
             processor_changes[role] = selected_processor
         self.store.set_setting("model_roles", current)
         self.store.set_setting("model_role_processors", current_processors)
+        self.store.set_setting(self.MODEL_WRAPPER_MODE_SETTING, current_wrapper_mode)
         self._apply_model_roles(current)
+        if current_wrapper_mode.get("use_only_wrapper"):
+            self._ensure_agent_chat_api_available()
         self.store.insert_event(
             EventRecord(
                 type=EventType.BOOTSTRAP,
                 summary="Model role mapping updated",
-                metadata={"changed": changed, "processor_changes": processor_changes},
+                metadata={
+                    "changed": changed,
+                    "processor_changes": processor_changes,
+                    "wrapper_mode": current_wrapper_mode,
+                },
             )
         )
         return self.models_payload()
@@ -2428,6 +2534,22 @@ class PrimordialRuntime:
         }
 
     def warm_model_routes(self, *, keep_alive: str = "8h") -> dict[str, object]:
+        if self._use_only_wrapper_mode():
+            result = {
+                "keep_alive": keep_alive,
+                "results": [],
+                "skipped": True,
+                "reason": "use-only-wrapper mode is active; Ollama warmup is bypassed",
+                "wrapper_mode": self.model_wrapper_mode_payload(),
+            }
+            self.store.insert_event(
+                EventRecord(
+                    type=EventType.BOOTSTRAP,
+                    summary="Model warmup skipped for use-only-wrapper mode",
+                    metadata=result,
+                )
+            )
+            return result
         route_models = {
             "local_fast": ("local_fast", self.config.topology.local_fast),
             "local_compact": ("local_compact", self.config.topology.local_compact),
@@ -2459,6 +2581,21 @@ class PrimordialRuntime:
         return {"keep_alive": keep_alive, "results": results}
 
     def clear_model_routes(self) -> dict[str, object]:
+        if self._use_only_wrapper_mode():
+            result = {
+                "results": [],
+                "skipped": True,
+                "reason": "use-only-wrapper mode is active; Ollama unload is bypassed",
+                "wrapper_mode": self.model_wrapper_mode_payload(),
+            }
+            self.store.insert_event(
+                EventRecord(
+                    type=EventType.BOOTSTRAP,
+                    summary="Model clear/unload skipped for use-only-wrapper mode",
+                    metadata=result,
+                )
+            )
+            return result
         route_models = {
             "local_fast": ("local_fast", self.config.topology.local_fast),
             "local_compact": ("local_compact", self.config.topology.local_compact),
@@ -2506,6 +2643,181 @@ class PrimordialRuntime:
         )
         return {"paused_sessions": paused, "execution_mode": self.execution_mode_payload()}
 
+    def model_wrapper_mode_payload(self) -> dict[str, object]:
+        mode = self._current_model_wrapper_mode()
+        provider = str(mode.get("provider") or self.config.agent_chat_provider or "claude")
+        model = mode.get("model")
+        return {
+            "use_only_wrapper": bool(mode.get("use_only_wrapper")),
+            "local_chat_wrapper": "agent_chat_api",
+            "provider": provider,
+            "model": str(model) if model else None,
+            "model_label": self._wrapper_model_label(),
+            "api": self.agent_chat_status_payload(timeout_seconds=0.5),
+            "safe_guard": self.config.agent_chat_safe_guard,
+            "personality_prompts": dict(WRAPPER_ROLE_PERSONALITY_PROMPTS),
+            "detail": (
+                "All runtime AI generation uses agent_chat_api role wrappers; direct Ollama generate, "
+                "warmup, unload, and startup topology validation are bypassed."
+                if mode.get("use_only_wrapper")
+                else "Runtime AI generation uses local model routes unless an explicit premium wrapper task is created."
+            ),
+        }
+
+    def _current_model_wrapper_mode(self) -> dict[str, object]:
+        stored = self.store.get_setting(self.MODEL_WRAPPER_MODE_SETTING, {})
+        default = {
+            "use_only_wrapper": bool(self.config.use_only_wrapper_mode),
+            "provider": self.config.agent_chat_provider,
+            "model": self.config.agent_chat_model,
+        }
+        if isinstance(stored, dict):
+            mode = self._normalize_model_wrapper_mode(stored, current=default)
+            if self.config.use_only_wrapper_mode:
+                mode["use_only_wrapper"] = True
+            return mode
+        return default
+
+    def _normalize_model_wrapper_mode(
+        self,
+        payload: dict[str, object],
+        *,
+        current: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        normalized = dict(
+            current
+            or {
+                "use_only_wrapper": bool(self.config.use_only_wrapper_mode),
+                "provider": self.config.agent_chat_provider,
+                "model": self.config.agent_chat_model,
+            }
+        )
+        if "use_only_wrapper" in payload:
+            normalized["use_only_wrapper"] = self._coerce_bool(payload.get("use_only_wrapper"))
+        if "provider" in payload:
+            provider = str(payload.get("provider") or "").strip().lower()
+            if provider:
+                normalized["provider"] = provider
+        if "model" in payload:
+            raw_model = payload.get("model")
+            model = str(raw_model).strip() if raw_model is not None else ""
+            normalized["model"] = model or None
+        return normalized
+
+    def _coerce_bool(self, value: object) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, int | float):
+            return bool(value)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on", "enabled"}
+        return bool(value)
+
+    def _use_only_wrapper_mode(self) -> bool:
+        return bool(self._current_model_wrapper_mode().get("use_only_wrapper"))
+
+    def _wrapper_model_label(self) -> str:
+        mode = self._current_model_wrapper_mode()
+        provider = str(mode.get("provider") or self.config.agent_chat_provider or "claude")
+        model = mode.get("model") or self.config.agent_chat_model or "provider-default"
+        return f"agent_chat_api:{provider}:{model}"
+
+    def agent_chat_status_payload(self, *, timeout_seconds: int | float = 1) -> dict[str, object]:
+        base = {
+            "ok": False,
+            "base_url": self.config.agent_chat_base_url,
+            "provider": self.config.agent_chat_provider,
+            "model": self.config.agent_chat_model,
+            "auto_start": self.config.agent_chat_auto_start,
+        }
+        try:
+            health = self.agent_chat.health(timeout_seconds=timeout_seconds)
+        except Exception as exc:  # noqa: BLE001 - surfaced as health/status, not a traceback
+            return {**base, "error": str(exc)}
+        return {
+            **base,
+            "ok": bool(health.get("ok", True)),
+            "health": health,
+            "workspace_root": str(health.get("workspace_root") or ""),
+            "default_provider": str(health.get("default_provider") or ""),
+        }
+
+    def _ensure_agent_chat_api_available(self) -> dict[str, object]:
+        if not isinstance(self.agent_chat, AgentChatClient):
+            return {"ok": True, "injected_client": type(self.agent_chat).__name__}
+        status = self.agent_chat_status_payload(timeout_seconds=0.5)
+        if status.get("ok"):
+            return status
+        if not self.config.agent_chat_auto_start:
+            return status
+        started = self._start_local_agent_chat_api()
+        status = self.agent_chat_status_payload(timeout_seconds=2)
+        return {**status, "auto_start_attempt": started}
+
+    def _start_local_agent_chat_api(self) -> dict[str, object]:
+        parsed = urlparse.urlsplit(self.config.agent_chat_base_url)
+        host = parsed.hostname or "127.0.0.1"
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        if parsed.scheme not in {"http", ""}:
+            return {"started": False, "reason": "only local http agent_chat_api can be auto-started"}
+        if host not in {"127.0.0.1", "localhost", "::1"}:
+            return {"started": False, "reason": "agent_chat_api base_url is not local"}
+        script = self.config.project_root / "agent_chat_api" / "app.py"
+        if not script.exists():
+            return {"started": False, "reason": f"agent_chat_api launcher not found: {script}"}
+        process_dir = self.config.runtime_dir / "agent_chat_api"
+        process_dir.mkdir(parents=True, exist_ok=True)
+        log_path = process_dir / "agent_chat_api.log"
+        env = os.environ.copy()
+        env.setdefault("CHAT_API_HOST", host)
+        env.setdefault("CHAT_API_PORT", str(port))
+        env.setdefault("CHAT_API_WORKSPACE_ROOT", str(script.parent))
+        env.setdefault("CHAT_API_SESSION_STORE", str(process_dir / "sessions.json"))
+        env.setdefault("CHAT_API_AUDIT_LOG", str(process_dir / "provider-audit.jsonl"))
+        if self.config.agent_chat_api_key:
+            env.setdefault("CHAT_API_KEY", self.config.agent_chat_api_key)
+        if self.config.agent_chat_provider:
+            env.setdefault("CHAT_API_DEFAULT_PROVIDER", self.config.agent_chat_provider)
+        command = [
+            sys.executable or shutil.which("python3") or "python3",
+            str(script),
+            "--host",
+            host,
+            "--port",
+            str(port),
+            "--workspace-root",
+            str(script.parent),
+        ]
+        try:
+            with log_path.open("ab") as handle:
+                process = subprocess.Popen(
+                    command,
+                    cwd=str(script.parent),
+                    env=env,
+                    stdout=handle,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+        except OSError as exc:
+            return {"started": False, "reason": str(exc), "command": command}
+        self.store.set_setting(
+            self.AGENT_CHAT_PROCESS_SETTING,
+            {
+                "pid": process.pid,
+                "base_url": self.config.agent_chat_base_url,
+                "log_path": str(log_path),
+                "started_at": utc_now().isoformat(),
+            },
+        )
+        self.store.insert_event(
+            EventRecord(
+                type=EventType.BOOTSTRAP,
+                summary="agent_chat_api auto-start requested",
+                metadata={"pid": process.pid, "base_url": self.config.agent_chat_base_url, "log_path": str(log_path)},
+            )
+        )
+        return {"started": True, "pid": process.pid, "log_path": str(log_path), "command": command}
+
     def _current_model_roles(self) -> dict[str, str]:
         stored = self.store.get_setting("model_roles", {})
         roles = {
@@ -2551,10 +2863,33 @@ class PrimordialRuntime:
         prompt: str,
         temperature: float = 0.0,
     ) -> dict[str, object] | None:
+        selection = self.router.select_route(task)
+        route = task.provider_route or selection.route
+        role = self._model_role_for_route(route) or "local_fast"
+        if self._use_only_wrapper_mode():
+            try:
+                return self._wrapper_ai_generate(
+                    role=role,
+                    system=system,
+                    prompt=prompt,
+                    task=task,
+                    temperature=temperature,
+                    persist=False,
+                )
+            except Exception as exc:  # noqa: BLE001 - wrapper AI is opportunistic and must not stall autonomy
+                self.store.insert_event(
+                    EventRecord(
+                        type=EventType.TASK_FAILED,
+                        summary="Worker wrapper AI generation unavailable",
+                        target_id=task.target_id,
+                        task_id=task.id,
+                        metadata={"error": str(exc), "model": self._wrapper_model_label(), "wrapper_mode": True},
+                    )
+                )
+                return None
         if not self.ollama.is_reachable(timeout_seconds=1.5):
             return None
-        model = task.provider_model or self.router.select_route(task).model_name
-        role = self._model_role_for_route(task.provider_route)
+        model = task.provider_model or selection.model_name
         processor = self._current_model_role_processors().get(role or "", "gpu") if role else "gpu"
         num_gpu = self._role_num_gpu(role) if role else None
         try:
@@ -2588,6 +2923,51 @@ class PrimordialRuntime:
             "completion_tokens": response.completion_tokens,
         }
 
+    def _wrapper_ai_generate(
+        self,
+        *,
+        role: str,
+        system: str,
+        prompt: str,
+        task: Task | None = None,
+        temperature: float = 0.0,
+        persist: bool = False,
+    ) -> dict[str, object]:
+        mode = self._current_model_wrapper_mode()
+        provider = str(mode.get("provider") or self.config.agent_chat_provider or "claude")
+        selected_model = mode.get("model") or self.config.agent_chat_model
+        status = self._ensure_agent_chat_api_available()
+        if not status.get("ok"):
+            raise RuntimeError(
+                "wrapper-only mode is active but agent_chat_api is not reachable. "
+                f"base_url={self.config.agent_chat_base_url}; error={status.get('error') or status.get('reason') or status}"
+            )
+        system_prompt = build_wrapper_system_prompt(role, system)
+        response = self.agent_chat.chat(
+            system_prompt=system_prompt,
+            prompt=prompt,
+            provider=provider,
+            model=str(selected_model) if selected_model else None,
+            conversation_id=f"primordial:{task.id}:wrapper:{role}" if task else None,
+            persist=persist,
+        )
+        return {
+            "model": response.model or f"agent_chat_api:{response.provider}:provider-default",
+            "text": response.text,
+            "elapsed_seconds": response.elapsed_seconds,
+            "provider": response.provider,
+            "request_id": response.request_id,
+            "conversation_id": response.conversation_id,
+            "session_resumed": response.session_resumed,
+            "processor": "wrapper",
+            "adapter": "agent_chat_api",
+            "wrapper_mode": "use_only_wrapper",
+            "wrapper_role": role,
+            "temperature": temperature,
+            "prompt_tokens": response.prompt_tokens,
+            "completion_tokens": response.completion_tokens,
+        }
+
     def _operator_state_ai_review(
         self,
         *,
@@ -2617,16 +2997,32 @@ class PrimordialRuntime:
         if time.monotonic() - _wall_start >= max_wall_seconds:
             return None
         try:
-            processor = "cpu" if route_num_gpu == 0 else "gpu"
-            response = self.ollama.generate(
-                model=route_model,
-                system=system,
-                prompt=prompt,
-                temperature=0.0,
-                num_gpu=route_num_gpu,
-                keep_alive="2h",
-                timeout_seconds=self._ollama_timeout_seconds_for_processor(processor),
-            )
+            if self._use_only_wrapper_mode():
+                response_payload = self._wrapper_ai_generate(
+                    role="local_deep",
+                    system=system,
+                    prompt=prompt,
+                    persist=False,
+                )
+                text = str(response_payload.get("text") or "").strip()
+                elapsed = response_payload.get("elapsed_seconds")
+                model = str(response_payload.get("model") or self._wrapper_model_label())
+            else:
+                processor = "cpu" if route_num_gpu == 0 else "gpu"
+                response = self.ollama.generate(
+                    model=route_model,
+                    system=system,
+                    prompt=prompt,
+                    temperature=0.0,
+                    num_gpu=route_num_gpu,
+                    keep_alive="2h",
+                    timeout_seconds=self._ollama_timeout_seconds_for_processor(processor),
+                )
+                if not isinstance(response.text, str):
+                    return None
+                text = response.text.strip()
+                elapsed = response.elapsed_seconds if isinstance(response.elapsed_seconds, int | float) else None
+                model = str(response.model)
         except Exception as exc:  # noqa: BLE001 - deterministic state remains available when local review fails
             self.store.insert_event(
                 EventRecord(
@@ -2637,13 +3033,9 @@ class PrimordialRuntime:
                 )
             )
             return None
-        if not isinstance(response.text, str):
-            return None
-        text = response.text.strip()
         if not text or self._operator_answer_violates_contract(text):
             return None
-        elapsed = response.elapsed_seconds if isinstance(response.elapsed_seconds, int | float) else None
-        return {"model": str(response.model), "text": text, "elapsed_seconds": elapsed}
+        return {"model": model, "text": text, "elapsed_seconds": elapsed}
 
     def _model_role_for_route(self, route: ProviderRoute | None) -> str | None:
         if route == ProviderRoute.LOCAL_FAST:
@@ -4050,6 +4442,15 @@ class PrimordialRuntime:
 
     def _validate_topology_models(self) -> None:
         """Check that configured topology model names exist in Ollama; emit warnings for missing models."""
+        if self._use_only_wrapper_mode():
+            self.store.insert_event(
+                EventRecord(
+                    type=EventType.BOOTSTRAP,
+                    summary="Topology model validation skipped for use-only-wrapper mode",
+                    metadata={"wrapper_mode": self.model_wrapper_mode_payload()},
+                )
+            )
+            return
         import logging
         result = self.ollama.list_models()
         if not result.ok:
@@ -4469,6 +4870,38 @@ class PrimordialRuntime:
                 for line in lines
             ],
         }
+
+    def _default_operator_intent_for_profile(self, profile: ScopeProfile) -> str:
+        if profile == ScopeProfile.HACK_THE_BOX:
+            return "htb_lab"
+        return OperatorIntentRegistry.DEFAULT_INTENT_ID
+
+    def _ensure_profile_default_operator_intent(self, profile: ScopeProfile) -> None:
+        default_intent = self._default_operator_intent_for_profile(profile)
+        if default_intent == OperatorIntentRegistry.DEFAULT_INTENT_ID:
+            return
+        self._load_operator_intents()
+        try:
+            intent = self.operator_intents.get(default_intent)
+        except KeyError:
+            return
+        session = self.store.get_active_session()
+        if session is None:
+            self.start_session(profile=profile)
+            return
+        current_intent = str(session.metadata.get("operator_intent_id") or OperatorIntentRegistry.DEFAULT_INTENT_ID)
+        if current_intent != OperatorIntentRegistry.DEFAULT_INTENT_ID:
+            return
+        session.metadata["operator_intent_id"] = intent.id
+        session.updated_at = utc_now()
+        self.store.insert_session(session)
+        self.store.insert_event(
+            EventRecord(
+                type=EventType.BOOTSTRAP,
+                summary=f"Operator intent defaulted for {profile.value} scope: {intent.id}",
+                metadata={"operator_intent": intent.as_payload(), "profile": profile.value, "session_id": session.id},
+            )
+        )
 
     def _normalize_scope_profile_id(self, value: str) -> str:
         normalized = re.sub(r"[^a-z0-9_]+", "_", str(value).strip().lower())

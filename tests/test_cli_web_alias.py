@@ -20,6 +20,19 @@ class _DummyRuntime:
         self.shutdown_called = True
 
 
+class _DummyResponse:
+    status = 200
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+    def read(self) -> bytes:
+        return b'{"ok": true}'
+
+
 class CliWebAliasTests(unittest.TestCase):
     def test_gui_command_launches_web_console(self) -> None:
         runtime = _DummyRuntime()
@@ -41,3 +54,13 @@ class CliWebAliasTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         from_env.assert_not_called()
+
+    def test_stop_server_command_runs_without_runtime_startup(self) -> None:
+        with patch("primordial.cli.urlrequest.urlopen", return_value=_DummyResponse()) as urlopen, patch(
+            "primordial.cli.PrimordialRuntime.from_env"
+        ) as from_env, redirect_stdout(io.StringIO()):
+            result = cli.main(["stop-server", "--host", "127.0.0.1", "--port", "17777"])
+
+        self.assertEqual(result, 0)
+        from_env.assert_not_called()
+        self.assertIn("/api/server/stop", urlopen.call_args.args[0].full_url)

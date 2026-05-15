@@ -126,10 +126,27 @@ function CaidoMode() {
   }, [D]);
 
   useEffectCA(() => {
-    API.request('/api/integrations/caido?check_health=1')
-      .then(payload => setConnection(payload || {}))
-      .catch(err => setConnection(prev => ({ ...prev, ok: false, error: err.message || String(err) })));
+    refreshConnection();
   }, []);
+
+  async function refreshConnection() {
+    setBusy('health');
+    try {
+      const payload = API.refreshCaido
+        ? await API.refreshCaido({ checkHealth: true })
+        : await API.request('/api/integrations/caido?check_health=1');
+      setConnection(payload || {});
+      if (payload?.error && !payload?.ok) setError(payload.error);
+      return payload;
+    } catch (err) {
+      const message = err.message || String(err);
+      setConnection(prev => ({ ...prev, ok: false, checked: true, error: message }));
+      setError(message);
+      return null;
+    } finally {
+      setBusy('');
+    }
+  }
 
   const selectedRows = useMemoCA(
     () => results.filter(r => checkedIds.includes(r.id)),
@@ -309,6 +326,9 @@ function CaidoMode() {
             <div className="dim mono" style={{ fontSize: 10 }}>
               schema {schemaLabel} | replay {replayLabel}
             </div>
+            <button className="btn ghost sm" onClick={refreshConnection} disabled={busy === 'health'}>
+              HEALTH CHECK
+            </button>
           </div>
 
           <div style={{ padding: 10, borderBottom: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: 8 }}>

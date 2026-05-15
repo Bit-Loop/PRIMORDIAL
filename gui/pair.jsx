@@ -3,6 +3,51 @@ const { useState: useStateP, useRef: useRefP, useEffect: useEffectP } = React;
 
 const PHASE_TONE = { active: 'cyan', locked: 'gray', done: 'green', partial: 'yellow' };
 const PIN_COLOR = { evidence: 'var(--green)', interest: 'var(--yellow)', artifact: 'var(--violet)', guidance: 'var(--blue)' };
+const INTENT_FLAG_KEYS = [
+  'public_poc_research',
+  'searchsploit_allowed',
+  'read_poc_examples',
+  'poc_applicability_validation',
+  'exploit_code_generation',
+  'poc_execution',
+  'credential_validation',
+  'credential_guessing',
+  'credential_spraying',
+  'hash_cracking',
+  'kerberos_asrep_roast',
+  'kerberos_kerberoast',
+  'lab_flag_collection',
+  'htb_lab_behavior',
+  'reverse_shell',
+];
+
+function intentFlagsFromPolicy(policy = {}) {
+  const kerberos = policy.kerberos_policy || {};
+  const credential = policy.credential_policy || {};
+  const lab = policy.lab_policy || {};
+  const flat = {
+    public_poc_research: !!policy.public_poc_research,
+    searchsploit_allowed: !!policy.searchsploit_allowed,
+    read_poc_examples: !!policy.read_poc_examples,
+    poc_applicability_validation: !!policy.poc_applicability_validation,
+    exploit_code_generation: !!policy.exploit_code_generation,
+    poc_execution: !!policy.poc_execution,
+    credential_validation: !!(policy.credential_validation ?? credential.credential_validation_allowed),
+    credential_guessing: !!(policy.credential_guessing ?? credential.credential_guessing_allowed),
+    credential_spraying: !!(policy.credential_spraying ?? credential.credential_spraying_allowed),
+    hash_cracking: !!(policy.hash_cracking ?? credential.hash_cracking_allowed),
+    kerberos_asrep_roast: !!(policy.kerberos_asrep_roast ?? kerberos.asrep_roast_check_allowed),
+    kerberos_kerberoast: !!(policy.kerberos_kerberoast ?? kerberos.kerberoast_check_allowed),
+    lab_flag_collection: !!(policy.lab_flag_collection ?? lab.lab_flag_collection_allowed),
+    htb_lab_behavior: !!(policy.htb_lab_behavior ?? lab.htb_lab_behavior_allowed),
+    reverse_shell: !!(policy.reverse_shell ?? lab.reverse_shell_allowed),
+  };
+  return INTENT_FLAG_KEYS.reduce((acc, key) => ({ ...acc, [key]: !!flat[key] }), {});
+}
+
+function nonEmptyObject(value) {
+  return value && typeof value === 'object' && Object.keys(value).length > 0;
+}
 
 function FormattedPairText({ text }) {
   const parts = String(text ?? '').split(/(\*\*[^*]+\*\*|`[^`]+`|\n|→)/g).filter(part => part !== '');
@@ -92,13 +137,12 @@ function ThinkCard({ ct, onResolve }) {
   );
 }
 
-function FlagToggle({ k, v }) {
-  const [on, setOn] = useStateP(v);
-  const enabled = on;
+function FlagToggle({ k, v, onChange }) {
+  const on = !!v;
   return (
     <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', padding: '3px 0' }}>
       <div
-        onClick={() => setOn(x => !x)}
+        onClick={() => onChange?.(!on)}
         style={{
           width: 28, height: 14, borderRadius: 999,
           background: on ? 'var(--cyan-soft)' : 'var(--elev-1)',
@@ -199,12 +243,34 @@ function PlanMode() {
   const API = window.PD_API || {};
   const root = window.PD_DATA || {};
   const targetLabel = root.traceMeta?.selectedTarget || root.scope?.[0]?.handle || 'All targets';
+  const activeIntent = root.runtime?.operatorIntent?.active || {};
+  const sourceIntentPolicy = nonEmptyObject(D.intent?.flags)
+    ? D.intent.flags
+    : nonEmptyObject(D.intent?.policy)
+      ? D.intent.policy
+      : activeIntent.policy || {};
+  const sourceIntentFlags = intentFlagsFromPolicy(sourceIntentPolicy);
+  const sourceIntentSignature = JSON.stringify(sourceIntentFlags);
   const [pinned, setPinned] = useStateP(D.pinnedAssets);
   const [thinks, setThinks] = useStateP(D.criticalThinking);
   const [sub, setSub] = useStateP('workspace');
+  const [intentFlags, setIntentFlags] = useStateP(sourceIntentFlags);
+  const [intentDraftDirty, setIntentDraftDirty] = useStateP(false);
 
   const resolveThink = (id) => setThinks(ts => ts.map(t => t.id === id ? { ...t, status: 'resolved' } : t));
   const unpin = (id) => setPinned(ps => ps.filter(p => p.id !== id));
+  const updateIntentFlag = (key, value) => {
+    setIntentDraftDirty(true);
+    setIntentFlags(flags => ({ ...flags, [key]: !!value }));
+  };
+  const resetIntentDraft = () => {
+    setIntentFlags(sourceIntentFlags);
+    setIntentDraftDirty(false);
+  };
+
+  useEffectP(() => {
+    if (!intentDraftDirty) setIntentFlags(sourceIntentFlags);
+  }, [sourceIntentSignature, D.intent?.id, activeIntent.id, intentDraftDirty]);
 
   const openCount = thinks.filter(t => t.status === 'open').length;
 
@@ -369,17 +435,24 @@ function PlanMode() {
         {/* ---- INTENT FLAGS ---- */}
         {sub === 'intent' && (
           <div style={{ flex: 1, overflow: 'auto', padding: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, fontFamily: 'var(--mono)', fontSize: 11 }}>
+              <Pill tone={D.intent?.id === 'htb_lab' ? 'green' : 'cyan'}>{(D.intent?.id || 'recon_only').toUpperCase()}</Pill>
+              <span className="dim">{D.intent?.label || activeIntent.label || 'Operator Intent'}</span>
+              {intentDraftDirty && <Pill tone="yellow">DRAFT</Pill>}
+              <div style={{ flex: 1 }} />
+              <button className="btn ghost sm" onClick={resetIntentDraft} disabled={!intentDraftDirty}>RESET</button>
+            </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
               {[
                 { group: 'Recon & Research', flags: ['public_poc_research','searchsploit_allowed','read_poc_examples','poc_applicability_validation'] },
                 { group: 'Exploitation', flags: ['exploit_code_generation','poc_execution','credential_validation','credential_guessing','credential_spraying','hash_cracking'] },
                 { group: 'Active Directory', flags: ['kerberos_asrep_roast','kerberos_kerberoast'] },
-                { group: 'HTB Specific', flags: ['lab_flag_collection','htb_lab_behavior'] },
+                { group: 'HTB Specific', flags: ['lab_flag_collection','htb_lab_behavior','reverse_shell'] },
               ].map(grp => (
                 <div key={grp.group} style={{ padding: '10px 12px', border: '1px solid var(--line)', borderRadius: 'var(--r-2)', background: 'var(--bg-deep)' }}>
                   <div className="upper" style={{ color: 'var(--txt-mute)', marginBottom: 8 }}>{grp.group}</div>
                   {grp.flags.map(k => (
-                    <FlagToggle key={k} k={k} v={!!D.intent.flags[k]} />
+                    <FlagToggle key={k} k={k} v={!!intentFlags[k]} onChange={value => updateIntentFlag(k, value)} />
                   ))}
                 </div>
               ))}

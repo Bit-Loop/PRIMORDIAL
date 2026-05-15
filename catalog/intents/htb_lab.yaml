@@ -13,9 +13,9 @@ policy:
     kerberoast_check_allowed: true
   credential_policy:
     credential_validation_allowed: true
-    credential_guessing_allowed: false
-    credential_spraying_allowed: false
-    hash_cracking_allowed: false
+    credential_guessing_allowed: true
+    credential_spraying_allowed: true
+    hash_cracking_allowed: true
   lab_policy:
     lab_flag_collection_allowed: true
     htb_lab_behavior_allowed: true

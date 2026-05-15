@@ -69,8 +69,8 @@ class AgentChatClient:
     def __init__(self, settings: AgentChatSettings) -> None:
         self.settings = settings
 
-    def health(self) -> dict[str, Any]:
-        payload = self._json_request("GET", "/health", timeout_seconds=5)
+    def health(self, timeout_seconds: int | float = 5) -> dict[str, Any]:
+        payload = self._json_request("GET", "/health", timeout_seconds=timeout_seconds)
         if not isinstance(payload, dict):
             raise AgentChatError("agent chat health response was not an object")
         return payload
@@ -157,7 +157,7 @@ class AgentChatClient:
             headers["Authorization"] = f"Bearer {self.settings.api_key}"
         req = request.Request(url, data=body, headers=headers, method=method)
         try:
-            timeout = max(1, timeout_seconds if timeout_seconds is not None else self.settings.timeout_seconds)
+            timeout = max(0.1, float(timeout_seconds if timeout_seconds is not None else self.settings.timeout_seconds))
             with request.urlopen(req, timeout=timeout) as resp:
                 raw = resp.read().decode("utf-8", errors="replace")
         except error.HTTPError as exc:

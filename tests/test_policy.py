@@ -20,6 +20,19 @@ from primordial.core.orchestration.policy import PolicyEngine
 
 
 class PolicyEngineTests(unittest.TestCase):
+    def _agent_safety_approval(self) -> dict[str, object]:
+        return {
+            "reviewer_agent": "behavior_verifier",
+            "approved": True,
+            "scope_verified": True,
+            "bounded_execution": True,
+            "dos_risk": False,
+            "ddos_risk": False,
+            "timeout_seconds": 10,
+            "max_requests": 3,
+            "evidence_refs": ["ev-1"],
+        }
+
     def test_exploitation_requires_approval_in_assisted_mode(self) -> None:
         engine = PolicyEngine(
             AutonomySettings(
@@ -177,7 +190,7 @@ class PolicyEngineTests(unittest.TestCase):
         self.assertEqual(decision.verdict, PolicyVerdict.NEEDS_APPROVAL)
         self.assertIn("missing agent safety approval", decision.reason)
 
-    def test_htb_poc_task_can_use_agent_safety_review_when_enabled(self) -> None:
+    def test_supervised_auto_agent_safety_review_still_needs_operator_approval(self) -> None:
         engine = PolicyEngine(
             AutonomySettings(
                 mode=AutonomyMode.SUPERVISED_AUTO,
@@ -194,25 +207,81 @@ class PolicyEngineTests(unittest.TestCase):
             role=AgentRole.EXPLOITATION_WORKER,
             evidence_refs=["ev-1"],
             risk_tier=RiskTier.HIGH,
-            metadata={
-                "agent_safety_approval": {
-                    "reviewer_agent": "behavior_verifier",
-                    "approved": True,
-                    "scope_verified": True,
-                    "bounded_execution": True,
-                    "dos_risk": False,
-                    "ddos_risk": False,
-                    "timeout_seconds": 10,
-                    "max_requests": 3,
-                    "evidence_refs": ["ev-1"],
-                }
-            },
+            metadata={"agent_safety_approval": self._agent_safety_approval()},
+        )
+
+        decision = engine.evaluate_task(task, target)
+
+        self.assertEqual(decision.verdict, PolicyVerdict.NEEDS_APPROVAL)
+        self.assertTrue(decision.metadata["operator_approval_required"])
+
+        task.metadata["operator_approved"] = True
+        approved = engine.evaluate_task(task, target)
+
+        self.assertEqual(approved.verdict, PolicyVerdict.ALLOW)
+        self.assertEqual(approved.metadata["approval_source"], "behavior_verifier")
+
+    def test_high_autonomy_can_use_agent_safety_review_when_enabled(self) -> None:
+        engine = PolicyEngine(
+            AutonomySettings(
+                mode=AutonomyMode.HIGH_AUTONOMY,
+                allow_exploitative_actions=True,
+            )
+        )
+        target = Target(handle="pirate.htb", display_name="Pirate", profile=ScopeProfile.HACK_THE_BOX)
+        task = Task(
+            target_id=target.id,
+            phase=MethodologyPhase.EXPLOITATION,
+            kind=TaskKind.VERIFY_HYPOTHESIS,
+            title="Run bounded PoC",
+            summary="Execute a version-matched proof of concept.",
+            role=AgentRole.EXPLOITATION_WORKER,
+            evidence_refs=["ev-1"],
+            risk_tier=RiskTier.HIGH,
+            metadata={"agent_safety_approval": self._agent_safety_approval()},
         )
 
         decision = engine.evaluate_task(task, target)
 
         self.assertEqual(decision.verdict, PolicyVerdict.ALLOW)
         self.assertEqual(decision.metadata["approval_source"], "behavior_verifier")
+
+    def test_out_of_scope_task_is_denied(self) -> None:
+        engine = PolicyEngine(AutonomySettings(mode=AutonomyMode.SUPERVISED_AUTO, allow_exploitative_actions=True))
+        target = Target(handle="pirate.htb", display_name="Pirate", profile=ScopeProfile.HACK_THE_BOX, in_scope=False)
+        task = Task(
+            target_id=target.id,
+            phase=MethodologyPhase.RECON,
+            kind=TaskKind.RECON_SCAN,
+            title="Run recon",
+            summary="Out of scope fixture.",
+            role=AgentRole.RECON_WORKER,
+            risk_tier=RiskTier.LOW,
+        )
+
+        decision = engine.evaluate_task(task, target)
+
+        self.assertEqual(decision.verdict, PolicyVerdict.DENY)
+        self.assertIn("out of scope", decision.reason)
+
+    def test_high_risk_task_bounds_violation_needs_approval(self) -> None:
+        engine = PolicyEngine(AutonomySettings(mode=AutonomyMode.SUPERVISED_AUTO, allow_exploitative_actions=True))
+        target = Target(handle="pirate.htb", display_name="Pirate", profile=ScopeProfile.HACK_THE_BOX)
+        task = Task(
+            target_id=target.id,
+            phase=MethodologyPhase.EXPLOITATION,
+            kind=TaskKind.VERIFY_HYPOTHESIS,
+            title="Run long verification",
+            summary="Bounds should gate this task.",
+            role=AgentRole.EXPLOITATION_WORKER,
+            risk_tier=RiskTier.HIGH,
+            metadata={"timeout_seconds": 300, "max_requests": 3},
+        )
+
+        decision = engine.evaluate_task(task, target)
+
+        self.assertEqual(decision.verdict, PolicyVerdict.NEEDS_APPROVAL)
+        self.assertIn("timeout ceiling", decision.reason)
 
     def test_secret_bearing_primitive_needs_gate_when_credentials_are_missing(self) -> None:
         engine = PolicyEngine(

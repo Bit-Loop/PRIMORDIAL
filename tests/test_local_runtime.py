@@ -53,6 +53,21 @@ class LocalRuntimeEnvTests(unittest.TestCase):
 
                 self.assertEqual(config.database_url, "postgresql://primordial@127.0.0.1:55432/primordial")
 
+    def test_app_config_enables_use_only_wrapper_mode_from_env(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            with patch.dict(
+                os.environ,
+                {
+                    "PRIMORDIAL_DATABASE_URL": "postgresql://primordial@127.0.0.1:55432/primordial",
+                    "PRIMORDIAL_USE_ONLY_WRAPPER_MODE": "1",
+                },
+                clear=True,
+            ):
+                config = AppConfig.from_env(project_root=root)
+
+        self.assertTrue(config.use_only_wrapper_mode)
+
     def test_bootstrap_postgres_auto_start_is_limited_to_bootstrap_port(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

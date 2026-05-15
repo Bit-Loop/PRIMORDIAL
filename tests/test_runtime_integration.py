@@ -21,6 +21,7 @@ from primordial.core.domain.enums import (
 )
 from primordial.core.domain.models import EvidenceRecord, Task
 from primordial.core.domain.models import TaskRun
+from primordial.core.providers.agent_chat import AgentChatResponse
 from primordial.core.providers.ollama import OllamaModelListResult
 from primordial.runtime import PrimordialRuntime
 from tests.support import build_probe_fixture, write_scope_file
@@ -30,6 +31,117 @@ MANIFESTS_DIR = Path(__file__).resolve().parents[1] / "manifests"
 
 
 class RuntimeIntegrationTests(unittest.TestCase):
+    def test_wrapper_only_mode_skips_ollama_model_listing_and_reports_prompts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = AppConfig.from_env(project_root=root)
+            config.manifests_dir = MANIFESTS_DIR
+            config.use_only_wrapper_mode = True
+            config.ensure_directories()
+
+            with patch("primordial.core.providers.ollama.OllamaClient.list_models") as list_models:
+                runtime = PrimordialRuntime(config)
+                runtime.initialize()
+                runtime.store.set_setting(runtime.MODEL_WRAPPER_MODE_SETTING, {"use_only_wrapper": False})
+                payload = runtime.models_payload()
+            try:
+                list_models.assert_not_called()
+                self.assertTrue(payload["wrapper_mode"]["use_only_wrapper"])
+                self.assertTrue(payload["ollama"]["disabled_by_wrapper_mode"])
+                self.assertIn("local_deep", payload["wrapper_mode"]["personality_prompts"])
+            finally:
+                runtime.shutdown()
+
+    def test_wrapper_only_worker_ai_uses_role_personality_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = AppConfig.from_env(project_root=root)
+            config.manifests_dir = MANIFESTS_DIR
+            config.use_only_wrapper_mode = True
+            config.ensure_directories()
+            runtime = PrimordialRuntime(config)
+            runtime.initialize()
+
+            class FakeAgentChat:
+                def __init__(self) -> None:
+                    self.calls: list[dict[str, object]] = []
+
+                def chat(self, **kwargs: object) -> AgentChatResponse:
+                    self.calls.append(kwargs)
+                    return AgentChatResponse(
+                        provider="claude",
+                        model="claude-sonnet-4",
+                        text='{"summary":"ok"}',
+                        exit_code=0,
+                        elapsed_seconds=0.1,
+                        request_id="req-wrapper",
+                    )
+
+            fake = FakeAgentChat()
+            runtime.agent_chat = fake  # type: ignore[assignment]
+            task = Task(
+                target_id=None,
+                phase=MethodologyPhase.RECON,
+                kind=TaskKind.RECON_SCAN,
+                title="Probe",
+                summary="Probe safely.",
+                role=AgentRole.RECON_WORKER,
+                provider_route=None,
+            )
+
+            with patch.object(runtime.ollama, "is_reachable") as is_reachable:
+                response = runtime._worker_ai_generate(task, "Base system", "Prompt body")
+
+            try:
+                is_reachable.assert_not_called()
+                self.assertIsNotNone(response)
+                assert response is not None
+                self.assertEqual(response["adapter"], "agent_chat_api")
+                self.assertEqual(response["processor"], "wrapper")
+                system_prompt = str(fake.calls[0]["system_prompt"])
+                self.assertIn("use-only-wrapper mode", system_prompt)
+                self.assertIn("Role personality (local_fast)", system_prompt)
+                self.assertIn("terse runtime dispatcher", system_prompt)
+                self.assertIn("Caller contract: Base system", system_prompt)
+            finally:
+                runtime.shutdown()
+
+    def test_wrapper_only_generation_autostarts_local_agent_chat_api_when_unreachable(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = AppConfig.from_env(project_root=root)
+            config.manifests_dir = MANIFESTS_DIR
+            config.use_only_wrapper_mode = True
+            config.ensure_directories()
+            runtime = PrimordialRuntime(config)
+            runtime.initialize()
+
+            with (
+                patch.object(runtime.agent_chat, "health", side_effect=[RuntimeError("down"), {"ok": True}]) as health,
+                patch.object(runtime, "_start_local_agent_chat_api", return_value={"started": True, "pid": 1234}) as start,
+                patch.object(
+                    runtime.agent_chat,
+                    "chat",
+                    return_value=AgentChatResponse(
+                        provider="claude",
+                        model="claude-sonnet-4",
+                        text="wrapper-ok",
+                        exit_code=0,
+                        elapsed_seconds=0.2,
+                    ),
+                ) as chat,
+            ):
+                response = runtime._wrapper_ai_generate(role="operator_chat", system="s", prompt="p")
+
+            try:
+                self.assertEqual(health.call_count, 2)
+                start.assert_called_once()
+                chat.assert_called_once()
+                self.assertEqual(response["text"], "wrapper-ok")
+                self.assertEqual(response["adapter"], "agent_chat_api")
+            finally:
+                runtime.shutdown()
+
     def test_topology_model_validation_accepts_implicit_latest_tag(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

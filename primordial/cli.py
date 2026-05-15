@@ -3,8 +3,13 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import os
 from pathlib import Path
+import signal
 import sys
+import time
+from urllib import error as urlerror
+from urllib import request as urlrequest
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -13,6 +18,7 @@ from primordial.app.runtime import PrimordialRuntime
 from primordial.adapters.caido import CaidoIntegrationService
 from primordial.core.doctor import dumps_doctor_json, format_doctor_report, run_doctor
 from primordial.core.domain.enums import MethodologyName, ScopeProfile
+from primordial.core.local_runtime import load_project_env, resolve_project_root
 from primordial.core.startup import StartupPreflightError, run_startup_preflight
 from primordial.core.web import serve_web_console
 from primordial.ui.textual_app import launch_tui, render_dashboard_text, render_scope_text
@@ -45,6 +51,15 @@ def build_parser() -> argparse.ArgumentParser:
     web = subparsers.add_parser("web", help="Launch the HTML5 web control console.")
     web.add_argument("--host", default="127.0.0.1")
     web.add_argument("--port", type=int, default=1337)
+    stop_server = subparsers.add_parser("stop-server", help="Gracefully stop the web control console.")
+    stop_server.add_argument("--host", default="127.0.0.1")
+    stop_server.add_argument("--port", type=int, default=1337)
+    stop_server.add_argument("--timeout", type=float, default=5.0)
+    stop_server.add_argument(
+        "--kill",
+        action="store_true",
+        help="If the HTTP stop endpoint is unavailable, send SIGTERM to the recorded web server PID.",
+    )
     doctor = subparsers.add_parser("doctor", help="Check V1 Postgres, pgvector, schema, and runtime health.")
     doctor.add_argument("--json", action="store_true")
 
@@ -267,6 +282,13 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(format_doctor_report(payload))
         return 0 if payload.get("ok") else 2
+    if args.command == "stop-server":
+        return stop_web_console_server(
+            host=args.host,
+            port=args.port,
+            timeout_seconds=args.timeout,
+            kill_fallback=args.kill,
+        )
     try:
         run_startup_preflight()
         runtime = PrimordialRuntime.from_env()
@@ -580,6 +602,59 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     finally:
         runtime.shutdown()
+
+
+def stop_web_console_server(
+    *,
+    host: str = "127.0.0.1",
+    port: int = 1337,
+    timeout_seconds: float = 5.0,
+    kill_fallback: bool = False,
+) -> int:
+    url = f"http://{host}:{port}/api/server/stop"
+    body = json.dumps({"confirm": "stop"}).encode("utf-8")
+    request = urlrequest.Request(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urlrequest.urlopen(request, timeout=max(0.5, timeout_seconds)) as response:
+            response.read()
+            if 200 <= response.status < 300:
+                print(f"requested graceful stop for Primordial web console on {host}:{port}")
+                return 0
+    except (OSError, urlerror.URLError, TimeoutError) as exc:
+        if not kill_fallback:
+            print(f"web console stop endpoint unavailable: {exc}", file=sys.stderr)
+            print("rerun with --kill to send SIGTERM to the recorded server PID", file=sys.stderr)
+            return 2
+
+    root = resolve_project_root()
+    load_project_env(root)
+    runtime_dir = Path(os.getenv("PRIMORDIAL_RUNTIME_DIR", root / "runtime")).resolve()
+    pid_path = runtime_dir / f"primordial-web-{port}.pid"
+    try:
+        pid = int(pid_path.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError) as exc:
+        print(f"could not read web console PID from {pid_path}: {exc}", file=sys.stderr)
+        return 2
+
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        print(f"recorded web console PID {pid} is not running")
+        return 0
+    except OSError as exc:
+        print(f"failed to stop web console PID {pid}: {exc}", file=sys.stderr)
+        return 2
+
+    deadline = time.monotonic() + max(0.5, timeout_seconds)
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            print(f"stopped Primordial web console PID {pid}")
+            return 0
+        time.sleep(0.1)
+    print(f"sent SIGTERM to Primordial web console PID {pid}; process is still exiting")
+    return 0
 
 
 def _format_credentials_status(payload: dict[str, object]) -> str:

@@ -1,7 +1,9 @@
-# Helix Industries Evidence Index
+# helix.htb Evidence Index
 
-Generated: 2026-05-15T00:11:21.927755+00:00
+Generated: 2026-05-15T04:04:27.116644+00:00
 
+- `evidence_4a6541a6713b` PoC applicability validation: helix.htb: Classified 29 retained public PoC candidate(s): 14 ready for gated review, 15 blocked or research-only. No PoC was executed and no exploit code was generated.
+- `evidence_19aae821c612` Exploit research: helix.htb: Searchsploit research found 29 non-DoS candidate(s), suppressed 10 DoS/crash-oriented result(s), and retained 4 example excerpt(s): Ingress-NGINX 4.11.0 - Remote Code Execution (RCE), OpenSSH < 6.6 SFTP (x64) - Command Execution, OpenSSH < 6.6 SFTP - Command Execution, SSH (x2) - Remote Command Execution, PHP-FPM + Nginx - Remote Code Execution.
 - `evidence_1656c5228a85` TCP service discovery: helix.htb: TCP service discovery observed 4 open service(s): 10.129.55.37:22/ssh, 10.129.55.37:80/http, helix.htb:22/ssh, helix.htb:80/http.
 - `evidence_b40d5fe8acdd` Recon: http://10.129.54.140/: HTTP probe returned 200 for http://10.129.54.140/ with content-type text/html. title='Helix Industries | Industrial Automation & Critical Infrastructure'
 - `evidence_df51199097d3` TCP service discovery: helix.htb: TCP service discovery observed 2 open service(s): 10.129.54.140:22/ssh, 10.129.54.140:80/http.

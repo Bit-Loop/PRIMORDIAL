@@ -57,6 +57,24 @@ rag_embeddings  = text-embedding-nomic-embed-text-v1.5
 rag_synthesis   = gpt-oss-cybersecurity-20b-merged-heretic-i1 + source-ID validation
 ```
 
+## Use-Only Wrapper Mode
+
+When `PRIMORDIAL_USE_ONLY_WRAPPER_MODE=1` or the persisted model wrapper setting is enabled, runtime AI generation uses `agent_chat_api` for role calls instead of direct Ollama generation. Deterministic primitives still run through the runtime; the wrapper is only the model interface.
+
+Wrapper-only mode applies role personality prompts before the task-specific system contract:
+
+| Role | Wrapper personality |
+|---|---|
+| `local_fast` | Terse runtime dispatcher: triage, missing evidence, next safe primitive-backed move. |
+| `local_deep` | Policy and authority arbiter: preserve Operator Intent, approvals, scope, evidence, guidance, then chat. |
+| `local_code` | Implementation and test-design reviewer: safe requirements, fixtures, schemas, pseudocode, and patches only when authorized. |
+| `local_compact` | Lossless compactor: preserve exact IDs and separate durable facts from chat claims. |
+| `poc_pressure` | PoC boundary reviewer: separate inert lab artifacts from executable attack behavior. |
+| `rag_synthesis` | Citation-bound synthesis: cite only retrieved source IDs and reject unsupported claims. |
+| `operator_chat` | Operator-facing runtime assistant: concise, state-aware, concrete, and explicit about actions that have not run. |
+
+In this mode, Ollama startup topology validation, model warmup, and model unload actions are bypassed. The wrapper prompts do not grant authority: Operator Intent, approvals, target scope, evidence records, and deterministic validators remain the control plane.
+
 ## Next Tests
 
 1. Install or expose `gpt-oss-safeguard-20b` locally.

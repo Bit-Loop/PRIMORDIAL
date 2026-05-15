@@ -19,9 +19,20 @@ function FormattedChatText({ text }) {
   );
 }
 
-function ChatBubble({ msg }) {
+function agentLabel(model) {
+  const raw = String(model || '').trim();
+  if (!raw) return 'AGENT';
+  if (raw.startsWith('agent_chat_api:')) {
+    const parts = raw.split(':');
+    return `AGENT · wrapper:${parts[1] || 'provider'}`;
+  }
+  if (raw === 'deterministic-state') return 'AGENT · deterministic';
+  return `AGENT · ${raw}`;
+}
+
+function ChatBubble({ msg, fallbackModel }) {
   const cls = msg.who === 'me' ? 'me' : msg.who === 'system' ? 'system' : 'agent';
-  const label = msg.who === 'me' ? 'OPERATOR' : msg.who === 'agent' ? 'AGENT · local-deep' : 'SYSTEM';
+  const label = msg.who === 'me' ? 'OPERATOR' : msg.who === 'agent' ? agentLabel(msg.model || fallbackModel) : 'SYSTEM';
   const dot = msg.who === 'me' ? 'cyan' : msg.who === 'system' ? 'yellow' : 'green';
   return (
     <div className={`bubble ${cls}`}>
@@ -78,7 +89,13 @@ function ChatPane({ title, kind, messages, setMessages, approval, model, onResol
       onSend(v)
         .then(reply => {
           if (!reply) return;
-          setMessages(m => [...m, { who: 'agent', t: new Date().toTimeString().slice(0, 8), text: reply }]);
+          const payload = typeof reply === 'object' ? reply : { text: reply };
+          setMessages(m => [...m, {
+            who: 'agent',
+            t: new Date().toTimeString().slice(0, 8),
+            text: payload.text || 'Runtime chat updated.',
+            model: payload.model || model,
+          }]);
         })
         .catch(err => {
           setMessages(m => [...m, { who: 'system', t: new Date().toTimeString().slice(0, 8), text: err.message || String(err) }]);
@@ -121,7 +138,7 @@ function ChatPane({ title, kind, messages, setMessages, approval, model, onResol
       </div>
       <div className="panel-body" ref={scrollRef} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {kind === 'approval' && <ApprovalPaneInChat approval={approval} onResolve={onResolve} />}
-        {messages.map((m, i) => <ChatBubble key={i} msg={m} />)}
+        {messages.map((m, i) => <ChatBubble key={i} msg={m} fallbackModel={model} />)}
       </div>
       <div style={{ padding: 8, borderTop: '1px solid var(--line)', background: 'var(--bg-deep)' }}>
         <div className="row gap-4" style={{ flexWrap: 'wrap', marginBottom: 6 }}>
@@ -162,6 +179,12 @@ function ChatMode() {
   const D = window.PD_DATA;
   const API = window.PD_API || {};
   const premiumWrapper = D.runtime?.premiumWrapper || {};
+  const wrapperMode = D.modelPayload?.wrapper_mode || {};
+  const localDeepModel = D.modelPayload?.roles?.find?.(role => role.role === 'local_deep')?.selected_model || 'deepseek-r1:8b';
+  const inquiryModel = wrapperMode.use_only_wrapper
+    ? (wrapperMode.model_label || `agent_chat_api:${wrapperMode.provider || 'claude'}:provider-default`)
+    : `local-deep · ${localDeepModel}`;
+  const inquiryLane = wrapperMode.use_only_wrapper ? `wrapper:${wrapperMode.provider || 'provider'}` : 'local-deep';
   const premiumWrapperLine = premiumWrapper.local_wrapper_available
     ? `Claude/GPT: ${premiumWrapper.local_chat_wrapper || 'agent_chat_api'} wrapper`
     : `Claude/GPT: ${premiumWrapper.status || 'disabled'}`;
@@ -221,7 +244,10 @@ function ChatMode() {
         // Not JSON or parse failed, use as-is
       }
     }
-    return answer || 'Runtime chat updated.';
+    return {
+      text: answer || 'Runtime chat updated.',
+      model: payload?.result?.chat?.model || payload?.result?.chat?.route_model || inquiryModel,
+    };
   };
 
   const queue = D.approvals.filter(a => !resolved[a.id]);
@@ -232,8 +258,8 @@ function ChatMode() {
         crumbs={['primordial', 'chat']}
         stats={[
           { k: 'pending appr', v: queue.length },
-          { k: 'approval lane', v: 'local-deep' },
-          { k: 'inquiry lane', v: 'local-deep' },
+          { k: 'approval lane', v: inquiryLane },
+          { k: 'inquiry lane', v: inquiryLane },
           { k: 'context', v: activeTarget },
         ]}
       />
@@ -299,7 +325,7 @@ function ChatMode() {
                 messages={approvalChat}
                 setMessages={setApprovalChat}
                 approval={activeAp}
-                model="local-deep · deepseek-r1:8b"
+                model={`local-deep · ${localDeepModel}`}
                 onResolve={resolveApproval}
                 onSend={async (message) => `Approval note recorded locally: ${message}`}
                 targetLabel={activeAp?.target && activeAp.target !== '*' ? activeAp.target : 'approval'}
@@ -321,7 +347,7 @@ function ChatMode() {
                 messages={inquiryChat}
                 setMessages={setInquiryChat}
                 approval={null}
-                model="local-deep · deepseek-r1:8b"
+                model={inquiryModel}
                 onSend={askRuntime}
                 targetLabel={activeTarget}
               />

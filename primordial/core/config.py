@@ -91,6 +91,8 @@ class AppConfig:
     agent_chat_safe_guard: bool = True
     agent_chat_codex_sandbox: str = "read-only"
     agent_chat_claude_permission_mode: str = "dontAsk"
+    agent_chat_auto_start: bool = True
+    use_only_wrapper_mode: bool = False
     # Maximum items written into any single evidence metadata list or note body
     # list. Increase if large targets are silently dropping evidence.
     max_evidence_items: int = 50
@@ -205,6 +207,8 @@ class AppConfig:
                 "dontAsk",
             ).strip()
             or "dontAsk",
+            agent_chat_auto_start=_env_bool("PRIMORDIAL_AGENT_CHAT_AUTO_START", True),
+            use_only_wrapper_mode=_env_bool("PRIMORDIAL_USE_ONLY_WRAPPER_MODE", False),
             content_discovery_wordlist=content_discovery_wordlist,
             max_evidence_items=max_evidence_items,
         )

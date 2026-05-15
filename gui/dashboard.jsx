@@ -69,6 +69,8 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
   const [selectedCredentialKey, setSelectedCredentialKey] = useStateD('');
   const [modelDraft, setModelDraft] = useStateD({});
   const [processorDraft, setProcessorDraft] = useStateD({});
+  const [wrapperOnlyDraft, setWrapperOnlyDraft] = useStateD(!!D.modelPayload?.wrapper_mode?.use_only_wrapper);
+  const [wrapperDraftDirty, setWrapperDraftDirty] = useStateD(false);
   const [targetDraft, setTargetDraft] = useStateD({});
   const [targetAdvancedOpen, setTargetAdvancedOpen] = useStateD(false);
   const [targetFeedback, setTargetFeedback] = useStateD(null);
@@ -77,16 +79,36 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
   const [approvalFeedback, setApprovalFeedback] = useStateD(null);
   const [runtimeBusy, setRuntimeBusy] = useStateD('');
   const [runtimeFeedback, setRuntimeFeedback] = useStateD(null);
+  const [runtimeDraftDirty, setRuntimeDraftDirty] = useStateD(false);
+  const [tuningDraftDirty, setTuningDraftDirty] = useStateD(false);
+  const [caidoHealthBusy, setCaidoHealthBusy] = useStateD(false);
   const [scopeImport, setScopeImport] = useStateD('{\n  "targets": []\n}');
   const [selfTest, setSelfTest] = useStateD(D.selfTest || null);
 
   useEffectD(() => {
     setAutonomy(D.runtime.autonomy);
-    setIntent(D.runtime.intent);
-    setContMode(D.runtime.executionMode?.mode === 'continuous');
-    setInterval(D.runtime.executionMode?.interval_seconds || 30);
-    setTuning(D.runtime.runtimeTuning || {});
-  }, [D.runtime.autonomy, D.runtime.intent, D.runtime.executionMode?.mode, D.runtime.executionMode?.interval_seconds, D.runtime.runtimeTuning]);
+    if (!runtimeDraftDirty) {
+      setIntent(D.runtime.intent);
+      setContMode(D.runtime.executionMode?.mode === 'continuous');
+      setInterval(D.runtime.executionMode?.interval_seconds || 30);
+    }
+    if (!tuningDraftDirty) {
+      setTuning(D.runtime.runtimeTuning || {});
+    }
+    if (!wrapperDraftDirty) {
+      setWrapperOnlyDraft(!!D.modelPayload?.wrapper_mode?.use_only_wrapper);
+    }
+  }, [
+    D.runtime.autonomy,
+    D.runtime.intent,
+    D.runtime.executionMode?.mode,
+    D.runtime.executionMode?.interval_seconds,
+    D.runtime.runtimeTuning,
+    D.modelPayload?.wrapper_mode?.use_only_wrapper,
+    runtimeDraftDirty,
+    tuningDraftDirty,
+    wrapperDraftDirty,
+  ]);
 
   const cpu = D.runtime.cpu;
   const gpu = D.runtime.gpu;
@@ -136,6 +158,8 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
     || premiumWrapper.local_chat_wrapper
     || 'remote_premium';
   const executionMode = contMode ? 'continuous' : 'tick';
+  const persistedExecutionMode = D.runtime.executionMode?.mode || 'tick';
+  const persistedContinuous = persistedExecutionMode === 'continuous';
   const runtimeTone = activeWork ? 'cyan' : waitingWork ? 'yellow' : queuedWork ? 'gray' : 'green';
   const runtimeStatus = activeWork ? 'working' : waitingWork ? 'waiting' : queuedWork ? 'queued' : 'idle';
   const blockerRows = (Array.isArray(workStatus.blockers) ? workStatus.blockers : [])
@@ -155,12 +179,41 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
     .slice(0, 3);
   const tuningDefaults = tuning.defaults || D.runtime.runtimeTuning?.defaults || {};
   const tuningMinimums = tuning.minimums || D.runtime.runtimeTuning?.minimums || {};
-  const updateTuning = (key, value) => setTuning(t => ({ ...t, [key]: Number(value) || 0 }));
+  const updateTuning = (key, value) => {
+    setTuningDraftDirty(true);
+    setTuning(t => ({ ...t, [key]: Number(value) || 0 }));
+  };
+  const updateIntentDraft = (value) => {
+    setRuntimeDraftDirty(true);
+    setIntent(value);
+  };
+  const updateExecutionModeDraft = (value) => {
+    setRuntimeDraftDirty(true);
+    setContMode(value === 'cont');
+  };
+  const updateIntervalDraft = (value) => {
+    setRuntimeDraftDirty(true);
+    setInterval(Math.max(2, Number(value) || 2));
+  };
   const modelRoles = D.modelPayload?.roles || [];
   const availableModels = D.modelPayload?.available_models || [];
+  const wrapperMode = D.modelPayload?.wrapper_mode || {};
   const roleMetric = (role) => D.modelPayload?.role_metrics?.[role] || modelRoles.find(r => r.role === role)?.metrics || {};
-  const saveModels = () => API.post?.('/api/models', { roles: modelDraft, processors: processorDraft });
-  const resetModels = () => { setModelDraft({}); setProcessorDraft({}); };
+  const saveModels = async () => {
+    const result = await API.post?.('/api/models', {
+      roles: modelDraft,
+      processors: processorDraft,
+      wrapper_mode: { use_only_wrapper: wrapperOnlyDraft },
+    });
+    setWrapperDraftDirty(false);
+    return result;
+  };
+  const resetModels = () => {
+    setModelDraft({});
+    setProcessorDraft({});
+    setWrapperOnlyDraft(!!D.modelPayload?.wrapper_mode?.use_only_wrapper);
+    setWrapperDraftDirty(false);
+  };
   const scopeProfileOptions = (D.scopeProfiles?.profiles || []).length
     ? D.scopeProfiles.profiles
     : [{ id: 'hack_the_box', label: 'Hack The Box', base_profile: 'hack_the_box', description: 'Lab scope profile.' }];
@@ -259,6 +312,42 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
     const group = credentialGroup(service);
     return !!group?.fields.some(([key]) => credentialStatus(service, key).configured);
   };
+  const caidoConnectionState = (connection, credentialConfigured) => {
+    const conn = connection || {};
+    const errorText = String(conn.error || '').toLowerCase();
+    const authFailed = !!conn.auth_error || conn.status_code === 401 || conn.status_code === 403 || errorText.includes('unauthorized') || errorText.includes('forbidden');
+    const migrated = !!conn.graphql_url_migrated_from;
+    const configured = !!conn.configured || !!credentialConfigured;
+    if (conn.ok) {
+      return {
+        label: migrated ? 'live migrated' : 'live',
+        tone: 'green',
+        detail: migrated ? `Migrated legacy URL to ${conn.graphql_url || CAIDO_DEFAULT_GRAPHQL_URL}.` : 'Caido health check is live.',
+      };
+    }
+    if (authFailed) {
+      return {
+        label: 'auth failed',
+        tone: 'red',
+        detail: migrated ? 'Legacy URL migrated; token authentication failed.' : 'Caido rejected the configured token.',
+      };
+    }
+    if (configured && conn.checked) {
+      return {
+        label: migrated ? 'migrated unreachable' : 'unreachable',
+        tone: 'red',
+        detail: conn.error || 'Caido GraphQL did not answer the health check.',
+      };
+    }
+    if (configured) {
+      return {
+        label: migrated ? 'configured migrated' : 'configured',
+        tone: migrated ? 'yellow' : 'cyan',
+        detail: migrated ? `Legacy URL will use ${conn.graphql_url || CAIDO_DEFAULT_GRAPHQL_URL}.` : 'Credentials are configured; run health check for live status.',
+      };
+    }
+    return { label: 'missing', tone: 'gray', detail: 'GraphQL URL and API token are missing.' };
+  };
   const credentialSummary = (service, keys) => keys
     .map(key => {
       const status = credentialStatus(service, key);
@@ -290,6 +379,32 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
       return null;
     }
   };
+  const refreshCaidoHealth = async () => {
+    setCaidoHealthBusy(true);
+    setCredentialFeedback(null);
+    try {
+      const payload = await API.refreshCaido?.({ checkHealth: true });
+      if (!payload?.ok) {
+        setCredentialFeedback({ tone: 'red', message: payload?.error || 'Caido health check failed.' });
+      }
+      return payload;
+    } catch (err) {
+      setCredentialFeedback({ tone: 'red', message: err.message || String(err) });
+      return null;
+    } finally {
+      setCaidoHealthBusy(false);
+    }
+  };
+  useEffectD(() => {
+    if (tab !== 'integrations') return;
+    API.refreshCredentials?.().catch(err => {
+      setCredentialFeedback({ tone: 'red', message: err.message || String(err) });
+    });
+  }, [tab]);
+  useEffectD(() => {
+    if (tab !== 'integrations' || integrationSelected !== 'caido') return;
+    refreshCaidoHealth();
+  }, [tab, integrationSelected]);
   const withRuntimeAction = async (busyKey, worker, successMessage) => {
     if (runtimeBusy) return null;
     setRuntimeBusy(busyKey);
@@ -324,20 +439,48 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
   const saveModeAndIntent = () => withRuntimeAction(
     'mode-intent',
     async () => {
-      await API.post?.('/api/execution-mode', { mode: executionMode, interval_seconds: boundedInterval() });
-      await API.post?.('/api/operator-intent', { intent_id: intent });
+      const payload = await API.post?.('/api/runtime-control', {
+        mode: executionMode,
+        interval_seconds: boundedInterval(),
+        intent_id: intent,
+      });
+      setRuntimeDraftDirty(false);
+      return payload;
     },
     'Saved runtime mode and operator intent.',
   );
+  const setContinuousTicks = (enabled) => withRuntimeAction(
+    enabled ? 'start-continuous' : 'stop-continuous',
+    async () => {
+      const payload = await API.post?.('/api/runtime-control', {
+        mode: enabled ? 'continuous' : 'tick',
+        interval_seconds: boundedInterval(),
+        intent_id: intent,
+      });
+      setContMode(!!enabled);
+      setRuntimeDraftDirty(false);
+      return payload;
+    },
+    enabled ? 'Continuous ticks started.' : 'Continuous ticks stopped.',
+  );
   const saveRuntimeSettings = () => withRuntimeAction(
     'runtime-settings',
-    () => API.post?.('/api/runtime-settings', tuning),
+    async () => {
+      const payload = await API.post?.('/api/runtime-settings', tuning);
+      setTuningDraftDirty(false);
+      return payload;
+    },
     'Saved resource limits.',
   );
   const runMaintenance = (action, body, message) => withRuntimeAction(
     action,
     () => API.action?.(action, body),
     message,
+  );
+  const stopServer = () => withRuntimeAction(
+    'server-stop',
+    () => API.post?.('/api/server/stop', { confirm: 'stop' }),
+    'Server stop requested.',
   );
   const tuningHint = (key, unit) => {
     const bits = [];
@@ -366,6 +509,7 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
       setApprovalBusy('');
     }
   };
+  const caidoState = caidoConnectionState(D.caido?.connection, credentialGroupConfigured('caido'));
   const integrationRows = [
     {
       service: 'notion',
@@ -386,10 +530,10 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
     {
       service: 'caido',
       n: 'Caido',
-      d: credentialSummary('caido', ['graphql_url', 'api_token']) || D.caido?.connection?.graphql_url || 'GraphQL credentials missing',
-      s: D.caido?.connection?.ok ? 'live' : D.caido?.connection?.configured ? 'configured' : 'missing',
-      tone: D.caido?.connection?.ok ? 'green' : D.caido?.connection?.configured ? 'cyan' : 'gray',
-      detail: 'HTTPQL search, request import, and replay approvals.',
+      d: caidoState.detail || credentialSummary('caido', ['graphql_url', 'api_token']) || D.caido?.connection?.graphql_url || 'GraphQL credentials missing',
+      s: caidoState.label,
+      tone: caidoState.tone,
+      detail: 'HTTPQL search, request import, replay approvals, and targeted live health.',
     },
     {
       service: 'known',
@@ -511,21 +655,42 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
                 <div className="runtime-section">
                   <div className="runtime-section-head">
                     <div>
-                      <span className="runtime-section-title">Run Now</span>
-                      <span className="runtime-section-sub">One bounded orchestration tick.</span>
+                      <span className="runtime-section-title">{contMode ? 'Continuous Ticks' : 'Run Now'}</span>
+                      <span className="runtime-section-sub">
+                        {contMode
+                          ? `${persistedContinuous ? 'Server loop active' : 'Ready to start'} · one bounded tick every ${boundedInterval()}s.`
+                          : 'One bounded orchestration tick.'}
+                      </span>
                     </div>
                   </div>
-                  <div className="runtime-command-grid">
-                    <Field label="max executions">
-                      <input className="input" type="number" min="1" value={maxExec} onChange={e => setMaxExec(Math.max(1, Number(e.target.value) || 1))} />
-                    </Field>
-                    <button className="btn primary runtime-command" onClick={runTickNow} disabled={!!runtimeBusy}>
-                      {runtimeBusy === 'tick' ? 'RUNNING TICK' : 'RUN TICK NOW'}
-                    </button>
-                    <button className="btn danger runtime-command" onClick={stopActiveWork} disabled={!!runtimeBusy}>
-                      {runtimeBusy === 'stop-work' ? 'STOPPING WORK' : 'STOP ACTIVE WORK'}
-                    </button>
-                  </div>
+                  {contMode ? (
+                    <div className="runtime-command-grid">
+                      <Field label="continuous interval (s)">
+                        <input className="input" type="number" min="2" value={interval} onChange={e => updateIntervalDraft(e.target.value)} />
+                      </Field>
+                      <button className="btn primary runtime-command" onClick={() => setContinuousTicks(true)} disabled={!!runtimeBusy || (persistedContinuous && !runtimeDraftDirty)}>
+                        {runtimeBusy === 'start-continuous' || runtimeBusy === 'mode-intent' ? 'STARTING TICKS' : persistedContinuous && !runtimeDraftDirty ? 'CONTINUOUS TICKS RUNNING' : 'START CONTINUOUS TICKS'}
+                      </button>
+                      <button className="btn danger runtime-command" onClick={() => setContinuousTicks(false)} disabled={!!runtimeBusy || !persistedContinuous}>
+                        {runtimeBusy === 'stop-continuous' ? 'STOPPING TICKS' : 'STOP CONTINUOUS TICKS'}
+                      </button>
+                      <button className="btn ghost runtime-command" onClick={stopActiveWork} disabled={!!runtimeBusy}>
+                        {runtimeBusy === 'stop-work' ? 'STOPPING WORK' : 'STOP ACTIVE WORK'}
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="runtime-command-grid">
+                      <Field label="max executions">
+                        <input className="input" type="number" min="1" value={maxExec} onChange={e => setMaxExec(Math.max(1, Number(e.target.value) || 1))} />
+                      </Field>
+                      <button className="btn primary runtime-command" onClick={runTickNow} disabled={!!runtimeBusy}>
+                        {runtimeBusy === 'tick' ? 'RUNNING TICK' : 'RUN TICK NOW'}
+                      </button>
+                      <button className="btn danger runtime-command" onClick={stopActiveWork} disabled={!!runtimeBusy}>
+                        {runtimeBusy === 'stop-work' ? 'STOPPING WORK' : 'STOP ACTIVE WORK'}
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 <div className="runtime-section">
@@ -537,20 +702,20 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
                   </div>
                   <div className="runtime-settings-grid">
                     <Field label="operator intent">
-                      <select className="input" value={intent} onChange={e => setIntent(e.target.value)}>
+                      <select className="input" value={intent} onChange={e => updateIntentDraft(e.target.value)}>
                         {intentOptions.length ? intentOptions.map(item => (
                           <option key={item.id} value={item.id}>{item.label || item.id}</option>
                         )) : <option value={intent}>{intent}</option>}
                       </select>
                     </Field>
                     <Field label="execution mode">
-                      <select className="input" value={contMode ? 'cont' : 'tick'} onChange={e => setContMode(e.target.value === 'cont')}>
+                      <select className="input" value={contMode ? 'cont' : 'tick'} onChange={e => updateExecutionModeDraft(e.target.value)}>
                         <option value="tick">Tick mode</option>
                         <option value="cont">Continuous ticks</option>
                       </select>
                     </Field>
                     <Field label="continuous interval (s)">
-                      <input className="input" type="number" min="2" value={interval} disabled={!contMode} onChange={e => setInterval(Math.max(2, Number(e.target.value) || 2))} />
+                      <input className="input" type="number" min="2" value={interval} disabled={!contMode} onChange={e => updateIntervalDraft(e.target.value)} />
                     </Field>
                   </div>
                   <div className="runtime-actions">
@@ -609,12 +774,30 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
                     <button className="btn ghost sm" onClick={() => runMaintenance('warm-models', { keep_alive: '8h' }, 'Model lanes warmed.')} disabled={!!runtimeBusy}>WARM MODELS</button>
                     <button className="btn ghost sm" onClick={() => runMaintenance('clear-models', {}, 'Model lanes cleared.')} disabled={!!runtimeBusy}>CLEAR MODELS</button>
                     <button className="btn ghost sm" onClick={() => runMaintenance('clear-stale-web-actions', {}, 'Stale web action records cleared.')} disabled={!!runtimeBusy}>CLEAR STALE WEB ACTIONS</button>
+                    <button className="btn danger sm" onClick={stopServer} disabled={!!runtimeBusy}>
+                      {runtimeBusy === 'server-stop' ? 'STOPPING SERVER' : 'STOP SERVER'}
+                    </button>
                   </div>
                 </div>
               </div>
             )}
             {tab === 'models' && (
               <div className="col gap-8">
+                <div className="banner">
+                  <label className="row gap-6" style={{ alignItems: 'center', flex: 1 }}>
+                    <input
+                      type="checkbox"
+                      checked={!!wrapperOnlyDraft}
+                      onChange={e => {
+                        setWrapperDraftDirty(true);
+                        setWrapperOnlyDraft(e.target.checked);
+                      }}
+                    />
+                    <span className="strong">Use only wrapper</span>
+                  </label>
+                  <Pill tone={wrapperOnlyDraft ? 'cyan' : 'gray'}>{wrapperOnlyDraft ? 'WRAPPER' : 'LOCAL'}</Pill>
+                  <span className="dim mono">{wrapperMode.local_chat_wrapper || 'agent_chat_api'} · {wrapperMode.provider || 'provider'}</span>
+                </div>
                 <table className="t">
                   <thead><tr><th>Role</th><th>Model</th><th>Processor</th><th>Score</th><th>Pass</th><th>Failures</th><th>Latency</th></tr></thead>
                   <tbody>
@@ -798,6 +981,17 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
                   )}
                   {activeCredentialGroup ? (
                     <>
+                      {activeCredentialGroup.service === 'caido' && (
+                        <div className="banner">
+                          <Dot tone={caidoState.tone} />
+                          <span style={{ flex: 1 }}>
+                            {caidoState.label.toUpperCase()}: {caidoState.detail}
+                          </span>
+                          <button className="btn ghost sm" onClick={refreshCaidoHealth} disabled={caidoHealthBusy}>
+                            {caidoHealthBusy ? 'CHECKING' : 'HEALTH CHECK'}
+                          </button>
+                        </div>
+                      )}
                       <div className="grid" style={{ gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
                         {activeCredentialGroup.fields.map(([key, label, placeholder]) => {
                           const status = credentialStatus(activeCredentialGroup.service, key);

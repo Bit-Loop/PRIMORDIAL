@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
 from pathlib import Path
-from threading import RLock
+from threading import Lock, RLock
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
@@ -26,6 +26,7 @@ class PrimordialWebApp:
     def __init__(self, runtime: PrimordialRuntime) -> None:
         self.runtime = runtime
         self._lock = RLock()
+        self._tick_lock = Lock()
         self._actions_lock = RLock()
         self._active_actions: dict[str, dict[str, Any]] = {}
         self._static_dir = Path(__file__).resolve().parent / "static"
@@ -52,19 +53,18 @@ class PrimordialWebApp:
         if method == "GET" and path == "/api/control-plane":
             target = self._optional_query_string(query, "target")
             live_metrics = self._bool_param(query, "live_metrics", False)
-            with self._lock:
-                return self._json_response(self._control_plane_payload(target=target, live_metrics=live_metrics))
+            return self._json_response(self._control_plane_payload(target=target, live_metrics=live_metrics))
         if method == "GET" and path == "/api/system-metrics":
             return self._json_response(self._system_metrics_payload())
+        if method == "GET" and path == "/api/storage-status":
+            return self._json_response(self.runtime.storage_status_payload())
         if method == "GET" and path == "/api/self-test":
             with self._lock:
                 return self._json_response(self.runtime.self_test_payload())
         if method == "GET" and path == "/api/operator-intent":
-            with self._lock:
-                return self._json_response(self.runtime.operator_intent_payload())
+            return self._json_response(self.runtime.operator_intent_payload())
         if method == "GET" and path == "/api/credentials":
-            with self._lock:
-                return self._json_response(self.runtime.credentials_payload())
+            return self._json_response(self.runtime.credentials_payload())
         if method == "GET" and path == "/api/skills":
             include_body = self._bool_param(query, "include_body", False)
             with self._lock:
@@ -93,8 +93,7 @@ class PrimordialWebApp:
                     return self._json_response({"error": str(exc)}, status=404)
         if method == "GET" and path == "/api/integrations/caido":
             check_health = self._bool_param(query, "check_health", False)
-            with self._lock:
-                return self._json_response(self.runtime.caido_status_payload(check_health=check_health))
+            return self._json_response(self.runtime.caido_status_payload(check_health=check_health))
         if method == "POST" and path == "/api/integrations/caido/search":
             payload = self._parse_json_body(body)
             with self._lock:
@@ -165,42 +164,33 @@ class PrimordialWebApp:
                 except ValueError as exc:
                     return self._json_response({"ok": False, "error": str(exc)}, status=400)
         if method == "GET" and path == "/api/models":
-            with self._lock:
-                return self._json_response(self.runtime.models_payload())
+            return self._json_response(self.runtime.models_payload())
         if method == "GET" and path == "/api/chat":
             limit = self._int_param(query, "limit", 20)
             target = self._optional_query_string(query, "target")
             with self._lock:
                 return self._json_response(self.runtime.operator_chat_payload(limit=limit, target=target))
         if method == "GET" and path == "/api/dashboard":
-            with self._lock:
-                return self._json_response(self._dashboard_payload())
+            return self._json_response(self._dashboard_payload())
         if method == "GET" and path == "/api/work-status":
             return self._json_response(self.work_status_payload())
         if method == "GET" and path == "/api/execution-mode":
-            with self._lock:
-                return self._json_response(self.runtime.execution_mode_payload())
+            return self._json_response(self.runtime.execution_mode_payload())
         if method == "GET" and path == "/api/runtime-settings":
-            with self._lock:
-                return self._json_response(self.runtime.runtime_tuning_payload())
+            return self._json_response(self.runtime.runtime_tuning_payload())
         if method == "GET" and path == "/api/scope":
-            with self._lock:
-                return self._json_response(self.runtime.scope_payload())
+            return self._json_response(self.runtime.scope_payload())
         if method == "GET" and path == "/api/scope-profiles":
-            with self._lock:
-                return self._json_response(self.runtime.scope_profiles_payload())
+            return self._json_response(self.runtime.scope_profiles_payload())
         if method == "GET" and path == "/api/targets":
-            with self._lock:
-                return self._json_response(self.runtime.scope_payload())
+            return self._json_response(self.runtime.scope_payload())
         if method == "GET" and path == "/api/audit":
             limit = self._int_param(query, "limit", 25)
-            with self._lock:
-                return self._json_response(self.runtime.audit_payload(limit=limit))
+            return self._json_response(self.runtime.audit_payload(limit=limit))
         if method == "GET" and path == "/api/records":
             limit = self._int_param(query, "limit", 25)
             target_id = self._optional_query_string(query, "target_id")
-            with self._lock:
-                return self._json_response(self.runtime.records_payload(limit=limit, target_id=target_id))
+            return self._json_response(self.runtime.records_payload(limit=limit, target_id=target_id))
         if method == "GET" and path.startswith("/api/tasks/"):
             task_id = path.rsplit("/", 1)[-1]
             with self._lock:
@@ -279,23 +269,21 @@ class PrimordialWebApp:
             interval = payload.get("interval_seconds")
             try:
                 interval_seconds = int(interval) if interval is not None else None
-                with self._lock:
-                    outcome = self.runtime.update_execution_mode(mode, interval_seconds=interval_seconds)
-                    return self._action_response("execution-mode", {"execution_mode": outcome})
+                outcome = self.runtime.update_execution_mode(mode, interval_seconds=interval_seconds)
+                return self._action_response("execution-mode", {"execution_mode": outcome})
             except (TypeError, ValueError) as exc:
                 return self._json_response({"error": str(exc)}, status=400)
         if method == "POST" and path == "/api/runtime-settings":
             payload = self._parse_json_body(body)
             try:
-                with self._lock:
-                    outcome = self.runtime.update_runtime_tuning(
-                        gpu_ai_timeout_seconds=self._optional_int(payload, "gpu_ai_timeout_seconds"),
-                        cpu_ai_timeout_seconds=self._optional_int(payload, "cpu_ai_timeout_seconds"),
-                        stale_run_timeout_seconds=self._optional_int(payload, "stale_run_timeout_seconds"),
-                        min_free_cpu_ram_mb=self._optional_int(payload, "min_free_cpu_ram_mb"),
-                        min_free_gpu_ram_mb=self._optional_int(payload, "min_free_gpu_ram_mb"),
-                    )
-                    return self._action_response("runtime-settings", {"runtime_tuning": outcome})
+                outcome = self.runtime.update_runtime_tuning(
+                    gpu_ai_timeout_seconds=self._optional_int(payload, "gpu_ai_timeout_seconds"),
+                    cpu_ai_timeout_seconds=self._optional_int(payload, "cpu_ai_timeout_seconds"),
+                    stale_run_timeout_seconds=self._optional_int(payload, "stale_run_timeout_seconds"),
+                    min_free_cpu_ram_mb=self._optional_int(payload, "min_free_cpu_ram_mb"),
+                    min_free_gpu_ram_mb=self._optional_int(payload, "min_free_gpu_ram_mb"),
+                )
+                return self._action_response("runtime-settings", {"runtime_tuning": outcome})
             except (TypeError, ValueError) as exc:
                 return self._json_response({"error": str(exc)}, status=400)
         if method == "POST" and path == "/api/operator-intent":
@@ -303,25 +291,46 @@ class PrimordialWebApp:
             intent_id = str(payload.get("intent_id", "")).strip()
             if not intent_id:
                 return self._json_response({"error": "intent_id is required"}, status=400)
-            with self._lock:
-                try:
-                    outcome = self.runtime.set_operator_intent(intent_id)
-                except KeyError as exc:
-                    return self._json_response({"error": str(exc)}, status=400)
-                return self._action_response("operator-intent", {"operator_intent": outcome})
+            try:
+                outcome = self.runtime.set_operator_intent(intent_id)
+            except KeyError as exc:
+                return self._json_response({"error": str(exc)}, status=400)
+            return self._action_response("operator-intent", {"operator_intent": outcome})
+        if method == "POST" and path == "/api/runtime-control":
+            payload = self._parse_json_body(body)
+            mode = str(payload.get("mode", "")).strip()
+            intent_id = str(payload.get("intent_id", "")).strip()
+            interval = payload.get("interval_seconds")
+            if not mode:
+                return self._json_response({"error": "mode is required"}, status=400)
+            if not intent_id:
+                return self._json_response({"error": "intent_id is required"}, status=400)
+            try:
+                outcome = self.runtime.update_runtime_control(
+                    mode=mode,
+                    interval_seconds=int(interval) if interval is not None else None,
+                    intent_id=intent_id,
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                return self._json_response({"error": str(exc)}, status=400)
+            return self._runtime_control_response(outcome)
         if method == "POST" and path == "/api/models":
             payload = self._parse_json_body(body)
             selections = payload.get("roles", {})
             processors = payload.get("processors", {})
+            wrapper_mode = payload.get("wrapper_mode")
             if not isinstance(selections, dict):
                 return self._json_response({"error": "roles must be an object"}, status=400)
             if not isinstance(processors, dict):
                 return self._json_response({"error": "processors must be an object"}, status=400)
+            if wrapper_mode is not None and not isinstance(wrapper_mode, dict):
+                return self._json_response({"error": "wrapper_mode must be an object"}, status=400)
             with self._lock:
                 try:
                     models = self.runtime.update_model_roles(
                         {str(key): str(value) for key, value in selections.items()},
                         processors={str(key): str(value) for key, value in processors.items()},
+                        wrapper_mode={str(key): value for key, value in wrapper_mode.items()} if wrapper_mode else None,
                     )
                 except ValueError as exc:
                     return self._json_response({"error": str(exc)}, status=400)
@@ -348,49 +357,44 @@ class PrimordialWebApp:
                 return self._action_response("deny", {"task_id": task_id, "status": task.status.value})
         if method == "POST" and path == "/api/credentials/notion":
             payload = self._parse_json_body(body)
-            with self._lock:
-                credentials = self.runtime.set_notion_credentials(
-                    api_key=self._optional_string(payload, "api_key"),
-                    parent_page_id=self._optional_string(payload, "parent_page_id"),
-                    version=self._optional_string(payload, "version"),
-                )
-                return self._action_response("set-notion-credentials", {"credentials": credentials})
+            credentials = self.runtime.set_notion_credentials(
+                api_key=self._optional_string(payload, "api_key"),
+                parent_page_id=self._optional_string(payload, "parent_page_id"),
+                version=self._optional_string(payload, "version"),
+            )
+            return self._action_response("set-notion-credentials", {"credentials": credentials})
         if method == "POST" and path == "/api/credentials/discord":
             payload = self._parse_json_body(body)
-            with self._lock:
-                try:
-                    credentials = self.runtime.set_discord_credentials(
-                        webhook_url=self._optional_string(payload, "webhook_url"),
-                    )
-                except ValueError as exc:
-                    return self._json_response({"error": str(exc)}, status=400)
-                return self._action_response("set-discord-credentials", {"credentials": credentials})
+            try:
+                credentials = self.runtime.set_discord_credentials(
+                    webhook_url=self._optional_string(payload, "webhook_url"),
+                )
+            except ValueError as exc:
+                return self._json_response({"error": str(exc)}, status=400)
+            return self._action_response("set-discord-credentials", {"credentials": credentials})
         if method == "POST" and path == "/api/credentials/known":
             payload = self._parse_json_body(body)
-            with self._lock:
-                credentials = self.runtime.set_known_credentials(
-                    username=self._optional_string(payload, "username"),
-                    password=self._optional_string(payload, "password"),
-                    domain=self._optional_string(payload, "domain"),
-                )
-                return self._action_response("set-known-credentials", {"credentials": credentials})
+            credentials = self.runtime.set_known_credentials(
+                username=self._optional_string(payload, "username"),
+                password=self._optional_string(payload, "password"),
+                domain=self._optional_string(payload, "domain"),
+            )
+            return self._action_response("set-known-credentials", {"credentials": credentials})
         if method == "POST" and path == "/api/credentials/lab":
             payload = self._parse_json_body(body)
-            with self._lock:
-                credentials = self.runtime.set_lab_credentials(
-                    username=self._optional_string(payload, "username"),
-                    password=self._optional_string(payload, "password"),
-                    domain=self._optional_string(payload, "domain"),
-                )
-                return self._action_response("set-lab-credentials", {"credentials": credentials})
+            credentials = self.runtime.set_lab_credentials(
+                username=self._optional_string(payload, "username"),
+                password=self._optional_string(payload, "password"),
+                domain=self._optional_string(payload, "domain"),
+            )
+            return self._action_response("set-lab-credentials", {"credentials": credentials})
         if method == "POST" and path == "/api/credentials/caido":
             payload = self._parse_json_body(body)
-            with self._lock:
-                credentials = self.runtime.set_caido_credentials(
-                    graphql_url=self._optional_string(payload, "graphql_url"),
-                    api_token=self._optional_string(payload, "api_token"),
-                )
-                return self._action_response("set-caido-credentials", {"credentials": credentials})
+            credentials = self.runtime.set_caido_credentials(
+                graphql_url=self._optional_string(payload, "graphql_url"),
+                api_token=self._optional_string(payload, "api_token"),
+            )
+            return self._action_response("set-caido-credentials", {"credentials": credentials})
         if method == "POST" and path == "/api/chat":
             payload = self._parse_json_body(body)
             message = str(payload.get("message", "")).strip()
@@ -405,12 +409,11 @@ class PrimordialWebApp:
             )
         if method == "DELETE" and path.startswith("/api/credentials/"):
             service = unquote(path.rsplit("/", 1)[-1])
-            with self._lock:
-                try:
-                    credentials = self.runtime.clear_credentials(service)
-                except ValueError as exc:
-                    return self._json_response({"error": str(exc)}, status=400)
-                return self._action_response("clear-credentials", {"credentials": credentials})
+            try:
+                credentials = self.runtime.clear_credentials(service)
+            except ValueError as exc:
+                return self._json_response({"error": str(exc)}, status=400)
+            return self._action_response("clear-credentials", {"credentials": credentials})
         if method == "POST" and path == "/api/targets":
             payload = self._parse_json_body(body)
             handle = str(payload.get("handle", "")).strip()
@@ -451,7 +454,7 @@ class PrimordialWebApp:
                         )
                 except ValueError as exc:
                     return self._json_response({"error": str(exc)}, status=400)
-                return self._action_response("register-target", {"target": target.as_payload()})
+                return self._action_response("register-target", self._scope_refresh_result(target=target))
         if method == "POST" and path == "/api/scope/import":
             payload = self._parse_json_body(body)
             scope_payload = payload.get("scope", payload)
@@ -466,7 +469,9 @@ class PrimordialWebApp:
                         profile=parsed_profile,
                         source_name=str(payload.get("source", "web import")),
                     )
-                    return self._action_response("import-scope", outcome)
+                    merged = dict(outcome)
+                    merged.update(self._scope_refresh_result())
+                    return self._action_response("import-scope", merged)
             except (KeyError, TypeError, ValueError) as exc:
                 return self._json_response({"error": str(exc)}, status=400)
         if method == "DELETE" and path.startswith("/api/targets/"):
@@ -484,12 +489,19 @@ class PrimordialWebApp:
                     return self._json_response({"ok": False, "error": outcome["reason"], "result": outcome}, status=409)
                 if not outcome["removed"]:
                     return self._json_response({"error": "target not found"}, status=404)
-                return self._action_response("remove-target", outcome)
+                merged = dict(outcome)
+                merged.update(self._scope_refresh_result())
+                return self._action_response("remove-target", merged)
         return self._json_response({"error": "not found", "path": path}, status=404)
 
     def _tick_action(self, max_executions: int) -> dict[str, Any]:
-        report = self.runtime.run_tick(max_executions=max_executions)
-        return {"report": {"summary": report.summary, "completed_runs": len(report.completed_runs)}}
+        if not self._tick_lock.acquire(blocking=False):
+            return {"report": {"summary": "tick already running", "completed_runs": 0}, "skipped": True}
+        try:
+            report = self.runtime.run_tick(max_executions=max_executions)
+            return {"report": {"summary": report.summary, "completed_runs": len(report.completed_runs)}}
+        finally:
+            self._tick_lock.release()
 
     def _run_tracked_action(self, label: str, action: str, worker, *, use_runtime_lock: bool = True) -> WebResponse:
         action_id = self._begin_action(label)
@@ -578,12 +590,21 @@ class PrimordialWebApp:
         return payload
 
     def continuous_tick_once(self) -> dict[str, Any]:
-        with self._lock:
-            mode = self.runtime.execution_mode_payload()
-            if mode.get("mode") != "continuous":
-                return {"ran": False, "interval_seconds": mode.get("interval_seconds", 30)}
+        mode = self.runtime.execution_mode_payload()
+        if mode.get("mode") != "continuous":
+            return {"ran": False, "interval_seconds": mode.get("interval_seconds", 30)}
+        if not self._tick_lock.acquire(blocking=False):
+            return {
+                "ran": False,
+                "busy": True,
+                "interval_seconds": mode.get("interval_seconds", 30),
+                "summary": "previous continuous tick still running",
+            }
+        try:
             report = self.runtime.run_tick(max_executions=1)
             return {"ran": True, "interval_seconds": mode.get("interval_seconds", 30), "summary": report.summary}
+        finally:
+            self._tick_lock.release()
 
     def _action_response(self, action: str, result: dict[str, Any]) -> WebResponse:
         payload: dict[str, Any] = {
@@ -599,13 +620,39 @@ class PrimordialWebApp:
                 "operator_intent",
                 "credentials",
                 "target",
+                "scope",
+                "scopePayload",
+                "scopeProfiles",
                 "models",
                 "caido",
                 "findings_context",
+                "storage_status",
             ):
                 if key in result:
                     payload[key] = result[key]
         return self._json_response(payload)
+
+    def _scope_refresh_result(self, *, target=None) -> dict[str, Any]:
+        scope_payload = self.runtime.scope_payload()
+        scope_profiles = self.runtime.scope_profiles_payload()
+        scope_targets = [item for item in scope_payload.get("targets", []) if self._target_handle(item)]
+        return {
+            "target": target.as_payload() if target is not None else None,
+            "scope": self._scope_view(scope_targets),
+            "scopePayload": scope_payload,
+            "scopeProfiles": scope_profiles,
+        }
+
+    def _runtime_control_response(self, result: dict[str, Any]) -> WebResponse:
+        return self._json_response(
+            {
+                "ok": True,
+                "action": "runtime-control",
+                "execution_mode": result["execution_mode"],
+                "operator_intent": result["operator_intent"],
+                "work_status": self.work_status_payload(),
+            }
+        )
 
     def _target_asset_rows(
         self,
@@ -754,6 +801,7 @@ class PrimordialWebApp:
         intent = self.runtime.operator_intent_payload()
         execution_mode = self.runtime.execution_mode_payload()
         runtime_tuning = self.runtime.runtime_tuning_payload()
+        storage_status = self.runtime.storage_status_payload()
         findings_context = self.runtime.findings_context_payload(include_guidance=False)
         skills = self.runtime.skills_payload(include_body=False)
         metrics = dashboard.get("system_metrics", {})
@@ -804,6 +852,7 @@ class PrimordialWebApp:
                 "workStatus": work_status,
                 "systemMetrics": metrics,
                 "premiumWrapper": premium_wrapper,
+                "storage": storage_status,
             },
             "models": model_rows,
             "modelPayload": models,
@@ -831,6 +880,7 @@ class PrimordialWebApp:
             "inquiryChat": self._operator_chat_view(),
             "signals": self._signals_view(audit),
             "credentials": credentials,
+            "storage_status": storage_status,
             "selfTest": {"status": "not_run", "checks": [], "summary": {}},
             "api": {
                 "generatedAt": datetime.now(timezone.utc).isoformat(),
@@ -883,6 +933,28 @@ class PrimordialWebApp:
             for role in roles
             if isinstance(role, dict)
         ]
+
+    def _intent_policy_flags(self, policy: dict[str, Any]) -> dict[str, bool]:
+        kerberos = policy.get("kerberos_policy", {}) if isinstance(policy.get("kerberos_policy"), dict) else {}
+        credential = policy.get("credential_policy", {}) if isinstance(policy.get("credential_policy"), dict) else {}
+        lab = policy.get("lab_policy", {}) if isinstance(policy.get("lab_policy"), dict) else {}
+        return {
+            "public_poc_research": bool(policy.get("public_poc_research")),
+            "searchsploit_allowed": bool(policy.get("searchsploit_allowed")),
+            "read_poc_examples": bool(policy.get("read_poc_examples")),
+            "poc_applicability_validation": bool(policy.get("poc_applicability_validation")),
+            "exploit_code_generation": bool(policy.get("exploit_code_generation")),
+            "poc_execution": bool(policy.get("poc_execution")),
+            "credential_validation": bool(credential.get("credential_validation_allowed")),
+            "credential_guessing": bool(credential.get("credential_guessing_allowed")),
+            "credential_spraying": bool(credential.get("credential_spraying_allowed")),
+            "hash_cracking": bool(credential.get("hash_cracking_allowed")),
+            "kerberos_asrep_roast": bool(kerberos.get("asrep_roast_check_allowed")),
+            "kerberos_kerberoast": bool(kerberos.get("kerberoast_check_allowed")),
+            "lab_flag_collection": bool(lab.get("lab_flag_collection_allowed")),
+            "htb_lab_behavior": bool(lab.get("htb_lab_behavior_allowed")),
+            "reverse_shell": bool(lab.get("reverse_shell_allowed")),
+        }
 
     def _selected_target_filter(self, target: str | None, targets: list[dict[str, Any]]) -> str | None:
         selected = str(target or "").strip()
@@ -1370,7 +1442,8 @@ class PrimordialWebApp:
             "intent": {
                 "id": str(active_intent.get("id") or "recon_only"),
                 "label": str(active_intent.get("label") or active_intent.get("id") or "Recon Only"),
-                "flags": policy,
+                "flags": self._intent_policy_flags(policy),
+                "policy": policy,
             },
             "autonomy": str(self.runtime.config.autonomy.mode.value),
             "autonomyModes": ["manual", "assisted", "supervised", "supervised_auto", "high_autonomy"],
@@ -1658,6 +1731,7 @@ class PrimordialWebApp:
                     "who": "me" if item.get("role") == "operator" else "agent",
                     "t": self._time_label(item.get("created_at")),
                     "text": str(item.get("body") or ""),
+                    "model": str(item.get("model") or ""),
                 }
             )
         return rows or [{"who": "system", "t": self._time_label(None), "text": "Operator chat is ready."}]
