@@ -43,6 +43,13 @@ primordial/core/web/frontend/src/generated-new-gui.jsx
 primordial/core/web/frontend/src/generated-gui.jsx
 MANIFEST
 
+# Local RAG source drops
+docs/RAG_SRC/
+primordial-rag-preprocess/output/*
+!primordial-rag-preprocess/output/.gitkeep
+primordial-rag-preprocess/.venv/
+primordial-rag-preprocess/config/source_overrides.yaml
+
 # Virtual environments
 venv/
 ENV/
@@ -60,7 +67,7 @@ env/
 .DS_Store
 Thumbs.db
 
-# Runtime artifacts (except specific subdirectories we want)
+# Runtime artifacts
 runtime/crash.journal
 *.log
 docs/HUMAN_CHANGE_GUIDE.md
@@ -69,11 +76,10 @@ CLAUDE.md
 claude-living_prd-context-todo_list.tracker.tmp
 runtime/
 runtime/primordial.db
+chat_log/
+findings/notion/*/notion-export.md
+findings/targets/*/evidence.md
+findings/targets/*/findings.md
+findings/targets/*/guidance.md
 my-todo
 TEMP-worth-pulling-from-n8n.md
-findings/notion/pirate.htb/notion-export.md
-findings/notion/principal.htb/notion-export.md
-findings/targets/pirate.htb/evidence.md
-findings/targets/principal.htb/evidence.md
-findings/targets/principal.htb/findings.md
-findings/targets/principal.htb/guidance.md

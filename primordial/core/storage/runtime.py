@@ -1873,6 +1873,42 @@ class RuntimeStore:
             connection.commit()
         return self._sync_job_from_row(claimed) if claimed else None
 
+    def fail_pending_external_sync_jobs(
+        self,
+        *,
+        kind: ExternalSyncKind,
+        reason: str,
+        metadata_patch: dict[str, object] | None = None,
+    ) -> int:
+        now = utc_now().isoformat()
+        metadata = {
+            "suppressed_pending_sync": True,
+            "suppression_reason": reason,
+            **(metadata_patch or {}),
+        }
+        with closing(self.connect()) as connection:
+            connection.execute("BEGIN")
+            cursor = connection.execute(
+                """
+                UPDATE external_sync_jobs
+                SET status = %s,
+                    last_error = %s,
+                    updated_at = %s,
+                    metadata = metadata || %s
+                WHERE kind = %s AND status = %s
+                """,
+                (
+                    ExternalSyncStatus.FAILED.value,
+                    reason,
+                    now,
+                    _dump(metadata),
+                    kind.value,
+                    ExternalSyncStatus.PENDING.value,
+                ),
+            )
+            connection.commit()
+        return cursor.rowcount
+
     def insert_notion_page(self, page: NotionPage) -> None:
         self._execute(
             """

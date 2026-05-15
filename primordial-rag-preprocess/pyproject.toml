@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "primordial-rag-preprocess"
+version = "0.1.0"
+description = "Local-only preprocessing pipeline for PRIMORDIAL RAG corpora."
+requires-python = ">=3.11"
+dependencies = [
+  "docling>=2.70",
+  "pydantic>=2.0",
+  "pyyaml>=6.0",
+  "rich>=13.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0"]
+
+[tool.setuptools]
+packages = ["primordial_preprocess", "primordial_preprocess.extraction"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

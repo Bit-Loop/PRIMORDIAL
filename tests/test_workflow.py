@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import io
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from urllib import error
 
 from primordial.config import AppConfig
 from primordial.runtime import PrimordialRuntime
@@ -12,6 +14,8 @@ from primordial.core.domain.enums import (
     AgentRole,
     EvidenceType,
     EventType,
+    ExternalSyncKind,
+    ExternalSyncStatus,
     InterestStatus,
     MethodologyPhase,
     ProviderRoute,
@@ -25,6 +29,7 @@ from primordial.core.domain.enums import (
 from primordial.core.domain.models import (
     EscalationPackage,
     EvidenceRecord,
+    ExternalSyncJob,
     Interest,
     Target,
     Task,
@@ -285,6 +290,83 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(accepted["Fingerprint services"]["primitive_hint"], "tcp-service-discovery")
         self.assertEqual(rejected["Run web vulnerability scan"]["primitive_hint"], "web-vulnerability-scan")
         self.assertEqual(rejected["Run web vulnerability scan"]["reason"], "missing primitive mapping")
+
+    def test_admitted_safe_ai_proposals_materialize_into_tasks(self) -> None:
+        evidence = EvidenceRecord(
+            target_id=self.target.id,
+            type=EvidenceType.OPERATOR_NOTE,
+            title="Current evidence note",
+            summary="Manual current-generation evidence for planner proposal materialization.",
+            source_ref="fixture://operator-note",
+            verification_status=VerificationStatus.PARTIAL,
+            confidence=0.6,
+            freshness=0.8,
+            metadata={"kind": "operator_note"},
+        )
+        self.runtime.store.insert_evidence(evidence)
+        signature = self.runtime.workflow._target_analysis_signature(self.target)
+        analysis = Task(
+            target_id=self.target.id,
+            phase=MethodologyPhase.ANALYSIS,
+            kind=TaskKind.ANALYZE_EVIDENCE,
+            title="Analyze accumulated evidence",
+            summary="Already analyzed with admitted primitive proposals.",
+            role=AgentRole.ANALYSIS_WORKER,
+            risk_tier=RiskTier.LOW,
+            status=TaskStatus.SUCCEEDED,
+            metadata={
+                "analysis_signature": signature,
+                "ai_proposal": {
+                    "candidate_actions": [
+                        {"title": "Capture HTTP headers", "primitive_hint": "http_header_analysis"},
+                        {"title": "Run web vulnerability scan", "primitive_hint": "web_vulnerability_scan"},
+                    ],
+                },
+            },
+        )
+        self.runtime.store.insert_task(analysis)
+
+        report = self.runtime.run_tick(max_executions=0)
+        materialized = [
+            task for task in report.created_tasks if task.metadata.get("ai_proposal_materialized")
+        ]
+
+        self.assertEqual(len(materialized), 1)
+        self.assertEqual(materialized[0].kind, TaskKind.RECON_SCAN)
+        self.assertEqual(materialized[0].metadata["primitive_hint"], "http-probe")
+        self.assertEqual(materialized[0].metadata["raw_primitive_hint"], "http_header_analysis")
+        self.assertFalse(
+            any(task.metadata.get("primitive_hint") == "web-vulnerability-scan" for task in report.created_tasks)
+        )
+
+    def test_analysis_signature_ignores_task_churn(self) -> None:
+        evidence = EvidenceRecord(
+            target_id=self.target.id,
+            type=EvidenceType.OPERATOR_NOTE,
+            title="Stable evidence",
+            summary="Evidence set should drive analysis freshness.",
+            source_ref="fixture://stable-evidence",
+            verification_status=VerificationStatus.PARTIAL,
+            confidence=0.6,
+            freshness=0.8,
+        )
+        self.runtime.store.insert_evidence(evidence)
+        before = self.runtime.workflow._target_analysis_signature(self.target)
+        task = Task(
+            target_id=self.target.id,
+            phase=MethodologyPhase.RECON,
+            kind=TaskKind.SERVICE_DISCOVERY,
+            title="Failed service task",
+            summary="Task churn fixture.",
+            role=AgentRole.RECON_WORKER,
+            risk_tier=RiskTier.LOW,
+            status=TaskStatus.FAILED,
+        )
+        self.runtime.store.insert_task(task)
+
+        after = self.runtime.workflow._target_analysis_signature(self.target)
+
+        self.assertEqual(before, after)
 
     def test_verify_hypothesis_writes_bounded_verification_result(self) -> None:
         evidence = EvidenceRecord(
@@ -775,6 +857,89 @@ class WorkflowTests(unittest.TestCase):
         packet = review_tasks[0].metadata["escalation_package"]["metadata"]["packet"]
         self.assertEqual(packet["operator_intent"], "recon_only")
         self.assertEqual(packet["required_output"]["recommended_next_actions"], "array<object>")
+
+    def test_failed_planner_escalation_is_visible_in_methodology_state(self) -> None:
+        self.runtime.store.insert_evidence(
+            EvidenceRecord(
+                target_id=self.target.id,
+                type=EvidenceType.OPERATOR_NOTE,
+                title="Manual evidence note",
+                summary="Evidence exists but the planner escalation failed.",
+                source_ref="fixture://manual-note",
+                verification_status=VerificationStatus.PARTIAL,
+                confidence=0.6,
+                freshness=0.8,
+            )
+        )
+        failed = Task(
+            target_id=self.target.id,
+            phase=MethodologyPhase.ANALYSIS,
+            kind=TaskKind.REVIEW_PREMIUM_ESCALATION,
+            title="Escalate uncertain planner state to Claude/GPT",
+            summary="Ask wrapper for next bounded task.",
+            role=AgentRole.ANALYSIS_WORKER,
+            status=TaskStatus.FAILED,
+            metadata={"last_error": "agent chat API is unreachable"},
+        )
+        self.runtime.store.insert_task(failed)
+
+        state = self.runtime.workflow.preview_target_state(self.target)
+
+        self.assertTrue(
+            any("Planner uncertainty escalation failed: agent chat API is unreachable" == blocker for blocker in state.blockers)
+        )
+        self.assertEqual(
+            state.metadata["planner_escalation_status"]["latest_failed"]["task_id"],
+            failed.id,
+        )
+
+    def test_notion_auth_failure_blocks_retry_until_credentials_change(self) -> None:
+        self.runtime.set_notion_credentials(api_key="bad-token", parent_page_id="notion-page", version="2022-06-28")
+        job = ExternalSyncJob(
+            kind=ExternalSyncKind.NOTION,
+            target_id=self.target.id,
+            summary="Sync target to Notion",
+            payload={"target_id": self.target.id},
+            status=ExternalSyncStatus.PENDING,
+        )
+        self.runtime.store.insert_external_sync_job(job)
+        http_error = error.HTTPError(
+            "https://api.notion.com/v1/pages",
+            401,
+            "Unauthorized",
+            {},
+            io.BytesIO(b'{"message":"invalid token"}'),
+        )
+
+        with patch("primordial.adapters.notion.request.urlopen", side_effect=http_error) as mocked_urlopen:
+            completed = self.runtime.notion.process_pending(limit=1)
+
+        self.assertEqual(completed, 0)
+        self.assertEqual(mocked_urlopen.call_count, 1)
+        status = self.runtime.credentials_payload()
+        self.assertTrue(status["services"]["notion"]["service_status"]["auth_blocked"])
+        refreshed = next(item for item in self.runtime.store.list_external_sync_jobs(limit=20) if item.id == job.id)
+        self.assertEqual(refreshed.status, ExternalSyncStatus.FAILED)
+        self.assertTrue(refreshed.metadata["auth_blocked"])
+
+        retry_job = ExternalSyncJob(
+            kind=ExternalSyncKind.NOTION,
+            target_id=self.target.id,
+            summary="Retry target to Notion",
+            payload={"target_id": self.target.id},
+            status=ExternalSyncStatus.PENDING,
+        )
+        self.runtime.store.insert_external_sync_job(retry_job)
+        with patch("primordial.adapters.notion.request.urlopen") as mocked_retry:
+            self.assertEqual(self.runtime.notion.process_pending(limit=1), 0)
+
+        mocked_retry.assert_not_called()
+        suppressed = next(item for item in self.runtime.store.list_external_sync_jobs(limit=20) if item.id == retry_job.id)
+        self.assertEqual(suppressed.status, ExternalSyncStatus.FAILED)
+        self.assertTrue(suppressed.metadata["auth_blocked"])
+
+        self.runtime.set_notion_credentials(api_key="bad-token", parent_page_id="notion-page", version="2022-06-28")
+        self.assertNotIn("service_status", self.runtime.credentials_payload()["services"]["notion"])
 
     def test_execution_escalation_package_uses_local_chat_wrapper_when_remote_flag_is_disabled(self) -> None:
         evidence = EvidenceRecord(

@@ -3185,6 +3185,7 @@ class PrimordialRuntime:
             "parent_page_id": parent_page_id or "",
             "version": version or "",
         }
+        self.credentials.clear_service_status("notion")
         outcome = self.credentials.update_service("notion", values)
         self.store.insert_event(
             EventRecord(

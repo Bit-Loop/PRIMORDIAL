@@ -8,8 +8,14 @@ from primordial.core.credentials import CredentialStore
 from primordial.core.findings_context import FindingsContextService
 from primordial.core.events.bus import EventBus, RuntimeSignal
 from primordial.core.domain.enums import EventType, ExternalSyncKind, ExternalSyncStatus
-from primordial.core.domain.models import EventRecord, NotionPage
+from primordial.core.domain.models import EventRecord, NotionPage, utc_now
 from primordial.core.storage.runtime import RuntimeStore
+
+
+class NotionSyncError(RuntimeError):
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class NotionSyncService:
@@ -28,6 +34,9 @@ class NotionSyncService:
 
     def process_pending(self, limit: int = 10) -> int:
         completed = 0
+        if self._auth_blocked():
+            self._suppress_pending_auth_blocked()
+            return completed
         for _ in range(limit):
             job = self.store.claim_next_external_sync_job(kind=ExternalSyncKind.NOTION)
             if job is None:
@@ -125,9 +134,13 @@ class NotionSyncService:
                             metadata={"job_id": job.id, "parent": root["id"]},
                         )
                     )
-            except (OSError, error.URLError, error.HTTPError, ValueError) as exc:
+            except (OSError, error.URLError, error.HTTPError, ValueError, NotionSyncError) as exc:
                 job.status = ExternalSyncStatus.FAILED
                 job.last_error = str(exc)
+                if self._is_auth_failure(exc):
+                    job.metadata["auth_blocked"] = True
+                    job.metadata["auth_blocked_at"] = utc_now().isoformat()
+                    self._mark_auth_blocked(str(exc))
                 self.store.insert_external_sync_job(job)
                 self.store.insert_event(
                     EventRecord(
@@ -136,6 +149,8 @@ class NotionSyncService:
                         target_id=target.id,
                     )
                 )
+                if self._is_auth_failure(exc):
+                    self._suppress_pending_auth_blocked()
                 continue
 
             job.status = ExternalSyncStatus.SUCCEEDED
@@ -197,7 +212,35 @@ class NotionSyncService:
                 return json.loads(response.read().decode("utf-8"))
         except error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
-            raise ValueError(f"Notion API returned {exc.code}: {detail}") from exc
+            raise NotionSyncError(f"Notion API returned {exc.code}: {detail}", status_code=exc.code) from exc
+
+    def _auth_blocked(self) -> bool:
+        return bool(self.credentials.service_status("notion").get("auth_blocked"))
+
+    def _is_auth_failure(self, exc: BaseException) -> bool:
+        status_code = getattr(exc, "status_code", None)
+        if status_code in {401, 403}:
+            return True
+        if isinstance(exc, error.HTTPError) and exc.code in {401, 403}:
+            return True
+        return False
+
+    def _mark_auth_blocked(self, reason: str) -> None:
+        self.credentials.set_service_status(
+            "notion",
+            {
+                "auth_blocked": True,
+                "auth_blocked_at": utc_now().isoformat(),
+                "last_error": reason,
+            },
+        )
+
+    def _suppress_pending_auth_blocked(self) -> int:
+        return self.store.fail_pending_external_sync_jobs(
+            kind=ExternalSyncKind.NOTION,
+            reason="Notion sync suppressed after authentication failure; save or clear Notion credentials to retry",
+            metadata_patch={"auth_blocked": True},
+        )
 
     def _paragraph(self, text: str) -> dict[str, object]:
         return {

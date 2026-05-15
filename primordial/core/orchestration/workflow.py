@@ -112,6 +112,14 @@ class WorkflowOrchestrator:
         "chain-reasoning": TaskKind.CHAIN_CANDIDATES,
     }
     RAG_HINT_CORPUS_TYPES = {"cve_advisory", "exploit_note", "htb_writeup"}
+    AI_PROPOSAL_MATERIALIZED_KINDS = frozenset(
+        {
+            TaskKind.RECON_SCAN,
+            TaskKind.SERVICE_DISCOVERY,
+            TaskKind.DNS_ENUMERATION,
+            TaskKind.WEB_CONTENT_DISCOVERY,
+        }
+    )
 
     def __init__(
         self,
@@ -410,12 +418,18 @@ class WorkflowOrchestrator:
             if task.status in {TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.WAITING, TaskStatus.NEEDS_APPROVAL}
         ]
         candidate_actions = self._methodology_candidate_actions(target)
+        ai_admission = self._evaluate_ai_proposal_admission(tasks)
+        ai_materialized_actions = self._ai_admitted_candidate_actions(
+            target,
+            ai_admission,
+            reserved_kinds={item.kind for item in candidate_actions},
+        )
+        candidate_actions.extend(ai_materialized_actions)
         remote_review_admission = self._evaluate_remote_review_admission(target)
         candidate_actions.extend(remote_review_admission["actions"])
         rag_hint_admission = self._evaluate_rag_hint_admission(target)
         candidate_actions.extend(rag_hint_admission["actions"])
         blockers = self._methodology_blockers(target, evidence)
-        ai_admission = self._evaluate_ai_proposal_admission(tasks)
         if ai_admission["rejected"]:
             blockers.extend(
                 f"AI proposal rejected: {item['title']} ({item['reason']})"
@@ -431,6 +445,9 @@ class WorkflowOrchestrator:
                 f"RAG hint rejected: {item['title']} ({item['reason']})"
                 for item in rag_hint_admission["rejected"][:3]
             )
+        failed_planner_escalation = self._latest_failed_planner_escalation(target)
+        if failed_planner_escalation is not None:
+            blockers.append(f"Planner uncertainty escalation failed: {failed_planner_escalation['error']}")
         verified_interests = self._verified_interest_count_current_generation(target)
         retry_budget = {
             task.kind.value: max(0, task.max_attempts - task.attempts)
@@ -510,6 +527,18 @@ class WorkflowOrchestrator:
                 "waiting_task_count": len(waiting_or_active),
                 "verified_interest_count": verified_interests,
                 "ai_proposal_admission": ai_admission,
+                "ai_materialized_actions": [
+                    {
+                        "kind": item.kind.value,
+                        "title": item.title,
+                        "primitive_hint": item.metadata.get("primitive_hint"),
+                        "source_ai_task_id": item.metadata.get("source_ai_task_id"),
+                    }
+                    for item in ai_materialized_actions
+                ],
+                "planner_escalation_status": {
+                    "latest_failed": failed_planner_escalation,
+                },
                 "remote_review_admission": {
                     "accepted": remote_review_admission["accepted"],
                     "rejected": remote_review_admission["rejected"],
@@ -975,6 +1004,32 @@ class WorkflowOrchestrator:
             )
         return reasons
 
+    def _latest_failed_planner_escalation(self, target: Target) -> dict[str, object] | None:
+        active_generation = self._target_active_generation(target)
+        for task in self.store.list_tasks(target_id=target.id, limit=100):
+            if task.kind != TaskKind.REVIEW_PREMIUM_ESCALATION or task.status != TaskStatus.FAILED:
+                continue
+            task_generation = task.metadata.get("active_ip_generation")
+            if (
+                active_generation is not None
+                and task_generation is not None
+                and str(task_generation) != active_generation
+            ):
+                continue
+            error = str(task.metadata.get("last_error") or task.metadata.get("error") or "").strip()
+            if not error:
+                latest_run = next(iter(self.store.list_task_runs(task_id=task.id, limit=1)), None)
+                error = str(latest_run.error or "").strip() if latest_run is not None else ""
+            if not error:
+                error = task.summary
+            return {
+                "task_id": task.id,
+                "title": task.title,
+                "error": error,
+                "active_ip_generation": task_generation,
+            }
+        return None
+
     def _planner_uncertainty_question(self, target: Target, state: TargetMethodologyState) -> str:
         return (
             f"What is the next valid, evidence-linked task for {target.handle} under "
@@ -1260,6 +1315,18 @@ class WorkflowOrchestrator:
             and bool(password.get("configured"))
         )
 
+    def _notion_sync_auth_blocked(self) -> bool:
+        if not self.credentials_status_loader:
+            return False
+        try:
+            status = self.credentials_status_loader()
+        except Exception:
+            return False
+        services = status.get("services", {}) if isinstance(status, dict) else {}
+        notion = services.get("notion", {}) if isinstance(services, dict) else {}
+        service_status = notion.get("service_status", {}) if isinstance(notion, dict) else {}
+        return bool(isinstance(service_status, dict) and service_status.get("auth_blocked"))
+
     def _profile_allows_task(self, target: Target, task_kind_value: str) -> bool:
         allowed = self.autonomy.profile_task_allowlist.get(target.profile.value, frozenset())
         return task_kind_value in allowed
@@ -1416,6 +1483,56 @@ class WorkflowOrchestrator:
                         item["raw_primitive_hint"] = raw_primitive_hint
                     rejected.append(item)
         return {"accepted": accepted[:8], "rejected": rejected[:8]}
+
+    def _ai_admitted_candidate_actions(
+        self,
+        target: Target,
+        ai_admission: dict[str, list[dict[str, object]]],
+        *,
+        reserved_kinds: set[TaskKind],
+    ) -> list[PlannedTargetAction]:
+        if not self._target_has_current_generation_evidence(target):
+            return []
+        active_generation = self._target_active_generation(target)
+        actions: list[PlannedTargetAction] = []
+        for item in ai_admission.get("accepted", []):
+            primitive_hint = normalize_primitive_hint(str(item.get("primitive_hint") or ""))
+            if not primitive_hint:
+                continue
+            task_kind = self.REMOTE_REVIEW_KIND_BY_PRIMITIVE.get(primitive_hint)
+            if task_kind not in self.AI_PROPOSAL_MATERIALIZED_KINDS:
+                continue
+            if task_kind in reserved_kinds:
+                continue
+            if self._task_exists_for_current_generation(target.id, task_kind, active_generation):
+                continue
+            if not self._intent_allows_task(target, task_kind):
+                continue
+            blueprint = blueprint_for(task_kind)
+            title = str(item.get("title") or blueprint.title).strip() or blueprint.title
+            actions.append(
+                PlannedTargetAction(
+                    kind=task_kind,
+                    title=title,
+                    summary=(
+                        f"Run registered primitive {primitive_hint} from an admitted planner proposal; "
+                        "execution remains bounded by scope, policy, and Operator Intent."
+                    ),
+                    confidence=0.68,
+                    phase_label=blueprint.phase.value,
+                    subphase=f"ai_proposal:{task_kind.value}",
+                    transition_reason="AI proposal matched a registered safe recon primitive.",
+                    prerequisite="current-generation evidence and registered primitive mapping",
+                    metadata={
+                        "ai_proposal_materialized": True,
+                        "source_ai_task_id": item.get("task_id"),
+                        "primitive_hint": primitive_hint,
+                        "raw_primitive_hint": item.get("raw_primitive_hint", primitive_hint),
+                    },
+                )
+            )
+            reserved_kinds.add(task_kind)
+        return actions
 
     def _evaluate_remote_review_admission(self, target: Target) -> dict[str, object]:
         evidence = self._current_generation_evidence(target, limit=200)
@@ -2150,16 +2267,9 @@ class WorkflowOrchestrator:
 
     def _target_analysis_signature(self, target: Target) -> str:
         evidence = self._current_generation_evidence(target, limit=200)
-        tasks = self._current_generation_tasks(target, limit=200)
         payload = {
+            "active_ip_generation": self._target_active_generation(target),
             "evidence": sorted(item.id for item in evidence),
-            "blocked_or_failed_tasks": sorted(
-                task.id
-                for task in tasks
-                if task.kind != TaskKind.ANALYZE_EVIDENCE
-                and task.status in {TaskStatus.BLOCKED, TaskStatus.FAILED, TaskStatus.WAITING}
-            ),
-            "task_count": len([task for task in tasks if task.kind != TaskKind.ANALYZE_EVIDENCE]),
         }
         return json.dumps(payload, sort_keys=True)
 
@@ -2765,6 +2875,17 @@ class WorkflowOrchestrator:
                 continue
             self.store.insert_notification(notification)
         for sync_job in result.sync_jobs:
+            if sync_job.kind == ExternalSyncKind.NOTION and self._notion_sync_auth_blocked():
+                self.store.insert_event(
+                    EventRecord(
+                        type=EventType.SYNC_FAILED,
+                        summary="Notion sync suppressed after authentication failure",
+                        target_id=sync_job.target_id,
+                        task_id=task.id,
+                        metadata={"kind": sync_job.kind.value, "auth_blocked": True},
+                    )
+                )
+                continue
             self.store.insert_external_sync_job(sync_job)
             self.store.insert_event(
                 EventRecord(
@@ -2775,7 +2896,7 @@ class WorkflowOrchestrator:
                     metadata={"kind": sync_job.kind.value},
                 )
             )
-        if task.target_id and (result.notes or result.findings):
+        if task.target_id and (result.notes or result.findings) and not self._notion_sync_auth_blocked():
             self.store.insert_external_sync_job(
                 ExternalSyncJob(
                     kind=ExternalSyncKind.NOTION,

@@ -19,6 +19,7 @@ from primordial.adapters.caido import CaidoIntegrationService
 from primordial.core.doctor import dumps_doctor_json, format_doctor_report, run_doctor
 from primordial.core.domain.enums import MethodologyName, ScopeProfile
 from primordial.core.local_runtime import load_project_env, resolve_project_root
+from primordial.core.rag.attack import AttackIndexPreprocessor
 from primordial.core.startup import StartupPreflightError, run_startup_preflight
 from primordial.core.web import serve_web_console
 from primordial.ui.textual_app import launch_tui, render_dashboard_text, render_scope_text
@@ -170,6 +171,16 @@ def build_parser() -> argparse.ArgumentParser:
     rag_ingest.add_argument("--no-docling", action="store_true", help="Disable optional Docling conversion.")
     rag_ingest.add_argument("--no-embed", action="store_true", help="Store chunks without creating embeddings.")
     rag_ingest.add_argument("--json", action="store_true")
+    rag_attck = rag_subparsers.add_parser(
+        "preprocess-attck",
+        help="Parse MITRE ATT&CK STIX JSON into structured non-vector indexes.",
+    )
+    rag_attck.add_argument("--source-dir", default="docs/RAG_SRC", help="Directory containing ATT&CK STIX JSON files.")
+    rag_attck.add_argument(
+        "--out-dir",
+        help="Output root for index directories. Defaults to runtime/artifacts/rag under the project root.",
+    )
+    rag_attck.add_argument("--json", action="store_true")
     rag_search = rag_subparsers.add_parser("search", help="Search imported document chunks for a target.")
     rag_search.add_argument("query", nargs="+")
     rag_search.add_argument("--target", required=True, help="Target handle or ID.")
@@ -289,6 +300,21 @@ def main(argv: list[str] | None = None) -> int:
             timeout_seconds=args.timeout,
             kill_fallback=args.kill,
         )
+    if args.command == "rag" and args.rag_command == "preprocess-attck":
+        project_root = resolve_project_root()
+        load_project_env(project_root)
+        source_dir = Path(args.source_dir)
+        if not source_dir.is_absolute():
+            source_dir = project_root / source_dir
+        output_root = Path(args.out_dir) if args.out_dir else project_root / "runtime" / "artifacts" / "rag"
+        if not output_root.is_absolute():
+            output_root = project_root / output_root
+        payload = AttackIndexPreprocessor().preprocess(source_dir=source_dir, output_root=output_root)
+        if args.json:
+            print(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            print(_format_attck_preprocess(payload))
+        return 0
     try:
         run_startup_preflight()
         runtime = PrimordialRuntime.from_env()
@@ -490,7 +516,7 @@ def main(argv: list[str] | None = None) -> int:
         if command == "rag":
             rag_command = args.rag_command
             if rag_command is None:
-                parser.error("rag requires a subcommand: ingest, search, cve-search, or hints")
+                parser.error("rag requires a subcommand: ingest, preprocess-attck, search, cve-search, or hints")
             if rag_command == "ingest":
                 payload = runtime.rag_ingest_document(
                     args.path,
@@ -733,6 +759,31 @@ def _format_rag_ingest(payload: dict[str, object]) -> str:
         for artifact in artifacts:
             if isinstance(artifact, dict):
                 lines.append(f"artifact={artifact.get('id')} {artifact.get('path')}")
+    return "\n".join(lines)
+
+
+def _format_attck_preprocess(payload: dict[str, object]) -> str:
+    lines = [
+        "ATT&CK structured indexes:",
+        f"raw_vectorized={payload.get('raw_vectorized')}",
+        f"structured_records_vectorized={payload.get('structured_records_vectorized')}",
+    ]
+    indexes = payload.get("indexes", [])
+    if isinstance(indexes, list):
+        for index in indexes:
+            if not isinstance(index, dict):
+                continue
+            lines.append(
+                f"{index.get('index_name')}: domain={index.get('domain')} "
+                f"techniques={index.get('technique_count')} relationships={index.get('relationship_count')} "
+                f"path={index.get('path')}"
+            )
+    allowed = payload.get("allowed_uses", [])
+    prohibited = payload.get("prohibited_uses", [])
+    if isinstance(allowed, list):
+        lines.append("allowed_uses=" + ",".join(str(item) for item in allowed))
+    if isinstance(prohibited, list):
+        lines.append("prohibited_uses=" + ",".join(str(item) for item in prohibited))
     return "\n".join(lines)
 
 

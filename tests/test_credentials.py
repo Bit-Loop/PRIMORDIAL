@@ -74,6 +74,26 @@ class CredentialStoreTests(unittest.TestCase):
             self.assertTrue(status["services"]["caido"]["api_token"]["configured"])
             self.assertNotIn("caido-secret-token", json.dumps(status))
 
+    def test_service_status_is_non_secret_and_cleared_on_save(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "secrets" / "credentials.json"
+            store = CredentialStore(path)
+            store.initialize()
+
+            store.update_service("notion", {"api_key": "secret-notion-token", "parent_page_id": "page-id"})
+            store.set_service_status(
+                "notion",
+                {"auth_blocked": True, "last_error": "Notion API returned 401: invalid token"},
+            )
+            status = store.status()
+
+            self.assertTrue(status["services"]["notion"]["service_status"]["auth_blocked"])
+            self.assertNotIn("secret-notion-token", json.dumps(status))
+
+            store.update_service("notion", {"api_key": "secret-notion-token", "parent_page_id": "page-id"})
+
+            self.assertNotIn("service_status", store.status()["services"]["notion"])
+
     def test_known_credentials_are_canonical_and_lab_is_compat_alias(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "secrets" / "credentials.json"

@@ -1,0 +1,5 @@
+sources:
+  "sha256_here":
+    license_status: "licensed_for_private_rag"
+    extraction_allowed: true
+    notes: "Operator confirms rights to process locally."

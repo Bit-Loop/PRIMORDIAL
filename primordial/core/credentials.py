@@ -62,6 +62,7 @@ class CredentialStore:
         return ""
 
     def update_service(self, service: str, values: dict[str, str]) -> dict[str, object]:
+        self._validate_service(service)
         payload = self._read()
         services = payload.setdefault("services", {})
         service_payload = services.setdefault(service, {})
@@ -77,6 +78,7 @@ class CredentialStore:
             }
             changed.append(key)
         if changed:
+            service_payload.pop("_status", None)
             payload["version"] = 1
             payload["updated_at"] = utc_now().isoformat()
             self._write(payload)
@@ -92,6 +94,40 @@ class CredentialStore:
             self._write(payload)
         return existed
 
+    def set_service_status(self, service: str, status: dict[str, object]) -> None:
+        self._validate_service(service)
+        safe_status = {str(key): value for key, value in status.items()}
+        safe_status["updated_at"] = utc_now().isoformat()
+        payload = self._read()
+        services = payload.setdefault("services", {})
+        service_payload = services.setdefault(service, {})
+        existing = service_payload.get("_status", {}) if isinstance(service_payload, dict) else {}
+        merged = dict(existing) if isinstance(existing, dict) else {}
+        merged.update(safe_status)
+        service_payload["_status"] = merged
+        payload["updated_at"] = utc_now().isoformat()
+        self._write(payload)
+
+    def clear_service_status(self, service: str) -> bool:
+        self._validate_service(service)
+        payload = self._read()
+        services = payload.setdefault("services", {})
+        service_payload = services.get(service, {})
+        if not isinstance(service_payload, dict) or "_status" not in service_payload:
+            return False
+        del service_payload["_status"]
+        payload["updated_at"] = utc_now().isoformat()
+        self._write(payload)
+        return True
+
+    def service_status(self, service: str) -> dict[str, object]:
+        self._validate_service(service)
+        payload = self._read()
+        services = payload.get("services", {})
+        service_payload = services.get(service, {}) if isinstance(services, dict) else {}
+        status = service_payload.get("_status", {}) if isinstance(service_payload, dict) else {}
+        return dict(status) if isinstance(status, dict) else {}
+
     def status(self) -> dict[str, object]:
         payload = self._read()
         result: dict[str, object] = {"path": str(self.path), "services": {}}
@@ -104,6 +140,16 @@ class CredentialStore:
                 "hint": self._status_hint(field, value),
                 "updated_at": stored_entry.get("updated_at") if isinstance(stored_entry, dict) and value else None,
             }
+        services = payload.get("services", {})
+        if isinstance(services, dict):
+            for service, service_payload in services.items():
+                if not isinstance(service_payload, dict):
+                    continue
+                stored_status = service_payload.get("_status", {})
+                if not isinstance(stored_status, dict) or not stored_status:
+                    continue
+                service_status = result["services"].setdefault(service, {})  # type: ignore[union-attr]
+                service_status["service_status"] = dict(stored_status)
         return result
 
     def _field(self, service: str, key: str) -> CredentialField:
@@ -111,6 +157,10 @@ class CredentialStore:
             if field.service == service and field.key == key:
                 return field
         raise ValueError(f"unsupported credential field: {service}.{key}")
+
+    def _validate_service(self, service: str) -> None:
+        if not any(field.service == service for field in self.FIELDS):
+            raise ValueError(f"unsupported credential service: {service}")
 
     def _field_value(self, payload: dict[str, Any], field: CredentialField) -> str:
         if field.env_name:

@@ -152,6 +152,33 @@ class PostgresStorageTests(unittest.TestCase):
         self.assertEqual(claimed.status, ExternalSyncStatus.RUNNING)
         self.assertIsNone(claimed_again)
 
+    def test_pending_external_sync_jobs_can_be_failed_in_bulk(self) -> None:
+        target = Target(handle="notion.htb", display_name="Notion", profile=ScopeProfile.HACK_THE_BOX)
+        self.store.insert_target(target)
+        jobs = [
+            ExternalSyncJob(
+                kind=ExternalSyncKind.NOTION,
+                target_id=target.id,
+                summary="Sync target",
+                payload={"target_id": target.id},
+                status=ExternalSyncStatus.PENDING,
+            )
+            for _ in range(2)
+        ]
+        for job in jobs:
+            self.store.insert_external_sync_job(job)
+
+        failed = self.store.fail_pending_external_sync_jobs(
+            kind=ExternalSyncKind.NOTION,
+            reason="auth blocked",
+            metadata_patch={"auth_blocked": True},
+        )
+        refreshed = {job.id: job for job in self.store.list_external_sync_jobs(limit=20)}
+
+        self.assertEqual(failed, 2)
+        self.assertTrue(all(refreshed[job.id].status == ExternalSyncStatus.FAILED for job in jobs))
+        self.assertTrue(all(refreshed[job.id].metadata["auth_blocked"] for job in jobs))
+
     def test_handoff_consume_and_expire_lifecycle(self) -> None:
         target = Target(handle="handoff.htb", display_name="Handoff", profile=ScopeProfile.HACK_THE_BOX)
         self.store.insert_target(target)

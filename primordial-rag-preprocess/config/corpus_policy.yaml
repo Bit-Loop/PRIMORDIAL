@@ -1,0 +1,37 @@
+extract_open_public_sources: true
+extract_attack_json: true
+extract_markdown: true
+extract_html: false
+extract_known_docs_html: true
+extract_commercial_unknown_license: false
+extract_restricted_security_books: false
+allow_operator_overrides: true
+allow_duplicate_extraction: false
+prefer_docling: true
+docling_only: true
+fallback_extractors_enabled: false
+docling_allow_ocr: false
+docling_chunker: hybrid
+epub_conversion: pandoc_only
+vlm_profile_extraction: false
+overwrite_existing: false
+
+chunking:
+  target_chars: 3600
+  overlap_chars: 500
+
+allowed_contexts_default:
+  - authorized_bug_bounty
+  - local_lab
+  - defensive_assessment
+  - academic_study
+  - owned_lab
+  - ctf
+  - authorized_security_research
+
+known_docs_html_patterns:
+  - kubernetes.io
+  - docs.cisecurity.org
+  - cisa.gov
+  - nsa.gov
+  - owasp.org
