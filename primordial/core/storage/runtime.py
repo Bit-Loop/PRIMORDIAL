@@ -35,7 +35,6 @@ from primordial.core.domain.enums import (
     MethodologyPhase,
     NotificationChannel,
     NotificationStatus,
-    PolicyVerdict,
     PrimitiveRuntime,
     ProviderRoute,
     RiskTier,
@@ -50,7 +49,6 @@ from primordial.core.domain.enums import (
 from primordial.core.domain.models import (
     AgentTrace,
     ArtifactRecord,
-    TraceMetadata,
     new_id as _new_id,
     CheckpointRecord,
     DiscordDelivery,

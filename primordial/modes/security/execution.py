@@ -3103,7 +3103,6 @@ class PrimitiveExecutor:
         normalized = " ".join(value.replace("/", " ").replace("_", " ").split()).strip(" -:;,")
         if len(normalized) < 3:
             return None
-        lowered = normalized.lower()
         if any(prefix in raw_lowered for prefix in ("content-length:", "content-type:", "last-modified:", "etag:")):
             return None
         if len(normalized) > 80:
@@ -4300,7 +4299,6 @@ class PrimitiveExecutor:
 
     def _build_probe_plans(self, assets) -> list[dict[str, str]]:
         hostname_assets = [asset.asset for asset in assets if asset.asset_type == "hostname"]
-        ip_assets = [asset.asset for asset in assets if asset.asset_type == "ip"]
         plans: list[dict[str, str]] = []
         seen: set[tuple[str, str | None]] = set()
 

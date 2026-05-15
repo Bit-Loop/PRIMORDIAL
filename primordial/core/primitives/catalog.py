@@ -10,7 +10,7 @@ from primordial.core.domain.enums import (
     SideEffectLevel,
 )
 from primordial.core.domain.models import PrimitiveManifest
-from primordial.core.catalog.loader import CatalogValidationError, validate_allowed_fields
+from primordial.core.catalog.loader import validate_allowed_fields
 
 
 class PrimitiveCatalog:

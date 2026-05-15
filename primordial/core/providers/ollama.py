@@ -181,7 +181,7 @@ class OllamaClient:
                 data = json.loads(response.read().decode("utf-8"))
         except error.URLError as exc:
             return OllamaModelInfoListResult(ok=False, models=[], error=f"Ollama is not reachable at {self.base_url}: {exc}")
-        except json.JSONDecodeError as exc:
+        except json.JSONDecodeError:
             return OllamaModelInfoListResult(ok=False, models=[], error="Ollama returned invalid JSON")
         if not isinstance(data, dict):
             return OllamaModelInfoListResult(ok=False, models=[], error="Ollama returned a non-object JSON payload")

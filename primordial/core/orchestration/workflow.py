@@ -32,12 +32,12 @@ from primordial.core.domain.models import (
     EventRecord,
     ExternalSyncJob,
     NotificationRecord,
+    Note,
     OrchestrationReport,
     PrimitiveManifest,
     Target,
     TargetMethodologyState,
     Task,
-    TaskExecutionResult,
     TaskRun,
     utc_now,
 )

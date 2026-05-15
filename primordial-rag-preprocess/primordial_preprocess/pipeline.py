@@ -7,7 +7,7 @@ from typing import Any
 
 from .chunking import build_chunks
 from .classification import classify_sources, write_classification_outputs
-from .config import CorpusPolicy, load_overrides, load_policy
+from .config import load_overrides, load_policy
 from .extraction.runner import extract_sources
 from .inventory import inventory_directory, write_inventory_outputs
 from .manifest import build_manifest

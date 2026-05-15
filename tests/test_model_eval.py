@@ -834,10 +834,12 @@ class ModelEvaluationTests(unittest.TestCase):
                 )
 
         client = SpeedyLMStudio({"speed-model": '{"summary":"ok"}'})
-        metrics = lambda: {
-            "cpu": {"memory_available_mb": 16000},
-            "gpu": {"available": True, "memory_free_mb": 512},
-        }
+        def metrics() -> dict[str, object]:
+            return {
+                "cpu": {"memory_available_mb": 16000},
+                "gpu": {"available": True, "memory_free_mb": 512},
+            }
+
         tuner = LMStudioPerformanceTuner(client, host_metrics_sampler=metrics)
 
         payload = tuner.tune(models=["speed-model"], context_length=1024, max_tokens=32, timeout_seconds=1)

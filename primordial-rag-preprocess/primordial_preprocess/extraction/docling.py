@@ -25,10 +25,9 @@ def extract_with_docling(
     markdown_path: Path | str | None = None,
 ) -> dict[str, Any]:
     try:
-        from docling.document_converter import DocumentConverter
+        converter = _converter(allow_ocr=allow_ocr)
     except ModuleNotFoundError as exc:
         raise DoclingExtractionUnavailable("Docling is not installed; no fallback extractor is enabled") from exc
-    converter = _converter(allow_ocr=allow_ocr)
     result = converter.convert(str(path))
     document = result.document
     markdown = str(document.export_to_markdown())

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from primordial.config import AppConfig, AutonomySettings
+from primordial.config import AutonomySettings
 from primordial.core.domain.enums import (
     AgentRole,
     AutonomyMode,

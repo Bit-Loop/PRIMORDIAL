@@ -7,7 +7,6 @@ import ipaddress
 import json
 import os
 import re
-from typing import Any
 from urllib import error, parse, request
 
 from primordial.core.credentials import CredentialStore

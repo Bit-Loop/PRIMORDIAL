@@ -16,9 +16,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from primordial.core.providers.lmstudio import LMStudioClient
-from primordial.core.providers.model_eval import ModelEvaluationService
-from primordial.core.providers.ollama import OllamaClient, OllamaResponse
+from primordial.core.providers.lmstudio import LMStudioClient  # noqa: E402
+from primordial.core.providers.model_eval import ModelEvaluationService  # noqa: E402
+from primordial.core.providers.ollama import OllamaClient, OllamaResponse  # noqa: E402
 
 
 def parse_csv_ints(value: str) -> list[int]:

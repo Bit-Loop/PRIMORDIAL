@@ -22,7 +22,6 @@ def parse_attack_file(path: Path | str) -> list[dict[str, Any]]:
     for obj in objects:
         if not isinstance(obj, dict) or not obj.get("id"):
             continue
-        stix_id = str(obj.get("id") or "")
         records.append(_record_for_object(obj, source_sha256, domain, relationships, by_ref))
     records.sort(key=lambda item: (str(item["object_type"]), str(item.get("technique_id") or ""), str(item.get("name") or "")))
     return records
