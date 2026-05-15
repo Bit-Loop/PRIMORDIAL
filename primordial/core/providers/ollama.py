@@ -47,7 +47,15 @@ class OllamaModelInfoListResult:
     error: str | None = None
 
 
+@dataclass(slots=True)
+class OllamaEmbeddingResponse:
+    model: str
+    embeddings: list[list[float]]
+
+
 class OllamaClient:
+    MAX_EMBEDDING_CHARS = 2048
+
     def __init__(self, base_url: str | None = None, timeout_seconds: int = 90) -> None:
         self.base_url = (base_url or os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")).rstrip("/")
         self.timeout_seconds = timeout_seconds
@@ -147,6 +155,41 @@ class OllamaClient:
         result = self.list_model_infos()
         return OllamaModelListResult(ok=result.ok, models=[item.name for item in result.models], error=result.error)
 
+    def embed(
+        self,
+        *,
+        model: str,
+        inputs: str | list[str],
+        timeout_seconds: int | None = None,
+    ) -> OllamaEmbeddingResponse:
+        normalized_inputs = [inputs] if isinstance(inputs, str) else list(inputs)
+        normalized_inputs = [self._normalize_embedding_input(item) for item in normalized_inputs]
+        if not normalized_inputs:
+            return OllamaEmbeddingResponse(model=model, embeddings=[])
+        try:
+            data = self._post_json(
+                "/api/embed",
+                {"model": model, "input": normalized_inputs},
+                timeout_seconds=timeout_seconds,
+            )
+            embeddings = data.get("embeddings")
+            if isinstance(embeddings, list):
+                return OllamaEmbeddingResponse(model=str(data.get("model", model)), embeddings=self._parse_embeddings(embeddings))
+        except RuntimeError:
+            if len(normalized_inputs) != 1:
+                raise
+        if len(normalized_inputs) != 1:
+            raise RuntimeError("Ollama embedding batch endpoint returned no embeddings")
+        data = self._post_json(
+            "/api/embeddings",
+            {"model": model, "prompt": normalized_inputs[0]},
+            timeout_seconds=timeout_seconds,
+        )
+        embedding = data.get("embedding")
+        if not isinstance(embedding, list):
+            raise RuntimeError("Ollama embedding endpoint returned no embedding vector")
+        return OllamaEmbeddingResponse(model=str(data.get("model", model)), embeddings=[self._parse_embedding(embedding)])
+
     def running_models(self) -> dict[str, object]:
         req = request.Request(
             f"{self.base_url}/api/ps",
@@ -218,9 +261,18 @@ class OllamaClient:
             return False
 
     def _post_generate(self, payload: dict[str, object], *, timeout_seconds: int | None = None) -> dict[str, object]:
+        return self._post_json("/api/generate", payload, timeout_seconds=timeout_seconds)
+
+    def _post_json(
+        self,
+        endpoint: str,
+        payload: dict[str, object],
+        *,
+        timeout_seconds: int | None = None,
+    ) -> dict[str, object]:
         body = json.dumps(payload).encode("utf-8")
         req = request.Request(
-            f"{self.base_url}/api/generate",
+            f"{self.base_url}{endpoint}",
             data=body,
             method="POST",
             headers={"Content-Type": "application/json", "Accept": "application/json"},
@@ -228,6 +280,12 @@ class OllamaClient:
         try:
             with request.urlopen(req, timeout=timeout_seconds or self.timeout_seconds) as response:
                 data = json.loads(response.read().decode("utf-8"))
+        except error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace") if hasattr(exc, "read") else ""
+            detail = f"{exc}"
+            if body.strip():
+                detail = f"{detail}: {body.strip()[:500]}"
+            raise RuntimeError(f"Ollama request failed at {self.base_url}{endpoint}: {detail}") from exc
         except error.URLError as exc:
             raise RuntimeError(f"Ollama is not reachable at {self.base_url}: {exc}") from exc
         except json.JSONDecodeError as exc:
@@ -235,6 +293,21 @@ class OllamaClient:
         if not isinstance(data, dict):
             raise RuntimeError("Ollama returned a non-object JSON payload")
         return data
+
+    def _normalize_embedding_input(self, value: str) -> str:
+        normalized = " ".join(str(value or "").replace("\r", "\n").split())
+        return (normalized or " ")[: self.MAX_EMBEDDING_CHARS]
+
+    def _parse_embeddings(self, values: list[object]) -> list[list[float]]:
+        return [self._parse_embedding(value) for value in values]
+
+    def _parse_embedding(self, value: object) -> list[float]:
+        if not isinstance(value, list):
+            raise RuntimeError("Ollama returned a non-list embedding vector")
+        vector = [float(item) for item in value if isinstance(item, int | float)]
+        if not vector:
+            raise RuntimeError("Ollama returned an empty embedding vector")
+        return vector
 
     def _optional_str(self, value: object) -> str | None:
         if value is None:

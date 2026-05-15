@@ -68,6 +68,9 @@ from primordial.core.providers.ollama import OllamaClient, OllamaModelListResult
 from primordial.core.providers.model_eval import ModelEvaluationService
 from primordial.core.providers.wrapper_prompts import WRAPPER_ROLE_PERSONALITY_PROMPTS, build_wrapper_system_prompt
 from primordial.core.rag import DocumentIngestionService
+from primordial.core.rag.citations import disallowed_rag_synthesis_model, validate_rag_citations
+from primordial.core.rag.embeddings import embedding_provider_from_config
+from primordial.core.rag.importer import RagChunkImporter, RagImportOptions
 from primordial.core.recovery.crash_journal import CrashJournal
 from primordial.core.recovery.resume_tracker import ResumeTracker
 from primordial.core.providers.scheduler import ModelScheduler
@@ -86,6 +89,7 @@ class PrimordialRuntime:
     RUNTIME_TUNING_SETTING = "runtime_tuning"
     MODEL_WRAPPER_MODE_SETTING = "model_wrapper_mode"
     AGENT_CHAT_PROCESS_SETTING = "agent_chat_api_process"
+    RAG_LAST_IMPORT_SETTING = "rag_last_import"
     DEFAULT_WRAPPER_PRESET = "claude_sonnet"
     WRAPPER_EFFORTS = {"low", "medium", "high", "xhigh"}
     WRAPPER_PRESETS = {
@@ -177,12 +181,17 @@ class PrimordialRuntime:
             )
         )
         self.ollama = OllamaClient()
+        self.rag_embedding_provider = embedding_provider_from_config(config.rag.embeddings)
         self.model_scheduler = ModelScheduler(config.autonomy)
         self.verifier = BehaviorVerifier()
         self.validation = build_default_validation_registry()
         self.skills = RuntimeSkillRegistry(config.skills_dir)
         self.findings_context = FindingsContextService(config.findings_dir, config.notion_exports_dir)
-        self.rag = DocumentIngestionService(self.store, config.artifacts_dir)
+        self.rag = DocumentIngestionService(
+            self.store,
+            config.artifacts_dir,
+            embedding_provider=self.rag_embedding_provider,
+        )
         self.resume_tracker = ResumeTracker(self.store, self.event_bus)
         self._last_recovery_status: dict[str, object] = {
             "previous_unclean_shutdown": False,
@@ -1498,20 +1507,406 @@ class PrimordialRuntime:
         self,
         query: str,
         *,
-        target: str,
+        target: str | None = None,
         limit: int = 5,
         corpus_types: list[str] | None = None,
+        filters: dict[str, object] | None = None,
     ) -> dict[str, object]:
-        target_record = self._resolve_target_reference(target)
-        if target_record is None:
+        target_record = self._resolve_target_reference(target) if target else None
+        if target and target_record is None:
             raise ValueError(f"target not found: {target}")
-        results = self.rag.retrieve(query, target_id=target_record.id, limit=limit, corpus_types=corpus_types)
+        results = self.rag.retrieve(
+            query,
+            target_id=target_record.id if target_record else None,
+            limit=limit,
+            corpus_types=corpus_types,
+            filters=filters,
+        )
         return {
-            "target": target_record.as_payload(),
+            "target": target_record.as_payload() if target_record else None,
             "query": query,
             "corpus_types": corpus_types or [],
+            "filters": filters or {},
             "results": [item.as_payload() for item in results],
         }
+
+    def rag_status(self) -> dict[str, object]:
+        counts = self.store.rag_status_counts()
+        provider = self.rag_embedding_provider
+        return {
+            "ok": True,
+            "configured_embeddings": {
+                "provider": provider.provider_name,
+                "model": provider.model_name,
+                "dimension": provider.dimension,
+                "canonical_model_family": getattr(provider, "canonical_model_family", None),
+            },
+            "configured_synthesis": {
+                "provider": self.config.rag.synthesis.provider,
+                "model": self.config.rag.synthesis.model,
+                "disallowed_models": list(self.config.rag.synthesis.disallowed_models),
+            },
+            "last_import": self.store.get_setting(self.RAG_LAST_IMPORT_SETTING, {}),
+            **counts,
+        }
+
+    def rag_config_payload(self) -> dict[str, object]:
+        return {
+            "ok": True,
+            "embeddings": {
+                "provider": self.config.rag.embeddings.provider,
+                "base_url": self.config.rag.embeddings.base_url,
+                "model": self.config.rag.embeddings.model,
+                "batch_size": self.config.rag.embeddings.batch_size,
+                "timeout_seconds": self.config.rag.embeddings.timeout_seconds,
+                "canonical_model_family": self.config.rag.embeddings.canonical_model_family,
+            },
+            "synthesis": {
+                "provider": self.config.rag.synthesis.provider,
+                "base_url": self.config.rag.synthesis.base_url,
+                "model": self.config.rag.synthesis.model,
+                "temperature": self.config.rag.synthesis.temperature,
+                "max_tokens": self.config.rag.synthesis.max_tokens,
+                "backup_allowed_models": list(self.config.rag.synthesis.backup_allowed_models),
+                "disallowed_models": list(self.config.rag.synthesis.disallowed_models),
+            },
+            "default_chunks_dir": str(self.config.project_root / "primordial-rag-preprocess" / "output" / "chunks"),
+            "supported_domains": sorted(self.rag.CORPUS_TYPES),
+            "supported_filters": [
+                "domain",
+                "source_file",
+                "doc_id",
+                "chunk_type",
+                "card_type",
+                "risk_family",
+                "output_mode",
+                "source_priority",
+                "requires_authorized_scope",
+            ],
+            "allowed_use_modes": [
+                "authorized_bug_bounty",
+                "ctf",
+                "local_lab",
+                "defensive_assessment",
+                "academic_study",
+            ],
+        }
+
+    def rag_import_chunks(
+        self,
+        chunks_dir: str | Path | None = None,
+        *,
+        dry_run: bool = False,
+        force: bool = False,
+        reembed: bool = False,
+        skip_embeddings: bool = False,
+        domains: list[str] | None = None,
+        source_files: list[str] | None = None,
+        doc_ids: list[str] | None = None,
+        limit: int | None = None,
+    ) -> dict[str, object]:
+        importer = RagChunkImporter(
+            self.store,
+            self.rag_embedding_provider,
+            batch_size=self.config.rag.embeddings.batch_size,
+        )
+        options = RagImportOptions(
+            chunks_dir=Path(chunks_dir or self.config.project_root / "primordial-rag-preprocess" / "output" / "chunks"),
+            dry_run=dry_run,
+            force=force,
+            reembed=reembed,
+            skip_embeddings=skip_embeddings,
+            domains={str(item).strip() for item in domains or [] if str(item).strip()},
+            source_files={str(item).strip() for item in source_files or [] if str(item).strip()},
+            doc_ids={str(item).strip() for item in doc_ids or [] if str(item).strip()},
+            limit=limit,
+        )
+        summary = importer.import_chunks(options).as_payload()
+        self._record_rag_import_summary(summary, options=options)
+        return summary
+
+    def _record_rag_import_summary(self, summary: dict[str, object], *, options: RagImportOptions) -> None:
+        compact = {
+            "completed_at": utc_now().isoformat(),
+            "chunks_dir": str(options.chunks_dir),
+            "dry_run": options.dry_run,
+            "force": options.force,
+            "reembed": options.reembed,
+            "skip_embeddings": options.skip_embeddings,
+            "domains": sorted(options.domains),
+            "source_files": sorted(options.source_files),
+            "doc_ids": sorted(options.doc_ids),
+            "limit": options.limit,
+            "files_seen": summary.get("files_seen", 0),
+            "records_seen": summary.get("records_seen", 0),
+            "chunks_inserted": summary.get("chunks_inserted", 0),
+            "chunks_updated": summary.get("chunks_updated", 0),
+            "chunks_skipped": summary.get("chunks_skipped", 0),
+            "embeddings_inserted": summary.get("embeddings_inserted", 0),
+            "embeddings_updated": summary.get("embeddings_updated", 0),
+            "embeddings_skipped": summary.get("embeddings_skipped", 0),
+            "failures": summary.get("failures", 0),
+            "embedding_provider": summary.get("embedding_provider"),
+            "embedding_model": summary.get("embedding_model"),
+            "failed_record_ids": list(summary.get("failed_record_ids", []) if isinstance(summary.get("failed_record_ids"), list) else [])[:100],
+            "errors": list(summary.get("errors", []) if isinstance(summary.get("errors"), list) else [])[:20],
+        }
+        self.store.set_setting(self.RAG_LAST_IMPORT_SETTING, compact)
+
+    def rag_chunk_inspect(self, chunk_id: str) -> dict[str, object]:
+        normalized = chunk_id.strip()
+        if normalized.startswith("rag:"):
+            normalized = normalized[4:]
+        chunk = self.store.get_document_chunk(normalized)
+        if chunk is None:
+            raise ValueError(f"RAG chunk not found: {chunk_id}")
+        embedding = self.store.get_record_embedding(
+            record_type="document_chunk",
+            record_id=chunk.id,
+            embedding_model=self.rag_embedding_provider.model_name,
+        )
+        return {
+            "chunk": {**chunk.as_payload(), "citation_id": f"rag:{chunk.id}"},
+            "embedding": embedding.as_payload() if embedding else None,
+        }
+
+    def rag_source_profile(self, doc_id: str, *, limit: int = 50) -> dict[str, object]:
+        clean = str(doc_id or "").strip()
+        if not clean:
+            raise ValueError("doc_id is required")
+        total = self.store.count_document_chunks(metadata_filters={"doc_id": [clean]})
+        chunks = self.store.list_document_chunks(metadata_filters={"doc_id": [clean]}, limit=max(1, limit))
+        if not chunks:
+            raise ValueError(f"RAG source not found: {doc_id}")
+        metadata_rows = [chunk.metadata for chunk in chunks if isinstance(chunk.metadata, dict)]
+        first = metadata_rows[0] if metadata_rows else {}
+        sections = []
+        for metadata in metadata_rows:
+            section = str(metadata.get("section") or "").strip()
+            if section and section not in sections:
+                sections.append(section)
+        domains = sorted(
+            {
+                str(metadata.get("domain") or metadata.get("corpus_type") or "").strip()
+                for metadata in metadata_rows
+                if str(metadata.get("domain") or metadata.get("corpus_type") or "").strip()
+            }
+        )
+        source_files = sorted(
+            {
+                str(metadata.get("source_file") or metadata.get("source_path") or "").strip()
+                for metadata in metadata_rows
+                if str(metadata.get("source_file") or metadata.get("source_path") or "").strip()
+            }
+        )
+        page_values = []
+        for metadata in metadata_rows:
+            for key in ("page_start", "page_end"):
+                try:
+                    if metadata.get(key) is not None:
+                        page_values.append(int(metadata[key]))
+                except (TypeError, ValueError):
+                    continue
+        sample_chunks = []
+        for chunk in chunks[: max(1, min(limit, 25))]:
+            metadata = chunk.metadata if isinstance(chunk.metadata, dict) else {}
+            text = chunk.text
+            if len(text) > 900:
+                text = text[:900].rstrip() + "\n...TRUNCATED_RAG_CHUNK..."
+            sample_chunks.append(
+                {
+                    "chunk_id": chunk.id,
+                    "citation_id": f"rag:{chunk.id}",
+                    "title": chunk.title,
+                    "section": metadata.get("section"),
+                    "page_start": metadata.get("page_start"),
+                    "page_end": metadata.get("page_end"),
+                    "chunk_index": chunk.chunk_index,
+                    "text": text,
+                }
+            )
+        return {
+            "ok": True,
+            "doc_id": clean,
+            "chunk_count": total,
+            "returned_chunks": len(chunks),
+            "title": first.get("title") or first.get("source_file") or chunks[0].title,
+            "source_file": source_files[0] if source_files else first.get("source_file"),
+            "source_files": source_files,
+            "source_sha256": chunks[0].source_sha256,
+            "source_type": first.get("source_type"),
+            "domains": domains,
+            "profile": first.get("profile") if isinstance(first.get("profile"), dict) else {},
+            "sections": sections[:200],
+            "page_start": min(page_values) if page_values else None,
+            "page_end": max(page_values) if page_values else None,
+            "sample_chunks": sample_chunks,
+        }
+
+    def rag_eval_probes(
+        self,
+        queries: list[str],
+        *,
+        target: str | None = None,
+        limit: int = 5,
+        corpus_types: list[str] | None = None,
+        filters: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        clean_queries = [query.strip() for query in queries if str(query).strip()]
+        results = []
+        for query in clean_queries:
+            search = self.rag_search(
+                query,
+                target=target,
+                limit=limit,
+                corpus_types=corpus_types,
+                filters=filters,
+            )
+            rows = search.get("results", [])
+            top = rows if isinstance(rows, list) else []
+            results.append(
+                {
+                    "query": query,
+                    "result_count": len(top),
+                    "top_citations": [str(item.get("citation_id") or item.get("chunk_id")) for item in top[:5] if isinstance(item, dict)],
+                    "top_results": top[:3],
+                }
+            )
+        return {
+            "ok": True,
+            "mode": "retrieval_only",
+            "query_count": len(clean_queries),
+            "limit": limit,
+            "target": target,
+            "corpus_types": corpus_types or [],
+            "filters": filters or {},
+            "results": results,
+        }
+
+    def synthesize_rag_answer(
+        self,
+        query: str,
+        *,
+        mode: str = "grounded_answer",
+        retrieved_chunks: list[dict[str, object]] | None = None,
+        safety_context: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        chunks = retrieved_chunks or self.rag_search(query, limit=5)["results"]
+        clean_chunks = [item for item in chunks if isinstance(item, dict) and not item.get("error")]
+        if not clean_chunks:
+            return {
+                "ok": False,
+                "status": "insufficient_context",
+                "answer": "",
+                "retrieved_ids": [],
+                "validation": validate_rag_citations("", [], mode=mode, require_citations=True).as_payload(),
+            }
+        disallowed = disallowed_rag_synthesis_model(
+            self.config.rag.synthesis.model,
+            self.config.rag.synthesis.disallowed_models,
+        )
+        if disallowed:
+            return {
+                "ok": False,
+                "status": "disallowed_model",
+                "answer": "",
+                "error": f"RAG synthesis model {self.config.rag.synthesis.model!r} is disallowed by pattern {disallowed!r}",
+                "retrieved_ids": [str(item.get("citation_id") or f"rag:{item.get('chunk_id')}") for item in clean_chunks],
+                "validation": validate_rag_citations("", clean_chunks, mode=mode, require_citations=True).as_payload(),
+            }
+        system = build_wrapper_system_prompt(
+            "rag_synthesis",
+            (
+                "Answer only from retrieved RAG context. Cite every factual sentence with rag:<chunk_id>. "
+                "If context is insufficient, say exactly what is missing. Do not use MITRE taxonomy chunks "
+                "to choose actions or expand scope."
+            ),
+        )
+        prompt = self._rag_synthesis_prompt(query, clean_chunks, mode=mode, safety_context=safety_context or {})
+        try:
+            if self.config.rag.synthesis.provider == "ollama":
+                response = self.ollama.generate(
+                    model=self.config.rag.synthesis.model,
+                    system=system,
+                    prompt=prompt,
+                    temperature=self.config.rag.synthesis.temperature,
+                    timeout_seconds=300,
+                )
+                answer = response.text
+                model = response.model
+                provider = "ollama"
+            else:
+                client = LMStudioClient(
+                    base_url=self._lmstudio_base_without_v1(self.config.rag.synthesis.base_url),
+                    timeout_seconds=300,
+                )
+                response = client.chat(
+                    model=self.config.rag.synthesis.model,
+                    system=system,
+                    prompt=prompt,
+                    temperature=self.config.rag.synthesis.temperature,
+                    max_tokens=self.config.rag.synthesis.max_tokens,
+                    timeout_seconds=300,
+                )
+                answer = response.text
+                model = response.model
+                provider = "lmstudio_openai_compatible"
+        except Exception as exc:  # noqa: BLE001 - surface model/provider failures as structured runtime output
+            return {
+                "ok": False,
+                "status": "provider_error",
+                "answer": "",
+                "error": str(exc),
+                "retrieved_ids": [str(item.get("citation_id") or f"rag:{item.get('chunk_id')}") for item in clean_chunks],
+            }
+        validation = validate_rag_citations(answer, clean_chunks, mode=mode, require_citations=True)
+        return {
+            "ok": validation.valid,
+            "status": "ok" if validation.valid else "validation_failed",
+            "answer": answer,
+            "provider": provider,
+            "model": model,
+            "retrieved_ids": validation.retrieved_ids,
+            "validation": validation.as_payload(),
+        }
+
+    def _rag_synthesis_prompt(
+        self,
+        query: str,
+        chunks: list[dict[str, object]],
+        *,
+        mode: str,
+        safety_context: dict[str, object],
+    ) -> str:
+        lines = [
+            f"Mode: {mode}",
+            f"Question: {query.strip()}",
+            f"Safety context: {json.dumps(json_ready(safety_context), sort_keys=True)}",
+            "",
+            "Retrieved context:",
+        ]
+        for item in chunks:
+            citation_id = str(item.get("citation_id") or f"rag:{item.get('chunk_id')}")
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            text = str(item.get("text") or item.get("retrieval_text") or "").strip()
+            if len(text) > 1800:
+                text = text[:1800].rstrip() + "\n...TRUNCATED_RAG_CHUNK..."
+            lines.extend(
+                [
+                    f"[{citation_id}]",
+                    f"source_file={metadata.get('source_file') or item.get('source_file') or ''}",
+                    f"domain={metadata.get('domain') or metadata.get('corpus_type') or ''}",
+                    f"planner_visibility={metadata.get('planner_visibility') or ''}",
+                    text,
+                    "",
+                ]
+            )
+        lines.append("Answer with citations using only rag:<chunk_id> IDs shown above.")
+        return "\n".join(lines)
+
+    def _lmstudio_base_without_v1(self, base_url: str) -> str:
+        clean = base_url.rstrip("/")
+        return clean[:-3] if clean.endswith("/v1") else clean
 
     def rag_cve_search(self, query: str, *, target: str, limit: int = 5) -> dict[str, object]:
         target_record = self._resolve_target_reference(target)
@@ -3446,7 +3841,7 @@ class PrimordialRuntime:
             "Required answer contract:\n"
             "- Use concise markdown with these headings when relevant: Facts, Blockers, Next Actions.\n"
             "- Every factual claim must be supported by a record in the snapshot.\n"
-            "- RAG context is advisory; cite chunk_id and evidence_refs before relying on it.\n"
+            "- RAG context is advisory; cite rag:<chunk_id> and evidence_refs before relying on it.\n"
             "- If user/root flags are not present in evidence, say they have not been obtained.\n"
             "- If current production primitives are insufficient, say exactly which primitive or operator input is missing.\n"
             "- Do not say evidence is implied; use the exact evidence, task, note, or primitive names supplied.\n\n"
@@ -3487,10 +3882,10 @@ class PrimordialRuntime:
         return sorted(set(ids))
 
     def _operator_answer_cites_rag_context(self, body: str, rag_context: list[dict[str, object]]) -> bool:
-        ids = self._rag_context_ids([item for item in rag_context if not item.get("error")])
-        if not ids:
+        clean_context = [item for item in rag_context if not item.get("error")]
+        if not self._rag_context_ids(clean_context):
             return True
-        return any(record_id in body for record_id in ids)
+        return validate_rag_citations(body, clean_context, mode="operator_answer", require_citations=True).valid
 
     def _deterministic_rag_citation_answer(
         self,
@@ -3510,7 +3905,7 @@ class PrimordialRuntime:
             text = str(item.get("text") or "").replace("\n", " ").strip()
             if len(text) > 220:
                 text = text[:220].rstrip() + "..."
-            lines.append(f"- `{chunk_id}` evidence={evidence or 'none'} {title}: {text}")
+            lines.append(f"- `rag:{chunk_id}` evidence={evidence or 'none'} {title}: {text}")
         if not lines:
             return base
         return base + "\n\n**Retrieved Context**\n" + "\n".join(lines)

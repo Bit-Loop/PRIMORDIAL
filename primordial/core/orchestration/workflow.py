@@ -1799,6 +1799,7 @@ class WorkflowOrchestrator:
             for chunk in self.store.list_document_chunks(target_id=target.id, limit=500)
             if str(chunk.metadata.get("corpus_type") or "") in self.RAG_HINT_CORPUS_TYPES
             and str(chunk.metadata.get("hint_policy") or "direct_task_hints") == "direct_task_hints"
+            and str(chunk.metadata.get("planner_visibility") or "normal") != "taxonomy_only"
         ]
         if not terms:
             return chunks[:limit]
@@ -1822,6 +1823,8 @@ class WorkflowOrchestrator:
         evidence: list[object],
     ) -> tuple[dict[str, object] | None, str]:
         corpus_type = str(chunk.metadata.get("corpus_type") or "")
+        if corpus_type == "mitre_attack" or str(chunk.metadata.get("planner_visibility") or "") == "taxonomy_only":
+            return None, "taxonomy-only RAG chunks cannot drive action selection"
         primitive_hint = self._rag_hint_primitive(chunk)
         if not primitive_hint:
             return None, "RAG chunk does not imply a supported primitive hint"

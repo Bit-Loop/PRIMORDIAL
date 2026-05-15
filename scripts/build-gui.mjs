@@ -16,6 +16,7 @@ const sources = [
   'notion.jsx',
   'interests.jsx',
   'caido.jsx',
+  'rag.jsx',
   'app.jsx',
 ];
 
@@ -27,7 +28,8 @@ const aliasesBySource = {
   'notion.jsx': ['Pill', 'Dot', 'Panel'],
   'interests.jsx': ['Pill', 'Dot', 'StatusPill', 'Panel'],
   'caido.jsx': ['Pill', 'Dot', 'Panel'],
-  'app.jsx': ['Rail', 'DashboardMode', 'TraceMode', 'ChatMode', 'PlanMode', 'NotesMode', 'InterestsMode', 'CaidoMode'],
+  'rag.jsx': ['Pill', 'Dot', 'Panel', 'Field'],
+  'app.jsx': ['Rail', 'DashboardMode', 'TraceMode', 'ChatMode', 'PlanMode', 'NotesMode', 'InterestsMode', 'CaidoMode', 'RagMode'],
 };
 
 mkdirSync(outDir, { recursive: true });

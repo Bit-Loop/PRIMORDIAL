@@ -1,4 +1,4 @@
-/* global React, ReactDOM, DashboardMode, TraceMode, ChatMode, PlanMode, NotesMode, InterestsMode, CaidoMode, Rail */
+/* global React, ReactDOM, DashboardMode, TraceMode, ChatMode, PlanMode, NotesMode, InterestsMode, CaidoMode, RagMode, Rail */
 const { useState: useStateApp, useEffect: useEffectApp, useMemo: useMemoApp, useCallback: useCallbackApp } = React;
 const LIVE_REFRESH_MS = 2000;
 const WORK_REFRESH_MS = 3000;
@@ -55,6 +55,7 @@ const EMPTY_PD_DATA = {
   notes: { targets: [], syncStatus: { ok: false, lastSync: 'never', pendingJobs: 0, failedJobs: 0 }, folders: [], pages: {} },
   interests: { surfaces: [], findings: [], pocs: [], artifacts: [] },
   caido: { connection: { configured: false, ok: false }, requests: [], replays: [], savedFilters: [] },
+  rag: { status: null, config: null },
   approvalChat: [],
   inquiryChat: [],
   signals: [],
@@ -296,6 +297,15 @@ function App() {
     request: apiRequest,
     refreshCredentials,
     refreshCaido,
+    ragStatus: () => apiRequest('/api/rag/status', { timeoutMs: WORK_STATUS_TIMEOUT_MS }),
+    ragConfig: () => apiRequest('/api/rag/config', { timeoutMs: WORK_STATUS_TIMEOUT_MS }),
+    ragImport: (body = {}) => apiRequest('/api/rag/import', { method: 'POST', body, timeoutMs: 600000 }),
+    ragSearch: (body = {}) => apiRequest('/api/rag/search', { method: 'POST', body, timeoutMs: REQUEST_TIMEOUT_MS }),
+    ragHints: (body = {}) => apiRequest('/api/rag/hints', { method: 'POST', body, timeoutMs: REQUEST_TIMEOUT_MS }),
+    ragSynthesize: (body = {}) => apiRequest('/api/rag/synthesize', { method: 'POST', body, timeoutMs: 180000 }),
+    ragEval: (body = {}) => apiRequest('/api/rag/eval', { method: 'POST', body, timeoutMs: REQUEST_TIMEOUT_MS }),
+    ragInspectChunk: (chunkId) => apiRequest(`/api/rag/chunks/${encodeURIComponent(chunkId)}`, { timeoutMs: REQUEST_TIMEOUT_MS }),
+    ragSourceProfile: (docId) => apiRequest(`/api/rag/sources/${encodeURIComponent(docId)}`, { timeoutMs: REQUEST_TIMEOUT_MS }),
     action: async (name, body = {}) => {
       setBusy(name);
       try {
@@ -424,6 +434,7 @@ function App() {
         {mode === 'notion'    && <NotesMode     tweaks={tweaks} />}
         {mode === 'interests' && <InterestsMode tweaks={tweaks} />}
         {mode === 'caido'     && <CaidoMode     tweaks={tweaks} />}
+        {mode === 'rag'       && <RagMode       tweaks={tweaks} />}
       </div>
 
       {window.TweaksPanel && (
@@ -451,7 +462,7 @@ function App() {
             <window.TweakRadio
               label="Mode"
               value={mode}
-              options={['dashboard', 'trace', 'chat', 'pair', 'notion', 'interests', 'caido']}
+              options={['dashboard', 'trace', 'chat', 'pair', 'notion', 'interests', 'caido', 'rag']}
               onChange={v => setMode(v)}
             />
             <window.TweakToggle

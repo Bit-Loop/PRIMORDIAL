@@ -6,6 +6,7 @@ from enum import StrEnum
 class ScopeProfile(StrEnum):
     HACKERONE = "hackerone"
     HACK_THE_BOX = "hack_the_box"
+    CORPUS = "corpus"
 
 
 class MethodologyPhase(StrEnum):

@@ -43,8 +43,10 @@ class WebConsoleTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         root = Path(self.temp_dir.name)
+        self.root = root
         config = AppConfig.from_env(project_root=root)
         config.manifests_dir = MANIFESTS_DIR
+        config.rag.embeddings.provider = "deterministic_hash"
         config.ensure_directories()
         self.scope_path = write_scope_file(
             root,
@@ -72,6 +74,13 @@ class WebConsoleTests(unittest.TestCase):
         self.probe_patcher.stop()
         self.runtime.shutdown()
         self.temp_dir.cleanup()
+
+    def _write_rag_chunks(self, records: list[dict[str, object]]) -> Path:
+        chunks_dir = self.root / "rag_chunks"
+        chunks_dir.mkdir(parents=True, exist_ok=True)
+        chunks_file = chunks_dir / "chunks.jsonl"
+        chunks_file.write_text("\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8")
+        return chunks_dir
 
     def test_dashboard_and_audit_endpoints_return_json(self) -> None:
         dashboard_response = self.app.dispatch("GET", "/api/dashboard")
@@ -115,6 +124,108 @@ class WebConsoleTests(unittest.TestCase):
         self.assertIn("skills", skills)
         self.assertIn("workspace", findings)
         self.assertIn("guidance_path", findings["workspace"])
+
+    def test_rag_api_import_search_inspect_source_synthesize_and_eval(self) -> None:
+        chunks_dir = self._write_rag_chunks(
+            [
+                {
+                    "chunk_id": "chunk_web_api_1",
+                    "doc_id": "source_api",
+                    "source_file": "owasp-api.md",
+                    "source_sha256": "b" * 64,
+                    "source_type": "markdown",
+                    "domain": "api_web",
+                    "corpus_type": ["api_security"],
+                    "chunk_index": 0,
+                    "chunk_type": "docling_hybrid",
+                    "title": "BOLA",
+                    "section": "Broken Object Level Authorization",
+                    "retrieval_text": "BOLA testing checks object ownership before returning API objects.",
+                    "raw_text": "BOLA testing checks object ownership before returning API objects.",
+                    "requires_authorized_scope": True,
+                    "planner_visibility": "normal",
+                    "risk_level": "safe_planning",
+                    "metadata": {"profile": {"title": "OWASP API"}},
+                }
+            ]
+        )
+
+        config_response = self.app.dispatch("GET", "/api/rag/config")
+        dry_response = self.app.dispatch(
+            "POST",
+            "/api/rag/import",
+            json.dumps({"chunks_dir": str(chunks_dir), "dry_run": True, "limit": 1}).encode("utf-8"),
+        )
+        import_response = self.app.dispatch(
+            "POST",
+            "/api/rag/import",
+            json.dumps({"chunks_dir": str(chunks_dir), "limit": 1}).encode("utf-8"),
+        )
+        status_response = self.app.dispatch("GET", "/api/rag/status")
+        search_response = self.app.dispatch(
+            "POST",
+            "/api/rag/search",
+            json.dumps({"query": "object ownership API", "domain": ["api_security"], "limit": 3}).encode("utf-8"),
+        )
+        search = json.loads(search_response.body)
+        result = search["results"][0]
+        chunk_response = self.app.dispatch("GET", f"/api/rag/chunks/{result['citation_id']}")
+        source_response = self.app.dispatch("GET", "/api/rag/sources/source_api")
+        self.runtime.config.rag.synthesis.model = "qwen3-coder-next:q4_K_M"
+        synth_response = self.app.dispatch(
+            "POST",
+            "/api/rag/synthesize",
+            json.dumps({"query": "Explain BOLA", "retrieved_chunks": search["results"]}).encode("utf-8"),
+        )
+        eval_response = self.app.dispatch(
+            "POST",
+            "/api/rag/eval",
+            json.dumps({"queries": ["BOLA object ownership"], "domain": ["api_security"], "limit": 2}).encode("utf-8"),
+        )
+        task_count = len(self.runtime.store.list_tasks(limit=500))
+        hints_response = self.app.dispatch(
+            "POST",
+            "/api/rag/hints",
+            json.dumps({"target": "pirate.htb", "query": "directory discovery", "limit": 3}).encode("utf-8"),
+        )
+
+        config = json.loads(config_response.body)
+        dry = json.loads(dry_response.body)
+        imported = json.loads(import_response.body)
+        status = json.loads(status_response.body)
+        chunk = json.loads(chunk_response.body)
+        source = json.loads(source_response.body)
+        synth = json.loads(synth_response.body)
+        evaluation = json.loads(eval_response.body)
+        hints = json.loads(hints_response.body)
+
+        self.assertEqual(config_response.status, 200)
+        self.assertEqual(config["embeddings"]["provider"], "deterministic_hash")
+        self.assertNotIn("api_key", json.dumps(config).lower())
+        self.assertEqual(dry_response.status, 200)
+        self.assertTrue(dry["result"]["dry_run"])
+        self.assertEqual(import_response.status, 200)
+        self.assertEqual(imported["result"]["chunks_inserted"], 1)
+        self.assertEqual(imported["result"]["embeddings_inserted"], 1)
+        self.assertEqual(status["document_chunks"], 1)
+        self.assertEqual(status["record_embeddings"], 1)
+        self.assertEqual(status["last_import"]["records_seen"], 1)
+        self.assertEqual(search_response.status, 200)
+        self.assertEqual(result["citation_id"], "rag:chunk_web_api_1")
+        self.assertEqual(result["metadata"]["domain"], "api_security")
+        self.assertEqual(chunk_response.status, 200)
+        self.assertEqual(chunk["chunk"]["citation_id"], "rag:chunk_web_api_1")
+        self.assertNotIn("embedding", chunk["embedding"])
+        self.assertEqual(source_response.status, 200)
+        self.assertEqual(source["doc_id"], "source_api")
+        self.assertEqual(source["chunk_count"], 1)
+        self.assertEqual(synth["status"], "disallowed_model")
+        self.assertIn("qwen", synth["error"].lower())
+        self.assertEqual(evaluation["mode"], "retrieval_only")
+        self.assertEqual(evaluation["results"][0]["top_citations"], ["rag:chunk_web_api_1"])
+        self.assertEqual(hints_response.status, 200)
+        self.assertIn("candidate_actions", hints)
+        self.assertEqual(len(self.runtime.store.list_tasks(limit=500)), task_count)
 
     def test_caido_health_status_reports_auth_failure_and_legacy_port_migration(self) -> None:
         self.runtime.credentials.update_service(
@@ -797,6 +908,11 @@ class WebConsoleTests(unittest.TestCase):
                 "Claude/GPT",
                 "agent_chat_api wrapper",
                 "remote_premium_local_wrapper",
+                "Citation Inspector",
+                "Evaluation Probes",
+                "/api/rag/status",
+                "/api/rag/search",
+                "/api/rag/synthesize",
             ]:
                 self.assertIn(token, text)
             self.assertNotIn("pirate.htb scope", text)

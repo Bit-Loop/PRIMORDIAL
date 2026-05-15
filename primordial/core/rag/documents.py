@@ -19,7 +19,7 @@ from primordial.core.domain.models import (
     Target,
     utc_now,
 )
-from primordial.core.rag.embeddings import DeterministicHashEmbeddingProvider
+from primordial.core.rag.embeddings import DeterministicHashEmbeddingProvider, EmbeddingProvider
 from primordial.core.storage.runtime import RuntimeStore
 
 
@@ -56,6 +56,7 @@ class RagContextItem:
             text = text[:max_chars].rstrip() + "\n...TRUNCATED_RAG_CHUNK..."
         return {
             "chunk_id": self.chunk.id,
+            "citation_id": f"rag:{self.chunk.id}",
             "target_id": self.chunk.target_id,
             "source_artifact_id": self.chunk.source_artifact_id,
             "source_sha256": self.chunk.source_sha256,
@@ -71,7 +72,39 @@ class RagContextItem:
 
 
 class DocumentIngestionService:
-    CORPUS_TYPES = {"operator_note", "cve_advisory", "exploit_note", "htb_writeup"}
+    LEGACY_CORPUS_TYPES = {"operator_note", "cve_advisory", "exploit_note", "htb_writeup"}
+    CORPUS_TYPES = {
+        *LEGACY_CORPUS_TYPES,
+        "api_security",
+        "web_security",
+        "kubernetes_cloud",
+        "container_security",
+        "network_infra",
+        "windows_linux",
+        "powershell_ops",
+        "methodology_standards",
+        "mitre_attack",
+        "binary_exploitation",
+        "kernel_security",
+        "hardware_security",
+        "formal_methods",
+        "platform_metadata",
+        "general_security",
+    }
+    CORPUS_ALIASES = {
+        "api_web": "api_security",
+        "attack_taxonomy": "mitre_attack",
+        "binary_analysis": "binary_exploitation",
+        "cloud_native_security": "kubernetes_cloud",
+        "engagement_governance": "methodology_standards",
+        "firewall_admin": "network_infra",
+        "kubernetes_security": "kubernetes_cloud",
+        "network_security": "network_infra",
+        "program_analysis": "formal_methods",
+        "protocol_verification": "formal_methods",
+        "string_analysis": "formal_methods",
+        "tool_usage": "powershell_ops",
+    }
     HINT_POLICIES = {"advisory", "direct_task_hints", "disabled"}
     TEXT_SUFFIXES = {".md", ".markdown", ".txt", ".text", ".qmd", ".rmd", ".json", ".yaml", ".yml", ".csv", ".log"}
     RICH_SUFFIXES = {
@@ -129,7 +162,7 @@ class DocumentIngestionService:
         store: RuntimeStore,
         artifacts_dir: Path,
         *,
-        embedding_provider: DeterministicHashEmbeddingProvider | None = None,
+        embedding_provider: EmbeddingProvider | None = None,
         max_file_bytes: int = MAX_FILE_BYTES,
     ) -> None:
         self.store = store
@@ -152,7 +185,13 @@ class DocumentIngestionService:
     ) -> dict[str, Any]:
         if not target.in_scope:
             raise DocumentIngestionError(f"target {target.handle} is out of scope")
+        raw_corpus_type = str(corpus_type or "operator_note").strip().lower().replace("-", "_")
         corpus_type = self._normalize_corpus_type(corpus_type)
+        corpus_warning = (
+            f"unknown corpus type {raw_corpus_type!r} mapped to general_security"
+            if raw_corpus_type not in self.CORPUS_TYPES and raw_corpus_type not in self.CORPUS_ALIASES
+            else None
+        )
         hint_policy = self._normalize_hint_policy(hint_policy, corpus_type=corpus_type)
         source_trust = self._normalize_source_trust(source_trust, corpus_type=corpus_type)
         source = self._prepare_source(path, target=target, allow_remote_url=allow_remote_url)
@@ -167,6 +206,8 @@ class DocumentIngestionService:
         cve_ids = self._extract_cve_ids(redacted_markdown.text)
         corpus_metadata = {
             "corpus_type": corpus_type,
+            "original_corpus_type": raw_corpus_type,
+            "corpus_type_warning": corpus_warning,
             "source_trust": source_trust,
             "hint_policy": hint_policy,
             "source_ref": source.source_ref,
@@ -261,12 +302,15 @@ class DocumentIngestionService:
                         record_type="document_chunk",
                         record_id=chunk.id,
                         embedding_model=self.embedding_provider.model_name,
-                        embedding_dim=self.embedding_provider.dimension,
+                        embedding_dim=len(vector),
                         embedding=vector,
                         metadata={
                             "source_artifact_id": markdown_artifact.id,
                             "source_sha256": source_sha256,
-                            "provider": "deterministic_hash",
+                            "provider": self.embedding_provider.provider_name,
+                            "embedding_provider": self.embedding_provider.provider_name,
+                            "embedding_dimension": len(vector),
+                            "chunk_content_hash": hashlib.sha256(chunk.text.encode("utf-8")).hexdigest(),
                         },
                     )
                 )
@@ -308,12 +352,19 @@ class DocumentIngestionService:
         limit: int = 5,
         use_embeddings: bool = True,
         corpus_types: list[str] | tuple[str, ...] | set[str] | None = None,
+        filters: dict[str, object] | None = None,
     ) -> list[RagContextItem]:
         clean = query.strip()
         if not clean:
             return []
         normalized_corpus = self._normalize_corpus_filter(corpus_types)
-        results = self.store.search_document_chunks_text(clean, target_id=target_id, limit=limit)
+        metadata_filters = dict(filters or {})
+        results = self.store.search_document_chunks_text(
+            clean,
+            target_id=target_id,
+            metadata_filters=metadata_filters,
+            limit=limit,
+        )
         if results:
             context = self._filter_context_items(
                 self._context_items(results, source="lexical", limit=limit * 4),
@@ -329,6 +380,7 @@ class DocumentIngestionService:
                     self.embedding_provider.embed(clean),
                     embedding_model=self.embedding_provider.model_name,
                     target_id=target_id,
+                    metadata_filters=metadata_filters,
                     limit=limit,
                 )
             except Exception:
@@ -341,7 +393,13 @@ class DocumentIngestionService:
         if context:
             return context
         if normalized_corpus:
-            return self._rank_corpus_chunks(clean, target_id=target_id, corpus_types=normalized_corpus, limit=limit)
+            return self._rank_corpus_chunks(
+                clean,
+                target_id=target_id,
+                corpus_types=normalized_corpus,
+                filters=metadata_filters,
+                limit=limit,
+            )
         return []
 
     def _context_items(
@@ -388,10 +446,11 @@ class DocumentIngestionService:
         *,
         target_id: str | None,
         corpus_types: set[str],
+        filters: dict[str, object],
         limit: int,
     ) -> list[RagContextItem]:
         terms = set(re.findall(r"[A-Za-z0-9_.:/-]+", query.lower()))
-        chunks = self.store.list_document_chunks(target_id=target_id, limit=500)
+        chunks = self.store.list_document_chunks(target_id=target_id, metadata_filters=filters, limit=500)
         ranked: list[RagContextItem] = []
         for chunk in chunks:
             if str(chunk.metadata.get("corpus_type") or "operator_note") not in corpus_types:
@@ -526,10 +585,9 @@ class DocumentIngestionService:
 
     def _normalize_corpus_type(self, corpus_type: str) -> str:
         normalized = str(corpus_type or "operator_note").strip().lower().replace("-", "_")
+        normalized = self.CORPUS_ALIASES.get(normalized, normalized)
         if normalized not in self.CORPUS_TYPES:
-            raise DocumentIngestionError(
-                f"unsupported RAG corpus type: {corpus_type}; expected one of {', '.join(sorted(self.CORPUS_TYPES))}"
-            )
+            return "general_security"
         return normalized
 
     def _normalize_corpus_filter(

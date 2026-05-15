@@ -2,7 +2,12 @@
 
 from primordial.core.rag.attack import AttackIndexPreprocessor, AttackPreprocessError
 from primordial.core.rag.documents import DocumentIngestionError, DocumentIngestionService
-from primordial.core.rag.embeddings import DeterministicHashEmbeddingProvider
+from primordial.core.rag.embeddings import (
+    DeterministicHashEmbeddingProvider,
+    EmbeddingProviderError,
+    OllamaEmbeddingProvider,
+    OpenAICompatibleEmbeddingProvider,
+)
 
 __all__ = [
     "AttackIndexPreprocessor",
@@ -10,4 +15,7 @@ __all__ = [
     "DeterministicHashEmbeddingProvider",
     "DocumentIngestionError",
     "DocumentIngestionService",
+    "EmbeddingProviderError",
+    "OllamaEmbeddingProvider",
+    "OpenAICompatibleEmbeddingProvider",
 ]

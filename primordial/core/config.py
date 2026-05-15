@@ -63,6 +63,33 @@ class AutonomySettings:
 
 
 @dataclass(slots=True)
+class RagEmbeddingSettings:
+    provider: str = "ollama"
+    base_url: str = "http://127.0.0.1:11434"
+    model: str = "nomic-embed-text:v1.5"
+    batch_size: int = 16
+    timeout_seconds: int = 90
+    canonical_model_family: str = "text-embedding-nomic-embed-text-v1.5"
+
+
+@dataclass(slots=True)
+class RagSynthesisSettings:
+    provider: str = "lmstudio_openai_compatible"
+    base_url: str = "http://127.0.0.1:1234/v1"
+    model: str = "gpt-oss-cybersecurity-20b-merged-heretic-i1"
+    temperature: float = 0.0
+    max_tokens: int = 1200
+    backup_allowed_models: tuple[str, ...] = ("lily-cybersecurity-7b-v0.2",)
+    disallowed_models: tuple[str, ...] = ("qwen",)
+
+
+@dataclass(slots=True)
+class RagSettings:
+    embeddings: RagEmbeddingSettings = field(default_factory=RagEmbeddingSettings)
+    synthesis: RagSynthesisSettings = field(default_factory=RagSynthesisSettings)
+
+
+@dataclass(slots=True)
 class AppConfig:
     project_root: Path
     runtime_dir: Path
@@ -82,6 +109,7 @@ class AppConfig:
     credentials_path: Path
     topology: ModelTopology = field(default_factory=ModelTopology)
     autonomy: AutonomySettings = field(default_factory=AutonomySettings)
+    rag: RagSettings = field(default_factory=RagSettings)
     agent_chat_base_url: str = "http://127.0.0.1:8787"
     agent_chat_api_key: str | None = None
     agent_chat_provider: str = "claude"
@@ -171,6 +199,38 @@ class AppConfig:
             "PRIMORDIAL_CONTENT_DISCOVERY_WORDLIST",
             "/usr/share/wfuzz/wordlists/general/common.txt",
         )
+        rag = RagSettings(
+            embeddings=RagEmbeddingSettings(
+                provider=os.getenv("PRIMORDIAL_RAG_EMBEDDINGS_PROVIDER", "ollama").strip().lower() or "ollama",
+                base_url=os.getenv("PRIMORDIAL_RAG_EMBEDDINGS_BASE_URL", "http://127.0.0.1:11434").strip()
+                or "http://127.0.0.1:11434",
+                model=os.getenv("PRIMORDIAL_RAG_EMBEDDINGS_MODEL", "nomic-embed-text:v1.5").strip()
+                or "nomic-embed-text:v1.5",
+                batch_size=max(1, _env_int("PRIMORDIAL_RAG_EMBEDDINGS_BATCH_SIZE", 16)),
+                timeout_seconds=max(1, _env_int("PRIMORDIAL_RAG_EMBEDDINGS_TIMEOUT_SECONDS", 90)),
+            ),
+            synthesis=RagSynthesisSettings(
+                provider=os.getenv(
+                    "PRIMORDIAL_RAG_SYNTHESIS_PROVIDER",
+                    "lmstudio_openai_compatible",
+                ).strip().lower()
+                or "lmstudio_openai_compatible",
+                base_url=os.getenv("PRIMORDIAL_RAG_SYNTHESIS_BASE_URL", "http://127.0.0.1:1234/v1").strip()
+                or "http://127.0.0.1:1234/v1",
+                model=os.getenv(
+                    "PRIMORDIAL_RAG_SYNTHESIS_MODEL",
+                    "gpt-oss-cybersecurity-20b-merged-heretic-i1",
+                ).strip()
+                or "gpt-oss-cybersecurity-20b-merged-heretic-i1",
+                temperature=_env_float("PRIMORDIAL_RAG_SYNTHESIS_TEMPERATURE", 0.0),
+                max_tokens=max(1, _env_int("PRIMORDIAL_RAG_SYNTHESIS_MAX_TOKENS", 1200)),
+                backup_allowed_models=_env_csv(
+                    "PRIMORDIAL_RAG_SYNTHESIS_BACKUP_ALLOWED_MODELS",
+                    ("lily-cybersecurity-7b-v0.2",),
+                ),
+                disallowed_models=_env_csv("PRIMORDIAL_RAG_SYNTHESIS_DISALLOWED_MODELS", ("qwen",)),
+            ),
+        )
         max_evidence_items = int(os.getenv("PRIMORDIAL_MAX_EVIDENCE_ITEMS", "50"))
         agent_chat_cwd_raw = os.getenv("PRIMORDIAL_AGENT_CHAT_CWD", "").strip()
         agent_chat_cwd = Path(agent_chat_cwd_raw).expanduser().resolve() if agent_chat_cwd_raw else None
@@ -192,6 +252,7 @@ class AppConfig:
             secrets_dir=secrets_dir,
             credentials_path=credentials_path,
             autonomy=autonomy,
+            rag=rag,
             agent_chat_base_url=os.getenv("PRIMORDIAL_AGENT_CHAT_BASE_URL", "http://127.0.0.1:8787").strip()
             or "http://127.0.0.1:8787",
             agent_chat_api_key=os.getenv("PRIMORDIAL_AGENT_CHAT_API_KEY") or os.getenv("CHAT_API_KEY") or None,
@@ -269,3 +330,11 @@ def _env_float(name: str, default: float) -> float:
         return float(raw)
     except ValueError:
         return default
+
+
+def _env_csv(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    values = tuple(item.strip() for item in raw.split(",") if item.strip())
+    return values or default

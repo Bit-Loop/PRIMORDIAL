@@ -148,13 +148,34 @@ def build_parser() -> argparse.ArgumentParser:
 
     rag = subparsers.add_parser("rag", help="Import selected local documents and search cited RAG chunks.")
     rag_subparsers = rag.add_subparsers(dest="rag_command")
+    rag_status = rag_subparsers.add_parser("status", help="Show live RAG chunk and embedding counts.")
+    rag_status.add_argument("--json", action="store_true")
+    rag_import = rag_subparsers.add_parser("import", help="Import preprocessed offline chunks into the runtime DB.")
+    rag_import.add_argument(
+        "--chunks-dir",
+        default="primordial-rag-preprocess/output/chunks",
+        help="Directory containing chunks.jsonl from the preprocessing pipeline.",
+    )
+    rag_import.add_argument("--dry-run", action="store_true")
+    rag_import.add_argument("--force", action="store_true")
+    rag_import.add_argument("--reembed", action="store_true")
+    rag_import.add_argument("--skip-embeddings", action="store_true")
+    rag_import.add_argument("--domain", action="append", default=[])
+    rag_import.add_argument("--source-file", action="append", default=[])
+    rag_import.add_argument("--doc-id", action="append", default=[])
+    rag_import.add_argument("--limit", type=int)
+    rag_import.add_argument("--json", action="store_true")
+    rag_inspect = rag_subparsers.add_parser("chunk", help="Inspect one imported RAG chunk.")
+    rag_inspect_subparsers = rag_inspect.add_subparsers(dest="rag_chunk_command")
+    rag_chunk_inspect = rag_inspect_subparsers.add_parser("inspect", help="Inspect one imported RAG chunk.")
+    rag_chunk_inspect.add_argument("chunk_id")
+    rag_chunk_inspect.add_argument("--json", action="store_true")
     rag_ingest = rag_subparsers.add_parser("ingest", help="Import one selected local document for a scoped target.")
     rag_ingest.add_argument("path")
     rag_ingest.add_argument("--target", required=True, help="Target handle or ID.")
     rag_ingest.add_argument(
         "--corpus-type",
         default="operator_note",
-        choices=["operator_note", "cve_advisory", "exploit_note", "htb_writeup"],
         help="How Primordial should treat the imported RAG material.",
     )
     rag_ingest.add_argument("--source-trust", help="Optional source trust label stored with chunks.")
@@ -183,14 +204,13 @@ def build_parser() -> argparse.ArgumentParser:
     rag_attck.add_argument("--json", action="store_true")
     rag_search = rag_subparsers.add_parser("search", help="Search imported document chunks for a target.")
     rag_search.add_argument("query", nargs="+")
-    rag_search.add_argument("--target", required=True, help="Target handle or ID.")
+    rag_search.add_argument("--target", help="Target handle or ID. Omit to search the global imported corpus.")
     rag_search.add_argument("--limit", type=int, default=5)
-    rag_search.add_argument(
-        "--corpus-type",
-        action="append",
-        choices=["operator_note", "cve_advisory", "exploit_note", "htb_writeup"],
-        help="Filter by corpus type. Repeat for multiple types.",
-    )
+    rag_search.add_argument("--corpus-type", action="append", help="Filter by corpus type. Repeat for multiple types.")
+    rag_search.add_argument("--domain", action="append", default=[], help="Filter by imported domain.")
+    rag_search.add_argument("--source-file", action="append", default=[])
+    rag_search.add_argument("--doc-id", action="append", default=[])
+    rag_search.add_argument("--chunk-type", action="append", default=[])
     rag_search.add_argument("--json", action="store_true")
     rag_cve_search = rag_subparsers.add_parser("cve-search", help="Search CVE advisory and exploit-note RAG chunks.")
     rag_cve_search.add_argument("query", nargs="+")
@@ -516,7 +536,40 @@ def main(argv: list[str] | None = None) -> int:
         if command == "rag":
             rag_command = args.rag_command
             if rag_command is None:
-                parser.error("rag requires a subcommand: ingest, preprocess-attck, search, cve-search, or hints")
+                parser.error("rag requires a subcommand")
+            if rag_command == "status":
+                payload = runtime.rag_status()
+                if args.json:
+                    print(json.dumps(payload, indent=2, sort_keys=True))
+                else:
+                    print(_format_rag_status(payload))
+                return 0
+            if rag_command == "import":
+                payload = runtime.rag_import_chunks(
+                    args.chunks_dir,
+                    dry_run=args.dry_run,
+                    force=args.force,
+                    reembed=args.reembed,
+                    skip_embeddings=args.skip_embeddings,
+                    domains=args.domain,
+                    source_files=args.source_file,
+                    doc_ids=args.doc_id,
+                    limit=args.limit,
+                )
+                if args.json:
+                    print(json.dumps(payload, indent=2, sort_keys=True))
+                else:
+                    print(_format_rag_import(payload))
+                return 0
+            if rag_command == "chunk":
+                if args.rag_chunk_command != "inspect":
+                    parser.error("rag chunk requires a subcommand: inspect")
+                payload = runtime.rag_chunk_inspect(args.chunk_id)
+                if args.json:
+                    print(json.dumps(payload, indent=2, sort_keys=True))
+                else:
+                    print(_format_rag_chunk(payload))
+                return 0
             if rag_command == "ingest":
                 payload = runtime.rag_ingest_document(
                     args.path,
@@ -539,6 +592,12 @@ def main(argv: list[str] | None = None) -> int:
                     target=args.target,
                     limit=args.limit,
                     corpus_types=args.corpus_type,
+                    filters={
+                        "domain": args.domain,
+                        "source_file": args.source_file,
+                        "doc_id": args.doc_id,
+                        "chunk_type": args.chunk_type,
+                    },
                 )
                 if args.json:
                     print(json.dumps(payload, indent=2, sort_keys=True))
@@ -762,6 +821,77 @@ def _format_rag_ingest(payload: dict[str, object]) -> str:
     return "\n".join(lines)
 
 
+def _format_rag_status(payload: dict[str, object]) -> str:
+    configured = payload.get("configured_embeddings", {})
+    synthesis = payload.get("configured_synthesis", {})
+    lines = [
+        f"document_chunks={payload.get('document_chunks')}",
+        f"record_embeddings={payload.get('record_embeddings')}",
+    ]
+    if isinstance(configured, dict):
+        lines.append(
+            f"embeddings={configured.get('provider')}:{configured.get('model')} "
+            f"dimension={configured.get('dimension') or 'unknown'}"
+        )
+    if isinstance(synthesis, dict):
+        lines.append(f"synthesis={synthesis.get('provider')}:{synthesis.get('model')}")
+    domains = payload.get("domains", [])
+    if isinstance(domains, list) and domains:
+        lines.append("domains:")
+        for item in domains:
+            if isinstance(item, dict):
+                lines.append(f"  {item.get('domain')}: {item.get('count')}")
+    models = payload.get("embedding_models", [])
+    if isinstance(models, list) and models:
+        lines.append("embedding_models:")
+        for item in models:
+            if isinstance(item, dict):
+                lines.append(f"  {item.get('provider')}:{item.get('model')}: {item.get('count')}")
+    return "\n".join(lines)
+
+
+def _format_rag_import(payload: dict[str, object]) -> str:
+    lines = [
+        f"dry_run={payload.get('dry_run')}",
+        f"files_seen={payload.get('files_seen')}",
+        f"records_seen={payload.get('records_seen')}",
+        (
+            f"chunks inserted={payload.get('chunks_inserted')} updated={payload.get('chunks_updated')} "
+            f"skipped={payload.get('chunks_skipped')}"
+        ),
+        (
+            f"embeddings inserted={payload.get('embeddings_inserted')} updated={payload.get('embeddings_updated')} "
+            f"skipped={payload.get('embeddings_skipped')} "
+            f"provider={payload.get('embedding_provider')} model={payload.get('embedding_model')}"
+        ),
+        f"failures={payload.get('failures')}",
+    ]
+    errors = payload.get("errors", [])
+    if isinstance(errors, list):
+        for error in errors[:10]:
+            lines.append(f"error={error}")
+    return "\n".join(lines)
+
+
+def _format_rag_chunk(payload: dict[str, object]) -> str:
+    chunk = payload.get("chunk", {})
+    embedding = payload.get("embedding", {})
+    if not isinstance(chunk, dict):
+        return "No chunk payload."
+    metadata = chunk.get("metadata", {}) if isinstance(chunk.get("metadata"), dict) else {}
+    lines = [
+        f"chunk={chunk.get('citation_id') or chunk.get('id')}",
+        f"title={chunk.get('title')}",
+        f"domain={metadata.get('domain') or metadata.get('corpus_type')}",
+        f"source_file={metadata.get('source_file')}",
+        f"source_sha256={chunk.get('source_sha256')}",
+        f"text={str(chunk.get('text') or '')[:500]}",
+    ]
+    if isinstance(embedding, dict):
+        lines.append(f"embedding={embedding.get('embedding_model')} dim={embedding.get('embedding_dim')}")
+    return "\n".join(lines)
+
+
 def _format_attck_preprocess(payload: dict[str, object]) -> str:
     lines = [
         "ATT&CK structured indexes:",
@@ -804,7 +934,7 @@ def _format_rag_search(payload: dict[str, object]) -> str:
         classification = result.get("applicability_classification")
         classification_part = f" applicability={classification}" if classification else ""
         lines.append(
-            f"{result.get('chunk_id')} score={result.get('score')} "
+            f"{result.get('citation_id') or result.get('chunk_id')} score={result.get('score')} "
             f"evidence={evidence or 'none'}{classification_part} title={result.get('title')}"
         )
         lines.append(f"  {text}")

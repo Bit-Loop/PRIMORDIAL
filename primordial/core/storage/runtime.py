@@ -441,8 +441,9 @@ class RuntimeStore:
             target.id = str(row["id"])
             target.created_at = parse_datetime(row["created_at"])
 
-    def list_targets(self) -> list[Target]:
-        rows = self._query("SELECT * FROM targets ORDER BY created_at ASC")
+    def list_targets(self, *, include_system: bool = False) -> list[Target]:
+        where = "" if include_system else "WHERE COALESCE(metadata->>'system_target', 'false') <> 'true'"
+        rows = self._query(f"SELECT * FROM targets {where} ORDER BY created_at ASC")
         return [self._target_from_row(row) for row in rows]
 
     def get_target(self, target_id: str | None) -> Target | None:
@@ -1626,7 +1627,7 @@ class RuntimeStore:
             (id, target_id, source_artifact_id, source_sha256, chunk_index, title, text, token_count,
                 evidence_refs, metadata, created_at)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (source_artifact_id, chunk_index) DO UPDATE SET target_id = EXCLUDED.target_id, source_sha256 = EXCLUDED.source_sha256, title = EXCLUDED.title, text = EXCLUDED.text, token_count = EXCLUDED.token_count, evidence_refs = EXCLUDED.evidence_refs, metadata = EXCLUDED.metadata, created_at = EXCLUDED.created_at
+            ON CONFLICT (source_artifact_id, chunk_index) DO UPDATE SET id = EXCLUDED.id, target_id = EXCLUDED.target_id, source_sha256 = EXCLUDED.source_sha256, title = EXCLUDED.title, text = EXCLUDED.text, token_count = EXCLUDED.token_count, evidence_refs = EXCLUDED.evidence_refs, metadata = EXCLUDED.metadata, created_at = EXCLUDED.created_at
             """,
             (
                 chunk.id,
@@ -1643,11 +1644,16 @@ class RuntimeStore:
             ),
         )
 
+    def get_document_chunk(self, chunk_id: str) -> DocumentChunk | None:
+        row = self._query_one("SELECT * FROM document_chunks WHERE id = %s", (chunk_id,))
+        return self._document_chunk_from_row(row) if row else None
+
     def list_document_chunks(
         self,
         *,
         target_id: str | None = None,
         source_artifact_id: str | None = None,
+        metadata_filters: dict[str, object] | None = None,
         limit: int = 100,
     ) -> list[DocumentChunk]:
         where: list[str] = []
@@ -1658,6 +1664,7 @@ class RuntimeStore:
         if source_artifact_id:
             where.append("source_artifact_id = %s")
             params.append(source_artifact_id)
+        self._append_document_chunk_metadata_filters(where, params, metadata_filters or {})
         clause = f"WHERE {' AND '.join(where)}" if where else ""
         rows = self._query(
             f"SELECT * FROM document_chunks {clause} ORDER BY created_at DESC, chunk_index ASC LIMIT %s",
@@ -1665,17 +1672,26 @@ class RuntimeStore:
         )
         return [self._document_chunk_from_row(row) for row in rows]
 
+    def count_document_chunks(self, *, metadata_filters: dict[str, object] | None = None) -> int:
+        where: list[str] = []
+        params: list[Any] = []
+        self._append_document_chunk_metadata_filters(where, params, metadata_filters or {})
+        clause = f"WHERE {' AND '.join(where)}" if where else ""
+        row = self._query_one(f"SELECT COUNT(*) AS count FROM document_chunks {clause}", tuple(params))
+        return int(row["count"]) if row else 0
+
     def search_document_chunks_text(
         self,
         query: str,
         *,
         target_id: str | None = None,
+        metadata_filters: dict[str, object] | None = None,
         limit: int = 8,
     ) -> list[dict[str, Any]]:
         terms = _token_terms(query)
         if not terms:
             return []
-        candidates = self.list_document_chunks(target_id=target_id, limit=500)
+        candidates = self.list_document_chunks(target_id=target_id, metadata_filters=metadata_filters, limit=500)
         ranked: list[dict[str, Any]] = []
         for chunk in candidates:
             chunk_terms = _token_terms(f"{chunk.title}\n{chunk.text}")
@@ -1710,12 +1726,78 @@ class RuntimeStore:
             ),
         )
 
+    def get_record_embedding(
+        self,
+        *,
+        record_type: str,
+        record_id: str,
+        embedding_model: str,
+    ) -> RecordEmbedding | None:
+        row = self._query_one(
+            """
+            SELECT * FROM record_embeddings
+            WHERE record_type = %s AND record_id = %s AND embedding_model = %s
+            """,
+            (record_type, record_id, embedding_model),
+        )
+        return self._record_embedding_from_row(row) if row else None
+
+    def count_record_embeddings(self, *, embedding_model: str | None = None) -> int:
+        if embedding_model:
+            row = self._query_one(
+                "SELECT COUNT(*) AS count FROM record_embeddings WHERE embedding_model = %s",
+                (embedding_model,),
+            )
+        else:
+            row = self._query_one("SELECT COUNT(*) AS count FROM record_embeddings")
+        return int(row["count"]) if row else 0
+
+    def rag_status_counts(self) -> dict[str, Any]:
+        chunk_total = self.count_document_chunks()
+        embedding_total = self.count_record_embeddings()
+        domains = self._query(
+            """
+            SELECT COALESCE(metadata->>'domain', metadata->>'corpus_type', 'unknown') AS domain,
+                   COUNT(*) AS count
+            FROM document_chunks
+            GROUP BY domain
+            ORDER BY count DESC, domain ASC
+            """
+        )
+        models = self._query(
+            """
+            SELECT embedding_model,
+                   COALESCE(metadata->>'embedding_provider', metadata->>'provider', 'unknown') AS provider,
+                   embedding_dim,
+                   COUNT(*) AS count
+            FROM record_embeddings
+            WHERE record_type = 'document_chunk'
+            GROUP BY embedding_model, provider, embedding_dim
+            ORDER BY count DESC, embedding_model ASC, embedding_dim ASC
+            """
+        )
+        return {
+            "document_chunks": chunk_total,
+            "record_embeddings": embedding_total,
+            "domains": [{"domain": row["domain"], "count": int(row["count"])} for row in domains],
+            "embedding_models": [
+                {
+                    "model": row["embedding_model"],
+                    "provider": row["provider"],
+                    "dimension": int(row["embedding_dim"]),
+                    "count": int(row["count"]),
+                }
+                for row in models
+            ],
+        }
+
     def search_document_chunks_by_embedding(
         self,
         query_embedding: list[float],
         *,
         embedding_model: str,
         target_id: str | None = None,
+        metadata_filters: dict[str, object] | None = None,
         limit: int = 8,
     ) -> list[dict[str, Any]]:
         where = ["e.record_type = %s", "e.embedding_model = %s"]
@@ -1723,6 +1805,7 @@ class RuntimeStore:
         if target_id:
             where.append("c.target_id = %s")
             params.append(target_id)
+        self._append_document_chunk_metadata_filters(where, params, metadata_filters or {}, table_alias="c")
         rows = self._query(
             f"""
             WITH query_embedding AS (SELECT %s::vector AS embedding)
@@ -1745,6 +1828,44 @@ class RuntimeStore:
             }
             for row in rows
         ]
+
+    def _append_document_chunk_metadata_filters(
+        self,
+        where: list[str],
+        params: list[Any],
+        metadata_filters: dict[str, object],
+        *,
+        table_alias: str = "",
+    ) -> None:
+        prefix = f"{table_alias}." if table_alias else ""
+        mapping = {
+            "domain": ["domain", "corpus_type"],
+            "source_file": ["source_file", "source_name"],
+            "doc_id": ["doc_id"],
+            "chunk_type": ["chunk_type"],
+            "card_type": ["card_type"],
+            "risk_family": ["risk_family"],
+            "output_mode": ["output_mode"],
+            "source_priority": ["source_priority"],
+            "requires_authorized_scope": ["requires_authorized_scope"],
+        }
+        for key, json_keys in mapping.items():
+            if key not in metadata_filters:
+                continue
+            value = metadata_filters[key]
+            if value is None or value == "" or value == []:
+                continue
+            if isinstance(value, bool):
+                clauses = [f"COALESCE({prefix}metadata->>%s, 'false') = %s" for _item in json_keys]
+                where.append("(" + " OR ".join(clauses) + ")")
+                for item in json_keys:
+                    params.extend([item, "true" if value else "false"])
+                continue
+            values = [str(item) for item in value] if isinstance(value, list | tuple | set) else [str(value)]
+            clauses = [f"{prefix}metadata->>%s = ANY(%s)" for _item in json_keys]
+            where.append("(" + " OR ".join(clauses) + ")")
+            for item in json_keys:
+                params.extend([item, values])
 
     def insert_notification(self, notification: NotificationRecord) -> None:
         self._execute(
@@ -3065,6 +3186,30 @@ class RuntimeStore:
             metadata=_load(row["metadata"], {}),
             created_at=parse_datetime(row["created_at"]),
         )
+
+    def _record_embedding_from_row(self, row: Any) -> RecordEmbedding:
+        return RecordEmbedding(
+            id=row["id"],
+            target_id=row["target_id"],
+            record_type=row["record_type"],
+            record_id=row["record_id"],
+            embedding_model=row["embedding_model"],
+            embedding_dim=int(row["embedding_dim"]),
+            embedding=self._embedding_from_value(row["embedding"]),
+            metadata=_load(row["metadata"], {}),
+            created_at=parse_datetime(row["created_at"]),
+        )
+
+    def _embedding_from_value(self, value: Any) -> list[float]:
+        if isinstance(value, list | tuple):
+            return [float(item) for item in value]
+        text = str(value).strip()
+        if text.startswith("[") and text.endswith("]"):
+            body = text[1:-1].strip()
+            if not body:
+                return []
+            return [float(item.strip()) for item in body.split(",")]
+        return []
 
     def _notification_from_row(self, row: Any) -> NotificationRecord:
         return NotificationRecord(

@@ -65,6 +65,128 @@ class PrimordialWebApp:
             return self._json_response(self.runtime.operator_intent_payload())
         if method == "GET" and path == "/api/credentials":
             return self._json_response(self.runtime.credentials_payload())
+        if method == "GET" and path == "/api/rag/status":
+            return self._json_response(self.runtime.rag_status())
+        if method == "GET" and path == "/api/rag/config":
+            return self._json_response(self.runtime.rag_config_payload())
+        if method == "GET" and path.startswith("/api/rag/chunks/"):
+            chunk_id = unquote(path.rsplit("/", 1)[-1])
+            try:
+                return self._json_response(self._rag_chunk_api_payload(self.runtime.rag_chunk_inspect(chunk_id)))
+            except ValueError as exc:
+                return self._json_response({"ok": False, "error": str(exc)}, status=404)
+        if method == "GET" and path.startswith("/api/rag/sources/"):
+            doc_id = unquote(path.rsplit("/", 1)[-1])
+            try:
+                return self._json_response(self.runtime.rag_source_profile(doc_id, limit=self._int_param(query, "limit", 50)))
+            except ValueError as exc:
+                return self._json_response({"ok": False, "error": str(exc)}, status=404)
+        if method == "POST" and path == "/api/rag/import":
+            payload = self._parse_json_body(body)
+            try:
+                return self._run_tracked_action(
+                    "Import RAG corpus",
+                    "rag-import",
+                    lambda: self.runtime.rag_import_chunks(
+                        self._optional_string(payload, "chunks_dir"),
+                        dry_run=bool(payload.get("dry_run", False)),
+                        force=bool(payload.get("force", False)),
+                        reembed=bool(payload.get("reembed", False)),
+                        skip_embeddings=bool(payload.get("skip_embeddings", False)),
+                        domains=self._payload_list(payload, "domain"),
+                        source_files=self._payload_list(payload, "source_file"),
+                        doc_ids=self._payload_list(payload, "doc_id"),
+                        limit=self._optional_int(payload, "limit"),
+                    ),
+                    use_runtime_lock=False,
+                )
+            except (TypeError, ValueError) as exc:
+                return self._json_response({"ok": False, "error": str(exc)}, status=400)
+        if method == "POST" and path == "/api/rag/search":
+            payload = self._parse_json_body(body)
+            query_text = str(payload.get("query") or "").strip()
+            if not query_text:
+                return self._json_response({"ok": False, "error": "query is required"}, status=400)
+            try:
+                return self._json_response(
+                    self.runtime.rag_search(
+                        query_text,
+                        target=self._optional_string(payload, "target"),
+                        limit=self._optional_int(payload, "limit") or 5,
+                        corpus_types=self._payload_list(payload, "corpus_types") or self._payload_list(payload, "corpus_type"),
+                        filters=self._rag_filters_payload(payload),
+                    )
+                )
+            except ValueError as exc:
+                return self._json_response({"ok": False, "error": str(exc)}, status=400)
+        if method == "POST" and path == "/api/rag/hints":
+            payload = self._parse_json_body(body)
+            target = str(payload.get("target") or "").strip()
+            if not target:
+                return self._json_response({"ok": False, "error": "target is required"}, status=400)
+            try:
+                return self._json_response(
+                    self.runtime.rag_hints(
+                        str(payload.get("query") or ""),
+                        target=target,
+                        limit=self._optional_int(payload, "limit") or 8,
+                    )
+                )
+            except ValueError as exc:
+                return self._json_response({"ok": False, "error": str(exc)}, status=400)
+        if method == "POST" and path == "/api/rag/synthesize":
+            payload = self._parse_json_body(body)
+            query_text = str(payload.get("query") or "").strip()
+            if not query_text:
+                return self._json_response({"ok": False, "error": "query is required"}, status=400)
+            retrieved_chunks = payload.get("retrieved_chunks")
+            if retrieved_chunks is not None and not isinstance(retrieved_chunks, list):
+                return self._json_response({"ok": False, "error": "retrieved_chunks must be a list"}, status=400)
+            safety_context = payload.get("safety_context")
+            if safety_context is not None and not isinstance(safety_context, dict):
+                return self._json_response({"ok": False, "error": "safety_context must be an object"}, status=400)
+            if retrieved_chunks is None:
+                try:
+                    search = self.runtime.rag_search(
+                        query_text,
+                        target=self._optional_string(payload, "target"),
+                        limit=self._optional_int(payload, "limit") or 5,
+                        corpus_types=self._payload_list(payload, "corpus_types")
+                        or self._payload_list(payload, "corpus_type"),
+                        filters=self._rag_filters_payload(payload),
+                    )
+                except ValueError as exc:
+                    return self._json_response({"ok": False, "error": str(exc)}, status=400)
+                retrieved_chunks = search.get("results", []) if isinstance(search.get("results"), list) else []
+            result = self.runtime.synthesize_rag_answer(
+                query_text,
+                mode=str(payload.get("mode") or "grounded_answer"),
+                retrieved_chunks=[item for item in retrieved_chunks if isinstance(item, dict)],
+                safety_context=safety_context or {},
+            )
+            return self._json_response(result, status=200 if result.get("status") != "provider_error" else 502)
+        if method == "POST" and path == "/api/rag/eval":
+            payload = self._parse_json_body(body)
+            queries = payload.get("queries")
+            if isinstance(queries, str):
+                query_list = [line.strip() for line in queries.splitlines() if line.strip()]
+            elif isinstance(queries, list):
+                query_list = [str(item).strip() for item in queries if str(item).strip()]
+            else:
+                return self._json_response({"ok": False, "error": "queries must be a list or newline-delimited string"}, status=400)
+            try:
+                return self._json_response(
+                    self.runtime.rag_eval_probes(
+                        query_list,
+                        target=self._optional_string(payload, "target"),
+                        limit=self._optional_int(payload, "limit") or 5,
+                        corpus_types=self._payload_list(payload, "corpus_types")
+                        or self._payload_list(payload, "corpus_type"),
+                        filters=self._rag_filters_payload(payload),
+                    )
+                )
+            except ValueError as exc:
+                return self._json_response({"ok": False, "error": str(exc)}, status=400)
         if method == "GET" and path == "/api/skills":
             include_body = self._bool_param(query, "include_body", False)
             with self._lock:
@@ -780,6 +902,45 @@ class PrimordialWebApp:
             return None
         return int(value)
 
+    def _payload_list(self, payload: dict[str, Any], key: str) -> list[str]:
+        value = payload.get(key)
+        if value is None:
+            return []
+        if isinstance(value, list | tuple | set):
+            return [str(item).strip() for item in value if str(item).strip()]
+        return [str(value).strip()] if str(value).strip() else []
+
+    def _rag_filters_payload(self, payload: dict[str, Any]) -> dict[str, object]:
+        raw = payload.get("filters")
+        filters: dict[str, object] = dict(raw) if isinstance(raw, dict) else {}
+        for key in (
+            "domain",
+            "source_file",
+            "doc_id",
+            "chunk_type",
+            "card_type",
+            "risk_family",
+            "output_mode",
+            "source_priority",
+        ):
+            values = self._payload_list(payload, key)
+            if values:
+                filters[key] = values
+        if "requires_authorized_scope" in payload:
+            filters["requires_authorized_scope"] = bool(payload.get("requires_authorized_scope"))
+        return filters
+
+    def _rag_chunk_api_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        result = dict(payload)
+        embedding = result.get("embedding")
+        if isinstance(embedding, dict):
+            result["embedding"] = {
+                key: value
+                for key, value in embedding.items()
+                if key not in {"embedding", "vector", "values"}
+            }
+        return result
+
     def _optional_query_string(self, query: dict[str, list[str]], key: str) -> str | None:
         values = query.get(key, [])
         if not values:
@@ -893,6 +1054,11 @@ class PrimordialWebApp:
                     "warmModels": "/api/actions/warm-models",
                     "clearModels": "/api/actions/clear-models",
                     "uiCommands": "/api/ui/commands",
+                    "ragStatus": "/api/rag/status",
+                    "ragConfig": "/api/rag/config",
+                    "ragImport": "/api/rag/import",
+                    "ragSearch": "/api/rag/search",
+                    "ragSynthesize": "/api/rag/synthesize",
                 },
             },
         }

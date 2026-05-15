@@ -103,6 +103,15 @@ const RailIcons = {
       <circle cx="10" cy="15" r="1.5" fill="currentColor" />
     </svg>
   ),
+  rag: (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <path d="M4 4.5h12M4 9.5h12M4 14.5h12" />
+      <circle cx="5.5" cy="4.5" r="1.5" fill="var(--bg)" />
+      <circle cx="12" cy="9.5" r="1.5" fill="var(--bg)" />
+      <circle cx="8" cy="14.5" r="1.5" fill="var(--bg)" />
+      <path d="M7 4.5l3.5 3.8M10.5 10.6l-2 2.7" strokeDasharray="1.5 1.5" />
+    </svg>
+  ),
 };
 
 function Rail({ mode, setMode }) {
@@ -114,6 +123,7 @@ function Rail({ mode, setMode }) {
     { id: 'notion',    label: 'NOTION', icon: RailIcons.notion },
     { id: 'interests', label: 'INTRS',  icon: RailIcons.interests },
     { id: 'caido',     label: 'CAIDO',  icon: RailIcons.caido },
+    { id: 'rag',       label: 'RAG',    icon: RailIcons.rag },
   ];
   return (
     <aside className="rail">
