@@ -164,7 +164,48 @@ class _PostgresConnection:
 
 
 def _split_sql_statements(sql: str) -> list[str]:
-    return [statement.strip() for statement in sql.split(";") if statement.strip()]
+    statements: list[str] = []
+    start = 0
+    index = 0
+    in_single_quote = False
+    dollar_tag: str | None = None
+    while index < len(sql):
+        char = sql[index]
+        if dollar_tag is not None:
+            if sql.startswith(dollar_tag, index):
+                index += len(dollar_tag)
+                dollar_tag = None
+                continue
+            index += 1
+            continue
+        if in_single_quote:
+            if char == "'" and index + 1 < len(sql) and sql[index + 1] == "'":
+                index += 2
+                continue
+            if char == "'":
+                in_single_quote = False
+            index += 1
+            continue
+        if char == "'":
+            in_single_quote = True
+            index += 1
+            continue
+        if char == "$":
+            match = re.match(r"\$[A-Za-z_][A-Za-z0-9_]*\$|\$\$", sql[index:])
+            if match:
+                dollar_tag = match.group(0)
+                index += len(dollar_tag)
+                continue
+        if char == ";":
+            statement = sql[start:index].strip()
+            if statement:
+                statements.append(statement)
+            start = index + 1
+        index += 1
+    statement = sql[start:].strip()
+    if statement:
+        statements.append(statement)
+    return statements
 
 
 def _quote_ident(value: str) -> str:
@@ -1658,13 +1699,46 @@ class RuntimeStore:
             counts[table] = int(row["count"]) if row else 0
         return counts
 
-    def delete_target_cascade(self, target_id: str) -> dict[str, Any]:
+    def delete_target_cascade(
+        self,
+        target_id: str,
+        *,
+        allow_runtime_record_deletion: bool = False,
+        deletion_reason: str | None = None,
+    ) -> dict[str, Any]:
         with closing(self.connect()) as connection:
             task_ids = self._select_ids(connection, "SELECT id FROM tasks WHERE target_id = %s", (target_id,))
             run_ids = self._select_ids_for_parent(connection, "task_runs", "task_id", task_ids)
             notification_ids = self._select_notifications_for_target(connection, target_id, task_ids)
             artifact_paths = self._select_paths_for_target(connection, "artifacts", target_id, task_ids)
             checkpoint_paths = self._select_checkpoint_paths(connection, task_ids, run_ids)
+            runtime_record_counts = self._target_runtime_record_counts(
+                connection,
+                target_id=target_id,
+                task_ids=task_ids,
+                run_ids=run_ids,
+                notification_ids=notification_ids,
+            )
+            blocking_record_counts = self._target_blocking_runtime_record_counts(
+                connection,
+                target_id=target_id,
+                task_ids=task_ids,
+                notification_ids=notification_ids,
+            )
+            if any(blocking_record_counts.values()) and not allow_runtime_record_deletion:
+                connection.rollback()
+                return {
+                    "blocked": True,
+                    "reason": "target has operator-owned runtime records; destructive target deletion is disabled",
+                    "runtime_record_counts": runtime_record_counts,
+                    "blocking_runtime_record_counts": blocking_record_counts,
+                    "artifact_paths": artifact_paths,
+                    "checkpoint_paths": checkpoint_paths,
+                    "task_ids": task_ids,
+                    "notification_ids": notification_ids,
+                }
+
+            connection.execute("SET LOCAL primordial.allow_runtime_delete = 'on'")
 
             deleted = {
                 "discord_deliveries": self._delete_ids(connection, "discord_deliveries", "notification_id", notification_ids),
@@ -1697,6 +1771,123 @@ class RuntimeStore:
             "checkpoint_paths": checkpoint_paths,
             "task_ids": task_ids,
             "notification_ids": notification_ids,
+            "deletion_reason": deletion_reason,
+            "runtime_record_counts": runtime_record_counts,
+            "blocking_runtime_record_counts": blocking_record_counts,
+        }
+
+    def _target_runtime_record_counts(
+        self,
+        connection: Any,
+        *,
+        target_id: str,
+        task_ids: list[str],
+        run_ids: list[str],
+        notification_ids: list[str],
+    ) -> dict[str, int]:
+        return {
+            "tasks": self._count_target_rows(connection, "tasks", target_id),
+            "task_runs": self._count_ids(connection, "task_runs", "task_id", task_ids),
+            "evidence": self._count_target_rows(connection, "evidence", target_id),
+            "notes": self._count_target_rows(connection, "notes", target_id),
+            "interests": self._count_target_rows(connection, "interests", target_id),
+            "findings": self._count_target_rows(connection, "findings", target_id),
+            "memory_entries": self._count_target_rows(connection, "memory_entries", target_id),
+            "artifacts": self._count_target_or_task_rows(connection, "artifacts", target_id, task_ids),
+            "checkpoints": self._count_checkpoints(connection, task_ids, run_ids),
+            "agent_traces": self._count_ids(connection, "agent_traces", "task_id", task_ids),
+            "document_chunks": self._count_target_rows(connection, "document_chunks", target_id),
+            "record_embeddings": self._count_target_rows(connection, "record_embeddings", target_id),
+            "policy_decisions": self._count_target_or_task_rows(connection, "policy_decisions", target_id, task_ids),
+            "notifications": self._count_target_or_task_rows(connection, "notifications", target_id, task_ids),
+            "discord_deliveries": self._count_ids(connection, "discord_deliveries", "notification_id", notification_ids),
+            "external_sync_jobs": self._count_target_rows(connection, "external_sync_jobs", target_id),
+            "notion_pages": self._count_target_rows(connection, "notion_pages", target_id),
+            "operator_messages": self._count_target_rows(connection, "operator_messages", target_id),
+            "task_handoffs": self._count_ids(connection, "task_handoffs", "task_id", task_ids),
+        }
+
+    def _target_blocking_runtime_record_counts(
+        self,
+        connection: Any,
+        *,
+        target_id: str,
+        task_ids: list[str],
+        notification_ids: list[str],
+    ) -> dict[str, int]:
+        return {
+            "evidence": self._count_query(
+                connection,
+                """
+                SELECT COUNT(*) AS count FROM evidence
+                WHERE target_id = %s
+                  AND task_id IS NULL
+                  AND COALESCE(metadata->>'auto_generated', 'false') <> 'true'
+                  AND NOT (metadata ? 'origin_task')
+                """,
+                (target_id,),
+            ),
+            "notes": self._count_query(
+                connection,
+                """
+                SELECT COUNT(*) AS count FROM notes
+                WHERE target_id = %s
+                  AND task_id IS NULL
+                  AND COALESCE(metadata->>'auto_generated', 'false') <> 'true'
+                  AND NOT (metadata ? 'origin_task')
+                """,
+                (target_id,),
+            ),
+            "interests": self._count_query(
+                connection,
+                """
+                SELECT COUNT(*) AS count FROM interests
+                WHERE target_id = %s
+                  AND COALESCE(metadata->>'auto_generated', 'false') <> 'true'
+                  AND NOT (metadata ? 'origin_task')
+                """,
+                (target_id,),
+            ),
+            "findings": self._count_query(
+                connection,
+                """
+                SELECT COUNT(*) AS count FROM findings
+                WHERE target_id = %s
+                  AND COALESCE(metadata->>'auto_generated', 'false') <> 'true'
+                """,
+                (target_id,),
+            ),
+            "memory_entries": self._count_target_rows(connection, "memory_entries", target_id),
+            "artifacts": self._count_query(
+                connection,
+                "SELECT COUNT(*) AS count FROM artifacts WHERE target_id = %s AND task_id IS NULL",
+                (target_id,),
+            ),
+            "document_chunks": self._count_target_rows(connection, "document_chunks", target_id),
+            "record_embeddings": self._count_target_rows(connection, "record_embeddings", target_id),
+            "notifications": self._count_query(
+                connection,
+                "SELECT COUNT(*) AS count FROM notifications WHERE target_id = %s AND task_id IS NULL",
+                (target_id,),
+            ),
+            "discord_deliveries": self._count_ids(connection, "discord_deliveries", "notification_id", notification_ids)
+            if notification_ids and self._count_query(
+                connection,
+                "SELECT COUNT(*) AS count FROM notifications WHERE target_id = %s AND task_id IS NULL",
+                (target_id,),
+            )
+            else 0,
+            "external_sync_jobs": self._count_query(
+                connection,
+                """
+                SELECT COUNT(*) AS count FROM external_sync_jobs
+                WHERE target_id = %s
+                  AND NOT (payload ? 'task_id')
+                """,
+                (target_id,),
+            ),
+            "notion_pages": self._count_target_rows(connection, "notion_pages", target_id),
+            "operator_messages": self._count_target_rows(connection, "operator_messages", target_id),
         }
 
     def _select_ids(
@@ -1782,6 +1973,17 @@ class RuntimeStore:
     ) -> int:
         return connection.execute(f"DELETE FROM {table} WHERE {key} = %s", (target_id,)).rowcount
 
+    def _count_target_rows(
+        self,
+        connection: Any,
+        table: str,
+        target_id: str,
+        *,
+        key: str = "target_id",
+    ) -> int:
+        row = connection.execute(f"SELECT COUNT(*) AS count FROM {table} WHERE {key} = %s", (target_id,)).fetchone()
+        return int(row["count"]) if row else 0
+
     def _delete_target_or_task_rows(
         self,
         connection: Any,
@@ -1798,6 +2000,27 @@ class RuntimeStore:
         sql = f"DELETE FROM {table} WHERE {' OR '.join(where)}"
         return connection.execute(sql, tuple(params)).rowcount
 
+    def _count_target_or_task_rows(
+        self,
+        connection: Any,
+        table: str,
+        target_id: str,
+        task_ids: list[str],
+    ) -> int:
+        where = ["target_id = %s"]
+        params: list[Any] = [target_id]
+        if task_ids:
+            placeholders = ", ".join("%s" for _ in task_ids)
+            where.append(f"task_id IN ({placeholders})")
+            params.extend(task_ids)
+        sql = f"SELECT COUNT(*) AS count FROM {table} WHERE {' OR '.join(where)}"
+        row = connection.execute(sql, tuple(params)).fetchone()
+        return int(row["count"]) if row else 0
+
+    def _count_query(self, connection: Any, sql: str, params: tuple[Any, ...]) -> int:
+        row = connection.execute(sql, params).fetchone()
+        return int(row["count"]) if row else 0
+
     def _delete_ids(
         self,
         connection: Any,
@@ -1810,6 +2033,20 @@ class RuntimeStore:
         placeholders = ", ".join("%s" for _ in values)
         sql = f"DELETE FROM {table} WHERE {key} IN ({placeholders})"
         return connection.execute(sql, tuple(values)).rowcount
+
+    def _count_ids(
+        self,
+        connection: Any,
+        table: str,
+        key: str,
+        values: list[str],
+    ) -> int:
+        if not values:
+            return 0
+        placeholders = ", ".join("%s" for _ in values)
+        sql = f"SELECT COUNT(*) AS count FROM {table} WHERE {key} IN ({placeholders})"
+        row = connection.execute(sql, tuple(values)).fetchone()
+        return int(row["count"]) if row else 0
 
     def _delete_checkpoints(
         self,
@@ -1831,6 +2068,28 @@ class RuntimeStore:
             return 0
         sql = f"DELETE FROM checkpoints WHERE {' OR '.join(where)}"
         return connection.execute(sql, tuple(params)).rowcount
+
+    def _count_checkpoints(
+        self,
+        connection: Any,
+        task_ids: list[str],
+        run_ids: list[str],
+    ) -> int:
+        where: list[str] = []
+        params: list[Any] = []
+        if task_ids:
+            placeholders = ", ".join("%s" for _ in task_ids)
+            where.append(f"task_id IN ({placeholders})")
+            params.extend(task_ids)
+        if run_ids:
+            placeholders = ", ".join("%s" for _ in run_ids)
+            where.append(f"run_id IN ({placeholders})")
+            params.extend(run_ids)
+        if not where:
+            return 0
+        sql = f"SELECT COUNT(*) AS count FROM checkpoints WHERE {' OR '.join(where)}"
+        row = connection.execute(sql, tuple(params)).fetchone()
+        return int(row["count"]) if row else 0
 
     def target_has_evidence(self, target_id: str) -> bool:
         row = self._query_one("SELECT 1 FROM evidence WHERE target_id = %s LIMIT 1", (target_id,))

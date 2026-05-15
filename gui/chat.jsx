@@ -161,6 +161,10 @@ function ChatPane({ title, kind, messages, setMessages, approval, model, onResol
 function ChatMode() {
   const D = window.PD_DATA;
   const API = window.PD_API || {};
+  const premiumWrapper = D.runtime?.premiumWrapper || {};
+  const premiumWrapperLine = premiumWrapper.local_wrapper_available
+    ? `Claude/GPT: ${premiumWrapper.local_chat_wrapper || 'agent_chat_api'} wrapper`
+    : `Claude/GPT: ${premiumWrapper.status || 'disabled'}`;
   const [approvalChat, setApprovalChat] = useStateC(D.approvalChat);
   const [inquiryChat, setInquiryChat] = useStateC(D.inquiryChat);
   const [activeAp, setActiveAp] = useStateC(D.approvals[0]);
@@ -274,7 +278,7 @@ function ChatMode() {
             <div className="dim">PoC exec: gated</div>
             <div className="dim">DDoS: forbidden</div>
             <div className="dim">Out of scope: blocked</div>
-            <div className="dim">Premium AI: disabled</div>
+            <div className="dim">{premiumWrapperLine}</div>
           </div>
         </aside>
 

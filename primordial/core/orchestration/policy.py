@@ -4,6 +4,7 @@ from typing import Callable
 
 from primordial.core.config import AutonomySettings
 from primordial.core.domain.enums import (
+    AgentRole,
     ApprovalAction,
     AutonomyMode,
     MethodologyPhase,
@@ -49,7 +50,12 @@ class PolicyEngine:
                 task_id=task.id,
             )
 
-        if task.provider_route == ProviderRoute.REMOTE_PREMIUM and not self.settings.allow_remote_premium:
+        uses_local_chat_wrapper = self._uses_local_chat_wrapper(task)
+        if (
+            task.provider_route == ProviderRoute.REMOTE_PREMIUM
+            and not self.settings.allow_remote_premium
+            and not uses_local_chat_wrapper
+        ):
             if (
                 task.kind == TaskKind.REVIEW_PREMIUM_ESCALATION
                 and task.metadata.get("remote_premium_policy_approval_required")
@@ -81,16 +87,36 @@ class PolicyEngine:
         if (
             task.provider_route == ProviderRoute.REMOTE_PREMIUM
             and self.daily_remote_cost_loader is not None
+            and not uses_local_chat_wrapper
         ):
-            daily_spent = self.daily_remote_cost_loader()
-            if daily_spent >= self.settings.daily_remote_budget:
+            try:
+                daily_spent = float(self.daily_remote_cost_loader())
+            except Exception as exc:  # noqa: BLE001 - remote spend uncertainty must fail closed
                 return PolicyDecision(
                     action_kind=task.kind.value,
                     verdict=PolicyVerdict.DENY,
-                    reason=f"daily remote budget exhausted: ${daily_spent:.2f} >= ${self.settings.daily_remote_budget:.2f}",
+                    reason="daily remote budget could not be read from the cost ledger",
                     target_id=task.target_id,
                     task_id=task.id,
-                    metadata={"daily_spent_usd": daily_spent, "daily_budget_usd": self.settings.daily_remote_budget},
+                    metadata={"error": str(exc), "daily_budget_usd": self.settings.daily_remote_budget},
+                )
+            estimated_cost = self._estimated_remote_cost(task)
+            if daily_spent >= self.settings.daily_remote_budget or daily_spent + estimated_cost > self.settings.daily_remote_budget:
+                return PolicyDecision(
+                    action_kind=task.kind.value,
+                    verdict=PolicyVerdict.DENY,
+                    reason=(
+                        "daily remote budget exhausted: "
+                        f"${daily_spent:.2f} spent + ${estimated_cost:.2f} estimated > "
+                        f"${self.settings.daily_remote_budget:.2f}"
+                    ),
+                    target_id=task.target_id,
+                    task_id=task.id,
+                    metadata={
+                        "daily_spent_usd": daily_spent,
+                        "estimated_task_cost_usd": estimated_cost,
+                        "daily_budget_usd": self.settings.daily_remote_budget,
+                    },
                 )
 
         action_policy = self._task_action_policy(task, target)
@@ -178,6 +204,22 @@ class PolicyEngine:
                 "timeout_seconds": timeout_seconds,
                 "max_requests": max_requests,
             },
+        )
+
+    def _estimated_remote_cost(self, task: Task) -> float:
+        raw = task.metadata.get("estimated_remote_cost_usd", 0.0)
+        try:
+            return max(0.0, float(raw))
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _uses_local_chat_wrapper(self, task: Task) -> bool:
+        return (
+            task.provider_route == ProviderRoute.REMOTE_PREMIUM
+            and task.kind == TaskKind.REVIEW_PREMIUM_ESCALATION
+            and task.role == AgentRole.CLAUDE_REVIEWER
+            and task.metadata.get("local_chat_wrapper") == "agent_chat_api"
+            and task.metadata.get("remote_premium_local_wrapper") is True
         )
 
     def evaluate_primitive(

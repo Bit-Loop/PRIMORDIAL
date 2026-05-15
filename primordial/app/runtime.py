@@ -1031,7 +1031,36 @@ class PrimordialRuntime:
         target = self.store.get_target_by_handle(handle, profile)
         if target is None:
             return {"removed": False, "handle": handle}
-        deletion = self.store.delete_target_cascade(target.id)
+        allow_destructive_delete = (
+            os.getenv("PRIMORDIAL_ALLOW_DESTRUCTIVE_TARGET_DELETE", "").strip()
+            == "I_UNDERSTAND_TARGET_RUNTIME_RECORDS_WILL_BE_DELETED"
+        )
+        deletion = self.store.delete_target_cascade(
+            target.id,
+            allow_runtime_record_deletion=allow_destructive_delete,
+            deletion_reason=f"operator requested target removal for {target.handle}",
+        )
+        if deletion.get("blocked"):
+            self.store.insert_event(
+                EventRecord(
+                    type=EventType.SCOPE_UPDATED,
+                    summary=f"Blocked destructive target removal: {target.handle}",
+                    target_id=target.id,
+                    metadata={
+                        "profile": target.profile.value,
+                        "reason": deletion.get("reason"),
+                        "runtime_record_counts": deletion.get("runtime_record_counts", {}),
+                    },
+                )
+            )
+            return {
+                "removed": False,
+                "blocked": True,
+                "handle": target.handle,
+                "profile": target.profile.value,
+                "reason": deletion.get("reason"),
+                "runtime_record_counts": deletion.get("runtime_record_counts", {}),
+            }
         self._cleanup_deleted_paths(deletion["artifact_paths"] + deletion["checkpoint_paths"])
         self.store.insert_event(
             EventRecord(
@@ -1414,7 +1443,7 @@ class PrimordialRuntime:
         hint_policy: str | None = None,
         allow_remote_url: bool = False,
     ) -> dict[str, object]:
-        target_record = self._resolve_operator_chat_target(target, question)
+        target_record = self._resolve_target_reference(target)
         if target_record is None:
             raise ValueError(f"target not found: {target}")
         return self.rag.ingest_path(
@@ -4029,6 +4058,7 @@ class PrimordialRuntime:
             )
             return
         installed = set(result.models)
+        installed.update(model.removesuffix(":latest") for model in result.models if model.endswith(":latest"))
         topology = self.config.topology
         role_model_map = {
             "local_fast": topology.local_fast,
@@ -4561,6 +4591,7 @@ class PrimordialRuntime:
             AgentChatPremiumReviewRunner(
                 self.agent_chat,
                 target_loader=lambda target_id: self.store.get_target(target_id) if target_id else None,
+                remote_cost_recorder=self.store.insert_remote_cost,
                 max_concurrency=self.config.autonomy.remote_premium_concurrency,
             )
         )

@@ -127,6 +127,14 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
   const waitingWork = runtimeNumber(workCounts.waiting, 0);
   const webActionCount = runtimeNumber(workCounts.web_actions, (workStatus.web_actions || []).length);
   const staleWebActionCount = runtimeNumber(workCounts.stale_web_actions, 0);
+  const premiumWrapper = D.runtime.premiumWrapper || {};
+  const premiumWrapperAvailable = !!premiumWrapper.local_wrapper_available;
+  const premiumWrapperTone = premiumWrapper.tone || (premiumWrapperAvailable ? 'cyan' : premiumWrapper.remote_premium_flag_enabled ? 'green' : 'gray');
+  const premiumWrapperStatus = premiumWrapper.status || (premiumWrapperAvailable ? 'local wrapper' : 'disabled');
+  const premiumWrapperLabel = premiumWrapper.label
+    || (premiumWrapper.local_chat_wrapper === 'agent_chat_api' ? 'agent_chat_api wrapper' : '')
+    || premiumWrapper.local_chat_wrapper
+    || 'remote_premium';
   const executionMode = contMode ? 'continuous' : 'tick';
   const runtimeTone = activeWork ? 'cyan' : waitingWork ? 'yellow' : queuedWork ? 'gray' : 'green';
   const runtimeStatus = activeWork ? 'working' : waitingWork ? 'waiting' : queuedWork ? 'queued' : 'idle';
@@ -399,7 +407,14 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
       tone: D.modelPayload?.ollama?.ok ? 'cyan' : 'gray',
       detail: 'Local model backend status.',
     },
-    { service: 'premium', n: 'Premium', d: 'remote_premium', s: 'disabled', tone: 'gray', detail: 'Remote premium escalation status.' },
+    {
+      service: 'premium',
+      n: 'Claude/GPT',
+      d: premiumWrapperLabel,
+      s: premiumWrapperStatus,
+      tone: premiumWrapperTone,
+      detail: premiumWrapper.detail || 'Remote premium escalation status.',
+    },
   ];
   const activeIntegration = integrationRows.find(row => row.service === integrationSelected) || integrationRows[0];
   const activeCredentialGroup = activeIntegration ? credentialGroup(activeIntegration.service) : null;
@@ -471,11 +486,13 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
                     <RuntimeTile label="mode" value={executionMode} detail={contMode ? `${interval}s interval` : 'manual ticks'} tone={contMode ? 'yellow' : 'gray'} />
                     <RuntimeTile label="work" value={activeWork} detail={`${queuedWork} queued / ${waitingWork} waiting`} tone={waitingWork ? 'warn' : ''} />
                     <RuntimeTile label="approvals" value={D.approvals.length} detail="pending" tone={D.approvals.length ? 'crit' : ''} />
+                    <RuntimeTile label="Claude/GPT" value={premiumWrapperStatus} detail={premiumWrapperLabel} tone={premiumWrapperTone} />
                     {webActionCount ? <RuntimeTile label="web actions" value={webActionCount} detail={staleWebActionCount ? `${staleWebActionCount} stale` : 'running'} tone="warn" /> : null}
                   </div>
                   <div className="runtime-policy-row">
                     <span className="runtime-policy-label">policy</span>
                     {policyFlags.length ? policyFlags.map(flag => <Pill key={flag} tone="cyan">{flag}</Pill>) : <Pill tone="green">recon default</Pill>}
+                    {premiumWrapperAvailable ? <Pill tone="cyan">Claude/GPT wrapper</Pill> : null}
                     <Pill tone="yellow">PoC gated</Pill>
                     <Pill tone="red">DoS forbidden</Pill>
                   </div>
@@ -871,7 +888,14 @@ function DashboardMode({ tweaks, onApprove, onReject }) {
                     <td><span className="strong">{t.kind}</span>{t.grouped_count ? <div className="dim mono">{t.grouped_count} grouped</div> : null}</td>
                     <td>{t.title}{t.hint ? <div className="dim mono" style={{ marginTop: 3 }}>{t.hint}</div> : null}</td>
                     <td>{t.target}</td>
-                    <td className="dim">{t.route} · {t.model}</td>
+                    <td className="dim">
+                      {t.route} · {t.model || 'unassigned'}
+                      {t.remote_premium_local_wrapper ? (
+                        <div className="row gap-4" style={{ marginTop: 3, flexWrap: 'wrap' }}>
+                          <Pill tone="cyan">{t.wrapper_label || (t.local_chat_wrapper === 'agent_chat_api' ? 'agent_chat_api wrapper' : `${t.local_chat_wrapper || 'agent_chat_api'} wrapper`)}</Pill>
+                        </div>
+                      ) : null}
+                    </td>
                     <td className="dim">{t.ms ? `${(t.ms / 1000).toFixed(1)}s` : '—'}</td>
                     <td><button className="btn ghost sm" onClick={() => API.command?.('inspect-task', { task_id: t.id, target: t.target, title: `Inspect ${t.kind}` })}>INSPECT</button></td>
                   </tr>

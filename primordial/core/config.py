@@ -32,13 +32,13 @@ class AutonomySettings:
     require_human_for_high_risk: bool = True
     max_poc_timeout_seconds: int = 30
     max_poc_requests: int = 20
-    # Maximum candidates a CHAIN_CANDIDATES task may spawn. Consumed by _handle_chain_candidates when implemented.
+    # Maximum verified interests a CHAIN_CANDIDATES task may review in one bounded pass.
     max_chaining_fanout: int = 5
     # Upper bound on task.max_attempts regardless of blueprint value. Wired in workflow._plan_task.
     max_auto_retries: int = 2
     memory_light_interval_minutes: int = 10
     memory_heavy_interval_minutes: int = 180
-    # Daily spend cap for REMOTE_PREMIUM route. Enforced by PolicyEngine once CTRL-7 cost ledger is implemented.
+    # Daily spend cap for REMOTE_PREMIUM route. Enforced by PolicyEngine using the remote cost ledger.
     daily_remote_budget: float = 25.0
     hot_path_concurrency: int = 1
     compact_path_concurrency: int = 2
@@ -159,6 +159,11 @@ class AppConfig:
             allow_remote_premium=_env_bool("PRIMORDIAL_ALLOW_REMOTE_PREMIUM", False),
             allow_exploitative_actions=_env_bool("PRIMORDIAL_ALLOW_EXPLOITATIVE_ACTIONS", False),
             allow_agent_safety_approval=_env_bool("PRIMORDIAL_ALLOW_AGENT_SAFETY_APPROVAL", True),
+            max_poc_timeout_seconds=_env_int("PRIMORDIAL_MAX_POC_TIMEOUT_SECONDS", 30),
+            max_poc_requests=_env_int("PRIMORDIAL_MAX_POC_REQUESTS", 20),
+            max_chaining_fanout=_env_int("PRIMORDIAL_MAX_CHAINING_FANOUT", 5),
+            max_auto_retries=_env_int("PRIMORDIAL_MAX_AUTO_RETRIES", 2),
+            daily_remote_budget=_env_float("PRIMORDIAL_DAILY_REMOTE_BUDGET", 25.0),
         )
         content_discovery_wordlist = os.getenv(
             "PRIMORDIAL_CONTENT_DISCOVERY_WORDLIST",
@@ -248,5 +253,15 @@ def _env_int(name: str, default: int) -> int:
         return default
     try:
         return int(raw)
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
     except ValueError:
         return default

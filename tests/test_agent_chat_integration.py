@@ -122,10 +122,18 @@ class AgentChatPremiumReviewRunnerTests(unittest.TestCase):
                     elapsed_seconds=0.1,
                     request_id="req-review",
                     conversation_id=str(kwargs.get("conversation_id")),
+                    prompt_tokens=120,
+                    completion_tokens=40,
+                    estimated_cost_usd=0.12,
                 )
 
         client = FakeClient()
-        runner = AgentChatPremiumReviewRunner(client, target_loader=lambda target_id: target)
+        cost_records: list[dict[str, object]] = []
+        runner = AgentChatPremiumReviewRunner(
+            client,
+            target_loader=lambda target_id: target,
+            remote_cost_recorder=lambda **kwargs: cost_records.append(kwargs),
+        )
         task = Task(
             target_id=target.id,
             phase=MethodologyPhase.ANALYSIS,
@@ -166,6 +174,9 @@ class AgentChatPremiumReviewRunnerTests(unittest.TestCase):
         self.assertTrue(result.evidence[0].metadata["structured_output"])
         self.assertEqual(result.evidence[0].metadata["review"]["confidence"], 0.76)
         self.assertEqual(result.traces[0].status, "completed")
+        self.assertTrue(result.traces[0].metadata["remote_cost"]["recorded"])
+        self.assertEqual(cost_records[0]["estimated_cost_usd"], 0.12)
+        self.assertEqual(cost_records[0]["prompt_tokens"], 120)
         self.assertEqual(client.kwargs["conversation_id"], f"primordial:{task.id}")
         self.assertIsNone(client.kwargs["model"])
 

@@ -17,12 +17,14 @@ class TaskBlueprint:
 
 DEFAULT_PHASE_ORDER = (
     MethodologyPhase.RECON,
+    MethodologyPhase.COLLECTION,
     MethodologyPhase.ANALYSIS,
     MethodologyPhase.EXPLOITATION,
     MethodologyPhase.CHAINING,
     MethodologyPhase.BEHAVIOR_VERIFICATION,
     MethodologyPhase.MEMORY_MAINTENANCE,
     MethodologyPhase.NOTIFICATION,
+    MethodologyPhase.ADMINISTRATION,
 )
 
 

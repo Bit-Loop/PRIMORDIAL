@@ -10,12 +10,14 @@ class ScopeProfile(StrEnum):
 
 class MethodologyPhase(StrEnum):
     RECON = "recon"
+    COLLECTION = "collection"
     ANALYSIS = "analysis"
     EXPLOITATION = "exploitation"
     CHAINING = "chaining"
     BEHAVIOR_VERIFICATION = "behavior_verification"
     MEMORY_MAINTENANCE = "memory_maintenance"
     NOTIFICATION = "notification"
+    ADMINISTRATION = "administration"
 
 
 class MethodologyName(StrEnum):
@@ -132,6 +134,7 @@ class PrimitiveRuntime(StrEnum):
     HOST = "host"
     CONTAINER = "container"
     CAIDO = "caido"
+    INTEGRATION = "integration"
     REMOTE = "remote"
 
 

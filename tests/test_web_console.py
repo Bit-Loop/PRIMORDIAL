@@ -19,14 +19,16 @@ from primordial.core.domain.enums import (
     MethodologyPhase,
     NotificationChannel,
     NotificationStatus,
+    PrimitiveRuntime,
     RiskTier,
     ProviderRoute,
     ScopeProfile,
+    SideEffectLevel,
     TaskKind,
     TaskStatus,
     VerificationStatus,
 )
-from primordial.core.domain.models import AgentTrace, EvidenceRecord, Interest, NotificationRecord, Task
+from primordial.core.domain.models import AgentTrace, EvidenceRecord, Interest, NotificationRecord, PrimitiveManifest, Task
 from primordial.core.providers.ollama import OllamaModelListResult, OllamaPreloadResult, OllamaResponse
 from primordial.core.web.app import PrimordialWebApp
 from primordial.runtime import PrimordialRuntime
@@ -393,6 +395,98 @@ class WebConsoleTests(unittest.TestCase):
         self.assertNotIn("tomcat:s3cret_2024", response.body.decode("utf-8"))
         self.assertIn("gpuMemory", payload["runtime"])
         self.assertIn("role_metrics", payload["modelPayload"])
+        wrapper = payload["runtime"]["premiumWrapper"]
+        self.assertEqual(wrapper["local_chat_wrapper"], "agent_chat_api")
+        self.assertTrue(wrapper["local_wrapper_available"])
+        self.assertEqual(wrapper["status"], "local wrapper")
+        self.assertTrue(wrapper["remote_premium_policy_gate_bypassed_for_wrapper"])
+
+    def test_control_plane_marks_wrapper_backed_claude_gpt_tasks(self) -> None:
+        target = self.runtime.store.list_targets()[0]
+        task = Task(
+            target_id=target.id,
+            phase=MethodologyPhase.ANALYSIS,
+            kind=TaskKind.REVIEW_PREMIUM_ESCALATION,
+            title="Claude/GPT wrapper review",
+            summary="Show local chat wrapper routing in the web GUI.",
+            role=AgentRole.CLAUDE_REVIEWER,
+            provider_route=ProviderRoute.REMOTE_PREMIUM,
+            metadata={
+                "local_chat_wrapper": "agent_chat_api",
+                "remote_premium_local_wrapper": True,
+            },
+        )
+        self.runtime.store.insert_task(task)
+
+        response = self.app.dispatch("GET", "/api/control-plane")
+        payload = json.loads(response.body)
+        rows = [item for item in payload["tasks"] if item["id"] == task.id]
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["local_chat_wrapper"], "agent_chat_api")
+        self.assertTrue(rows[0]["remote_premium_local_wrapper"])
+        self.assertEqual(rows[0]["wrapper_label"], "agent_chat_api wrapper")
+        self.assertIn("local chat wrapper", rows[0]["wrapper_detail"])
+
+    def test_control_plane_handles_administration_phase_tasks(self) -> None:
+        target = self.runtime.store.list_targets()[0]
+        task = Task(
+            target_id=target.id,
+            phase=MethodologyPhase.ADMINISTRATION,
+            kind=TaskKind.COMPACT_MEMORY,
+            title="Administrative maintenance",
+            summary="Persisted administrative task should not break the dashboard payload.",
+            role=AgentRole.MEMORY_WORKER,
+            provider_route=ProviderRoute.LOCAL_COMPACT,
+            provider_model="fixture-compact",
+        )
+        self.runtime.store.insert_task(task)
+
+        response = self.app.dispatch("GET", "/api/control-plane")
+        payload = json.loads(response.body)
+        task_ids = {item["id"] for item in payload["tasks"]}
+
+        self.assertEqual(response.status, 200)
+        self.assertIn(task.id, task_ids)
+
+    def test_control_plane_handles_legacy_collection_phase_primitives(self) -> None:
+        primitive = PrimitiveManifest(
+            name="legacy-collection-phase",
+            version="1",
+            description="Legacy primitive row using collection as an allowed phase.",
+            capability_tags=["legacy-collection"],
+            allowed_phases=[MethodologyPhase.COLLECTION],
+            runtime=PrimitiveRuntime.HOST,
+            risk_tier=RiskTier.LOW,
+            side_effect_level=SideEffectLevel.READ_ONLY,
+        )
+        self.runtime.store.insert_primitive(primitive)
+
+        response = self.app.dispatch("GET", "/api/control-plane")
+        payload = json.loads(response.body)
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload["runtime"]["health"], "OK")
+
+    def test_control_plane_handles_legacy_integration_runtime_primitives(self) -> None:
+        primitive = PrimitiveManifest(
+            name="legacy-integration-runtime",
+            version="1",
+            description="Legacy primitive row using integration as a primitive runtime.",
+            capability_tags=["legacy-integration"],
+            allowed_phases=[MethodologyPhase.ADMINISTRATION],
+            runtime=PrimitiveRuntime.INTEGRATION,
+            risk_tier=RiskTier.LOW,
+            side_effect_level=SideEffectLevel.NONE,
+        )
+        self.runtime.store.insert_primitive(primitive)
+
+        response = self.app.dispatch("GET", "/api/control-plane")
+        payload = json.loads(response.body)
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload["runtime"]["health"], "OK")
 
     def test_control_plane_live_metrics_force_refreshes_system_payload(self) -> None:
         metrics = {
@@ -688,11 +782,15 @@ class WebConsoleTests(unittest.TestCase):
                 "USE TARGET SCOPE",
                 "SAVE CREDENTIALS",
                 "Stored credentials",
-                "aria-label={`Edit ${activeCredentialGroup.n} ${label}`}",
+                "Claude/GPT",
+                "agent_chat_api wrapper",
+                "remote_premium_local_wrapper",
             ]:
                 self.assertIn(token, text)
             self.assertNotIn("pirate.htb scope", text)
             self.assertNotIn("http://127.0.0.1:8080/graphql", text)
+        self.assertIn("aria-label={`Edit ${activeCredentialGroup.n} ${label}`}", generated)
+        self.assertIn("aria-label", bundle_text)
         self.assertNotIn("'integrations', 'credentials'", generated)
         self.assertNotIn("dangerouslySetInnerHTML", generated)
 
@@ -895,6 +993,42 @@ class WebConsoleTests(unittest.TestCase):
         scope = json.loads(self.app.dispatch("GET", "/api/scope").body)
         self.assertEqual(scope["targets"], [])
 
+    def test_target_removal_blocks_linked_runtime_records(self) -> None:
+        target = self.runtime.store.get_target_by_handle("pirate.htb", ScopeProfile.HACK_THE_BOX)
+        self.assertIsNotNone(target)
+        self.runtime.store.insert_evidence(
+            EvidenceRecord(
+                id="evidence_delete_guard",
+                target_id=target.id,
+                type=EvidenceType.SCANNER_OUTPUT,
+                title="Preserved runtime evidence",
+                summary="Runtime evidence must not be deleted by target cleanup.",
+                source_ref="test",
+                verification_status=VerificationStatus.PARTIAL,
+            )
+        )
+
+        response = self.app.dispatch("DELETE", "/api/targets/pirate.htb?profile=hack_the_box")
+        payload = json.loads(response.body)
+
+        self.assertEqual(response.status, 409)
+        self.assertFalse(payload["ok"])
+        self.assertTrue(payload["result"]["blocked"])
+        self.assertEqual(payload["result"]["runtime_record_counts"]["evidence"], 1)
+        self.assertIsNotNone(self.runtime.store.get_target_by_handle("pirate.htb", ScopeProfile.HACK_THE_BOX))
+        self.assertTrue(self.runtime.store.target_has_evidence(target.id))
+
+    def test_database_trigger_blocks_direct_runtime_deletes(self) -> None:
+        target = self.runtime.store.get_target_by_handle("pirate.htb", ScopeProfile.HACK_THE_BOX)
+        self.assertIsNotNone(target)
+
+        with self.assertRaises(Exception):
+            with self.runtime.store.connect() as connection:
+                connection.execute("DELETE FROM targets WHERE id = %s", (target.id,))
+                connection.commit()
+
+        self.assertIsNotNone(self.runtime.store.get_target_by_handle("pirate.htb", ScopeProfile.HACK_THE_BOX))
+
     def test_credentials_and_records_endpoints_are_practical(self) -> None:
         notion_response = self.app.dispatch(
             "POST",
@@ -986,6 +1120,26 @@ class WebConsoleTests(unittest.TestCase):
         self.assertEqual(notifications[second.id].status, NotificationStatus.FAILED)
         events = self.runtime.store.list_events(limit=10)
         self.assertTrue(any("invalid webhook configuration" in event.summary for event in events))
+
+    def test_discord_transient_failure_keeps_notification_pending_until_retry_limit(self) -> None:
+        self.runtime.set_discord_credentials(webhook_url="https://discord.com/api/webhooks/123/token")
+        notification = NotificationRecord(
+            channel=NotificationChannel.DISCORD,
+            event_type="approval_needed",
+            summary="retry me",
+        )
+        self.runtime.store.insert_notification(notification)
+
+        with patch("primordial.adapters.discord.request.urlopen", side_effect=OSError("temporary network failure")):
+            delivered = self.runtime.discord.deliver_pending(limit=10)
+
+        self.assertEqual(delivered, 0)
+        refreshed = {item.id: item for item in self.runtime.store.list_notifications(limit=10)}[notification.id]
+        self.assertEqual(refreshed.status, NotificationStatus.PENDING)
+        self.assertEqual(refreshed.metadata["delivery_attempts"], 1)
+        self.assertTrue(refreshed.metadata["retryable_delivery_error"])
+        deliveries = self.runtime.store.list_discord_deliveries(limit=10)
+        self.assertEqual(deliveries[0].status, NotificationStatus.PENDING)
 
     def test_connector_api_endpoints_have_route_level_contracts(self) -> None:
         raw_request = "GET / HTTP/1.1\nHost: pirate.htb\nConnection: close\n\n"

@@ -22,7 +22,16 @@ from primordial.core.domain.enums import (
     TaskStatus,
     VerificationStatus,
 )
-from primordial.core.domain.models import EvidenceRecord, Interest, Target, Task, utc_now
+from primordial.core.domain.models import (
+    EscalationPackage,
+    EvidenceRecord,
+    Interest,
+    Target,
+    Task,
+    TaskExecutionResult,
+    TaskRun,
+    utc_now,
+)
 from primordial.core.domain.models import OrchestrationReport
 from primordial.core.web.app import PrimordialWebApp
 from tests.support import build_probe_fixture, write_scope_file
@@ -206,6 +215,77 @@ class WorkflowTests(unittest.TestCase):
 
         self.assertEqual([primitive.name for primitive in validation_primitives], ["finding-verification"])
         self.assertEqual([primitive.name for primitive in execution_primitives], ["finding-verification"])
+
+    def test_verify_hypothesis_writes_bounded_verification_result(self) -> None:
+        evidence = EvidenceRecord(
+            target_id=self.target.id,
+            type=EvidenceType.TOOL_OUTPUT,
+            title="Verified service evidence",
+            summary="Deterministic fixture evidence.",
+            source_ref="fixture://verified-service",
+            verification_status=VerificationStatus.VERIFIED,
+            confidence=0.86,
+            freshness=0.9,
+        )
+        self.runtime.store.insert_evidence(evidence)
+        interest = Interest(
+            target_id=self.target.id,
+            title="Evidence-backed hypothesis",
+            summary="The hypothesis is backed by verified current evidence.",
+            evidence_refs=[evidence.id],
+            status=InterestStatus.VERIFIED,
+            confidence=0.88,
+        )
+        self.runtime.store.insert_interest(interest)
+        task = Task(
+            target_id=self.target.id,
+            phase=MethodologyPhase.EXPLOITATION,
+            kind=TaskKind.VERIFY_HYPOTHESIS,
+            title="Verify prioritized hypothesis",
+            summary="Run deterministic bounded verification.",
+            role=AgentRole.EXPLOITATION_WORKER,
+            risk_tier=RiskTier.HIGH,
+            required_capabilities=["finding-verification"],
+            metadata={"primitive_hint": "finding-verification"},
+        )
+
+        result = self.runtime.executor.execute(task, None)
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.evidence[0].verification_status, VerificationStatus.VERIFIED)
+        self.assertIn(evidence.id, result.evidence[0].metadata["source_evidence_refs"])
+        self.assertEqual(result.findings[0].verification_status, VerificationStatus.VERIFIED)
+        self.assertFalse(result.findings[0].metadata["executes_pocs"])
+
+    def test_chain_candidates_respects_max_chaining_fanout(self) -> None:
+        self.runtime.config.autonomy.max_chaining_fanout = 2
+        for index in range(4):
+            self.runtime.store.insert_interest(
+                Interest(
+                    target_id=self.target.id,
+                    title=f"Verified interest {index}",
+                    summary="Chain review fixture.",
+                    status=InterestStatus.VERIFIED,
+                    confidence=0.9 - (index * 0.01),
+                )
+            )
+        task = Task(
+            target_id=self.target.id,
+            phase=MethodologyPhase.CHAINING,
+            kind=TaskKind.CHAIN_CANDIDATES,
+            title="Review exploit-chain candidates",
+            summary="Review bounded chain inputs.",
+            role=AgentRole.CHAINING_WORKER,
+            risk_tier=RiskTier.HIGH,
+        )
+
+        with patch.object(self.runtime.executor, "_run_ai_review", return_value=None):
+            result = self.runtime.executor.execute(task, None)
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.notes[0].metadata["verified_interest_count"], 4)
+        self.assertEqual(result.notes[0].metadata["reviewed_interest_count"], 2)
+        self.assertTrue(result.notes[0].metadata["truncated"])
 
     def test_validation_blocks_tasks_without_primitive_coverage(self) -> None:
         task = Task(
@@ -497,7 +577,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(credential_tasks[0].metadata["credentialed_access_surface"]["os_family"], "windows")
         self.assertIn("winrm", credential_tasks[0].metadata["protocols"])
 
-    def test_stuck_planner_auto_approves_agent_chat_premium_review_packet(self) -> None:
+    def test_stuck_planner_routes_claude_gpt_through_local_chat_wrapper_without_remote_gate(self) -> None:
         evidence = EvidenceRecord(
             target_id=self.target.id,
             type=EvidenceType.OPERATOR_NOTE,
@@ -529,18 +609,96 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(len(review_tasks), 1)
         self.assertEqual(review_tasks[0].provider_route, ProviderRoute.REMOTE_PREMIUM)
         self.assertEqual(review_tasks[0].status, TaskStatus.PENDING)
-        self.assertTrue(review_tasks[0].metadata["remote_premium_operator_approved"])
-        self.assertTrue(review_tasks[0].metadata["operator_approved"])
-        self.assertEqual(review_tasks[0].metadata["auto_approval_source"], "agent_chat_api_wrapper")
+        self.assertEqual(review_tasks[0].metadata["local_chat_wrapper"], "agent_chat_api")
+        self.assertTrue(review_tasks[0].metadata["remote_premium_local_wrapper"])
+        self.assertNotIn("remote_premium_policy_approval_required", review_tasks[0].metadata)
+        self.assertNotIn("operator_approved", review_tasks[0].metadata)
         packet = review_tasks[0].metadata["escalation_package"]["metadata"]["packet"]
         self.assertEqual(packet["operator_intent"], "recon_only")
         self.assertEqual(packet["required_output"]["recommended_next_actions"], "array<object>")
-        self.assertTrue(
-            any(
-                event.task_id == review_tasks[0].id and event.metadata.get("auto_approved")
-                for event in self.runtime.store.list_events(limit=10)
-            )
+
+    def test_execution_escalation_package_uses_local_chat_wrapper_when_remote_flag_is_disabled(self) -> None:
+        evidence = EvidenceRecord(
+            target_id=self.target.id,
+            type=EvidenceType.OPERATOR_NOTE,
+            title="Manual evidence note",
+            summary="Operator supplied live evidence for escalation.",
+            source_ref="fixture://manual-note",
+            verification_status=VerificationStatus.PARTIAL,
+            confidence=0.6,
+            freshness=0.8,
         )
+        self.runtime.store.insert_evidence(evidence)
+        task = Task(
+            target_id=self.target.id,
+            phase=MethodologyPhase.ANALYSIS,
+            kind=TaskKind.ANALYZE_EVIDENCE,
+            title="Analyze accumulated evidence",
+            summary="Generate escalation package.",
+            role=AgentRole.ANALYSIS_WORKER,
+            provider_route=ProviderRoute.LOCAL_DEEP,
+            provider_model="fixture-model",
+        )
+        run = TaskRun(
+            task_id=task.id,
+            status=TaskRunStatus.RUNNING,
+            attempt_number=1,
+            role=task.role,
+            provider_route=ProviderRoute.LOCAL_DEEP,
+            model_name="fixture-model",
+        )
+        self.runtime.store.insert_task(task)
+        self.runtime.store.insert_task_run(run)
+        result = TaskExecutionResult(
+            success=True,
+            summary="analysis complete",
+            escalation_package=EscalationPackage(
+                task_id=task.id,
+                target_id=self.target.id,
+                mode="planner_uncertainty_review",
+                reason="Need local-wrapper Claude/GPT review",
+                expected_value="Resolve planner uncertainty",
+                cost_tier="remote_premium",
+                question="What safe next action is valid?",
+                evidence_refs=[evidence.id],
+                evidence_summaries=[f"{evidence.id}: {evidence.title}"],
+                disagreement_signal="planner_uncertainty",
+                expected_output_type="planner_remote_review_v1",
+                metadata={
+                    "packet": {
+                        "handoff_type": "planner_uncertainty_review",
+                        "required_output": {
+                            "recommended_next_actions": "array<object>",
+                            "missing_evidence": "array<string>",
+                            "invalid_existing_tasks": "array<object>",
+                            "primitive_gaps": "array<string>",
+                            "confidence": "number",
+                            "rationale_with_evidence_refs": "array<object>",
+                        },
+                        "authority_limits": [
+                            "Remote review cannot approve credential use.",
+                            "Remote review cannot expand target scope.",
+                            "Remote review cannot execute tools.",
+                            "Remote review cannot override Operator Intent or deterministic policy.",
+                        ],
+                    }
+                },
+            ),
+        )
+        report = OrchestrationReport()
+
+        self.runtime.workflow._persist_execution_result(task, run, result, report)
+        review_tasks = [
+            item
+            for item in self.runtime.store.list_tasks(target_id=self.target.id, limit=10)
+            if item.kind == TaskKind.REVIEW_PREMIUM_ESCALATION
+        ]
+
+        self.assertEqual(len(review_tasks), 1)
+        self.assertEqual(review_tasks[0].status, TaskStatus.PENDING)
+        self.assertEqual(review_tasks[0].metadata["local_chat_wrapper"], "agent_chat_api")
+        self.assertTrue(review_tasks[0].metadata["remote_premium_local_wrapper"])
+        self.assertNotIn("remote_premium_policy_approval_required", review_tasks[0].metadata)
 
     def test_agent_chat_premium_auto_approval_does_not_apply_to_credential_tasks(self) -> None:
         task = Task(

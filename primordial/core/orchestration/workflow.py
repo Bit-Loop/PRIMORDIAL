@@ -1043,7 +1043,8 @@ class WorkflowOrchestrator:
             "reasons": reason_payload,
             "question": question,
         }
-        if not self.autonomy.allow_remote_premium:
+        self._mark_agent_chat_wrapper_review(task)
+        if not self.autonomy.allow_remote_premium and not task.metadata.get("remote_premium_local_wrapper"):
             task.metadata["remote_premium_policy_approval_required"] = True
         target.metadata["last_planner_uncertainty_escalation_key"] = key
         target.updated_at = utc_now()
@@ -2298,6 +2299,20 @@ class WorkflowOrchestrator:
         task.requires_approval = False
         return True
 
+    def _mark_agent_chat_wrapper_review(self, task: Task) -> bool:
+        if not self.worker_broker.has_runner_for(
+            route=ProviderRoute.REMOTE_PREMIUM,
+            kind=TaskKind.REVIEW_PREMIUM_ESCALATION,
+            role=AgentRole.CLAUDE_REVIEWER,
+            runner_id="agent-chat-premium-runner",
+        ):
+            return False
+        if task.kind != TaskKind.REVIEW_PREMIUM_ESCALATION or task.role != AgentRole.CLAUDE_REVIEWER:
+            return False
+        task.metadata["local_chat_wrapper"] = "agent_chat_api"
+        task.metadata["remote_premium_local_wrapper"] = True
+        return True
+
     def _is_agent_chat_planner_review_auto_approval_candidate(self, task: Task) -> bool:
         if task.kind != TaskKind.REVIEW_PREMIUM_ESCALATION:
             return False
@@ -2722,7 +2737,13 @@ class WorkflowOrchestrator:
             report.events.append(event)
 
         if result.escalation_package:
-            if not self.autonomy.allow_remote_premium:
+            local_wrapper_available = self.worker_broker.has_runner_for(
+                route=ProviderRoute.REMOTE_PREMIUM,
+                kind=TaskKind.REVIEW_PREMIUM_ESCALATION,
+                role=AgentRole.CLAUDE_REVIEWER,
+                runner_id="agent-chat-premium-runner",
+            )
+            if not self.autonomy.allow_remote_premium and not local_wrapper_available:
                 # Remote premium is policy-disabled — record the suppressed escalation so the
                 # operator can act on it if they later enable allow_remote_premium.
                 note = Note(
@@ -2749,6 +2770,9 @@ class WorkflowOrchestrator:
                 )
                 escalation_task.evidence_refs = result.escalation_package.evidence_refs
                 escalation_task.metadata["escalation_package"] = result.escalation_package.as_payload()
+                self._mark_agent_chat_wrapper_review(escalation_task)
+                if not self.autonomy.allow_remote_premium and not escalation_task.metadata.get("remote_premium_local_wrapper"):
+                    escalation_task.metadata["remote_premium_policy_approval_required"] = True
                 self._register_task(escalation_task, self.store.get_target(task.target_id), report)
 
         if result.success:

@@ -21,6 +21,7 @@ from primordial.core.domain.enums import (
 )
 from primordial.core.domain.models import EvidenceRecord, Task
 from primordial.core.domain.models import TaskRun
+from primordial.core.providers.ollama import OllamaModelListResult
 from primordial.runtime import PrimordialRuntime
 from tests.support import build_probe_fixture, write_scope_file
 
@@ -29,6 +30,28 @@ MANIFESTS_DIR = Path(__file__).resolve().parents[1] / "manifests"
 
 
 class RuntimeIntegrationTests(unittest.TestCase):
+    def test_topology_model_validation_accepts_implicit_latest_tag(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = AppConfig.from_env(project_root=root)
+            config.manifests_dir = MANIFESTS_DIR
+            config.ensure_directories()
+
+            with patch(
+                "primordial.core.providers.ollama.OllamaClient.list_models",
+                return_value=OllamaModelListResult(
+                    ok=True,
+                    models=["gemma4:e4b", "deepseek-r1:8b", "qwen3-coder-next:q4_K_M", "phi4-reasoning:latest"],
+                ),
+            ):
+                runtime = PrimordialRuntime(config)
+                runtime.initialize()
+            try:
+                events = runtime.store.list_events(limit=20)
+                self.assertFalse(any(event.summary.startswith("Topology models missing") for event in events))
+            finally:
+                runtime.shutdown()
+
     def test_execution_mode_defaults_to_longer_cpu_friendly_interval(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

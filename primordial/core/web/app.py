@@ -9,7 +9,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from primordial.app.runtime import PrimordialRuntime
-from primordial.core.domain.enums import ScopeProfile, TaskKind
+from primordial.core.domain.enums import AgentRole, ProviderRoute, ScopeProfile, TaskKind
 
 
 @dataclass(slots=True)
@@ -480,6 +480,8 @@ class PrimordialWebApp:
                     return self._json_response({"error": "invalid profile"}, status=400)
             with self._lock:
                 outcome = self.runtime.remove_target(handle, parsed_profile)
+                if outcome.get("blocked"):
+                    return self._json_response({"ok": False, "error": outcome["reason"], "result": outcome}, status=409)
                 if not outcome["removed"]:
                     return self._json_response({"error": "target not found"}, status=404)
                 return self._action_response("remove-target", outcome)
@@ -776,6 +778,7 @@ class PrimordialWebApp:
         network = metrics.get("network", {}) if isinstance(metrics.get("network"), dict) else {}
         gpu_metrics = metrics.get("gpu", {}) if isinstance(metrics.get("gpu"), dict) else {}
         gpu_memory = self._gpu_memory_payload(gpu_metrics)
+        premium_wrapper = self._premium_wrapper_payload()
 
         return {
             "mode": "real",
@@ -800,6 +803,7 @@ class PrimordialWebApp:
                 "operatorIntent": intent,
                 "workStatus": work_status,
                 "systemMetrics": metrics,
+                "premiumWrapper": premium_wrapper,
             },
             "models": model_rows,
             "modelPayload": models,
@@ -929,6 +933,48 @@ class PrimordialWebApp:
             "free_label": free_label,
         }
 
+    def _premium_wrapper_payload(self) -> dict[str, Any]:
+        local_wrapper_available = self.runtime.worker_broker.has_runner_for(
+            route=ProviderRoute.REMOTE_PREMIUM,
+            kind=TaskKind.REVIEW_PREMIUM_ESCALATION,
+            role=AgentRole.CLAUDE_REVIEWER,
+            runner_id="agent-chat-premium-runner",
+        )
+        remote_enabled = bool(self.runtime.config.autonomy.allow_remote_premium)
+        if local_wrapper_available:
+            status = "local wrapper"
+            label = "agent_chat_api wrapper"
+            detail = (
+                "Claude/GPT review tasks route through agent_chat_api; wrapper-backed reviews "
+                "are not blocked by the remote premium flag or daily remote budget gate."
+            )
+            tone = "cyan"
+        elif remote_enabled:
+            status = "remote enabled"
+            label = "remote_premium"
+            detail = "Claude/GPT review tasks use the configured remote premium route."
+            tone = "green"
+        else:
+            status = "disabled"
+            label = "remote_premium"
+            detail = "Claude/GPT review tasks require either the local wrapper runner or remote premium approval."
+            tone = "gray"
+        return {
+            "status": status,
+            "label": label,
+            "detail": detail,
+            "tone": tone,
+            "provider_route": ProviderRoute.REMOTE_PREMIUM.value,
+            "task_kind": TaskKind.REVIEW_PREMIUM_ESCALATION.value,
+            "agent_role": AgentRole.CLAUDE_REVIEWER.value,
+            "runner_id": "agent-chat-premium-runner" if local_wrapper_available else "",
+            "local_chat_wrapper": "agent_chat_api" if local_wrapper_available else "",
+            "local_wrapper_available": local_wrapper_available,
+            "remote_premium_flag_enabled": remote_enabled,
+            "remote_premium_policy_gate_bypassed_for_wrapper": local_wrapper_available,
+            "remote_premium_budget_gate_bypassed_for_wrapper": local_wrapper_available,
+        }
+
     def _tasks_view(
         self,
         dashboard: dict[str, Any],
@@ -975,13 +1021,30 @@ class PrimordialWebApp:
                     "ms": 0,
                     "raw": task,
                 },
-            )
+        )
         items = [item for item in by_id.values() if not self._hide_task_item(item)]
         for item in items:
+            self._decorate_task_wrapper(item)
             hint = self._task_hint(item)
             if hint:
                 item["hint"] = hint
         return self._group_task_items(items)[:100]
+
+    def _decorate_task_wrapper(self, item: dict[str, Any]) -> None:
+        raw = item.get("raw", {}) if isinstance(item.get("raw"), dict) else {}
+        metadata = raw.get("metadata", {}) if isinstance(raw.get("metadata"), dict) else {}
+        wrapper = str(metadata.get("local_chat_wrapper") or "")
+        local_wrapper = bool(metadata.get("remote_premium_local_wrapper"))
+        if not wrapper and local_wrapper:
+            wrapper = "agent_chat_api"
+        item["local_chat_wrapper"] = wrapper
+        item["remote_premium_local_wrapper"] = local_wrapper
+        if wrapper and local_wrapper:
+            item["wrapper_label"] = f"{wrapper} wrapper"
+            item["wrapper_detail"] = (
+                "Claude/GPT review is routed through the local chat wrapper; "
+                "remote premium flag and budget gates do not block this task."
+            )
 
     def _hide_task_item(self, item: dict[str, Any]) -> bool:
         raw = item.get("raw", {}) if isinstance(item.get("raw"), dict) else {}

@@ -58,6 +58,9 @@ class AgentChatResponse:
     request_id: str | None = None
     conversation_id: str | None = None
     session_resumed: bool = False
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    estimated_cost_usd: float = 0.0
     warnings: list[str] = field(default_factory=list)
     raw: dict[str, Any] = field(default_factory=dict)
 
@@ -114,6 +117,10 @@ class AgentChatClient:
         )
         if not isinstance(response, dict):
             raise AgentChatError("agent chat response was not an object")
+        usage = response.get("usage")
+        usage_payload = usage if isinstance(usage, dict) else {}
+        provider_meta = response.get("provider_meta")
+        provider_meta_payload = provider_meta if isinstance(provider_meta, dict) else {}
         return AgentChatResponse(
             provider=str(response.get("provider") or selected_provider),
             model=str(response.get("model")) if response.get("model") else selected_model,
@@ -123,6 +130,11 @@ class AgentChatClient:
             request_id=str(response.get("request_id")) if response.get("request_id") else None,
             conversation_id=str(response.get("conversation_id")) if response.get("conversation_id") else None,
             session_resumed=bool(response.get("session_resumed")),
+            prompt_tokens=_optional_int(usage_payload.get("prompt_tokens")),
+            completion_tokens=_optional_int(usage_payload.get("completion_tokens")),
+            estimated_cost_usd=_optional_float(
+                response.get("estimated_cost_usd") or provider_meta_payload.get("estimated_cost_usd") or 0.0
+            ),
             warnings=[str(item) for item in response.get("warnings", []) if str(item).strip()]
             if isinstance(response.get("warnings"), list)
             else [],
@@ -190,11 +202,13 @@ class AgentChatPremiumReviewRunner:
         client: AgentChatClient,
         *,
         target_loader: Callable[[str | None], Target | None],
+        remote_cost_recorder: Callable[..., None] | None = None,
         max_concurrency: int = 1,
         offer_ttl_seconds: int = 5,
     ) -> None:
         self.client = client
         self._target_loader = target_loader
+        self._remote_cost_recorder = remote_cost_recorder
         self.max_concurrency = max(1, max_concurrency)
         self.offer_ttl_seconds = max(1, offer_ttl_seconds)
         self._running = 0
@@ -297,6 +311,7 @@ class AgentChatPremiumReviewRunner:
 
         review = parse_review_json(response.text)
         structured = isinstance(review, dict)
+        cost_payload = self._record_remote_cost(task, response)
         status = "completed" if structured else "parse_failed"
         summary = (
             "Remote premium review returned structured planner output."
@@ -318,6 +333,7 @@ class AgentChatPremiumReviewRunner:
                     "session_resumed": response.session_resumed,
                     "warnings": response.warnings,
                     "structured_output": structured,
+                    "remote_cost": cost_payload,
                 },
             )
         )
@@ -343,6 +359,7 @@ class AgentChatPremiumReviewRunner:
                     "conversation_id": response.conversation_id,
                     "adapter": "agent_chat_api",
                     "expected_output_type": self._expected_output_type(task),
+                    "remote_cost": cost_payload,
                 },
             )
         )
@@ -373,10 +390,47 @@ class AgentChatPremiumReviewRunner:
                     "provider": response.provider,
                     "model": response.model or model or "provider-default",
                     "structured_output": structured,
+                    "remote_cost": cost_payload,
                 },
             )
         )
         return result
+
+    def _record_remote_cost(self, task: Task, response: AgentChatResponse) -> dict[str, object]:
+        estimated_cost = self._estimated_remote_cost(task, response)
+        payload: dict[str, object] = {
+            "recorded": False,
+            "route": ProviderRoute.REMOTE_PREMIUM.value,
+            "model": response.model or self.client.settings.model or "provider-default",
+            "prompt_tokens": response.prompt_tokens,
+            "completion_tokens": response.completion_tokens,
+            "estimated_cost_usd": estimated_cost,
+        }
+        if self._remote_cost_recorder is None:
+            return payload
+        try:
+            self._remote_cost_recorder(
+                route=ProviderRoute.REMOTE_PREMIUM.value,
+                model=str(payload["model"]),
+                task_id=task.id,
+                prompt_tokens=response.prompt_tokens,
+                completion_tokens=response.completion_tokens,
+                estimated_cost_usd=estimated_cost,
+            )
+        except Exception as exc:  # noqa: BLE001 - cost telemetry must not hide a completed review
+            payload["error"] = str(exc)
+            return payload
+        payload["recorded"] = True
+        return payload
+
+    def _estimated_remote_cost(self, task: Task, response: AgentChatResponse) -> float:
+        if response.estimated_cost_usd > 0:
+            return response.estimated_cost_usd
+        raw = task.metadata.get("estimated_remote_cost_usd", 0.0)
+        try:
+            return max(0.0, float(raw))
+        except (TypeError, ValueError):
+            return 0.0
 
     def _build_review_prompt(
         self,
@@ -519,3 +573,17 @@ def parse_review_json(text: str) -> dict[str, Any] | None:
         if isinstance(parsed, dict):
             return parsed
     return None
+
+
+def _optional_int(value: object) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_float(value: object) -> float:
+    try:
+        return float(value) if value is not None else 0.0
+    except (TypeError, ValueError):
+        return 0.0

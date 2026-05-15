@@ -410,4 +410,62 @@ CREATE INDEX IF NOT EXISTS idx_record_embeddings_record ON record_embeddings(rec
 CREATE INDEX IF NOT EXISTS idx_record_embeddings_target ON record_embeddings(target_id);
 CREATE INDEX IF NOT EXISTS idx_document_chunks_target ON document_chunks(target_id);
 CREATE INDEX IF NOT EXISTS idx_document_chunks_source ON document_chunks(source_artifact_id);
+
+CREATE OR REPLACE FUNCTION primordial_block_runtime_delete()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF current_setting('primordial.allow_runtime_delete', true) = 'on' THEN
+        RETURN OLD;
+    END IF;
+    RAISE EXCEPTION 'runtime delete blocked: set primordial.allow_runtime_delete only inside guarded RuntimeStore.delete_target_cascade'
+        USING DETAIL = TG_TABLE_SCHEMA || '.' || TG_TABLE_NAME;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS block_target_delete ON targets;
+CREATE TRIGGER block_target_delete
+BEFORE DELETE ON targets
+FOR EACH ROW EXECUTE FUNCTION primordial_block_runtime_delete();
+
+DROP TRIGGER IF EXISTS block_task_delete ON tasks;
+CREATE TRIGGER block_task_delete
+BEFORE DELETE ON tasks
+FOR EACH ROW EXECUTE FUNCTION primordial_block_runtime_delete();
+
+DROP TRIGGER IF EXISTS block_task_run_delete ON task_runs;
+CREATE TRIGGER block_task_run_delete
+BEFORE DELETE ON task_runs
+FOR EACH ROW EXECUTE FUNCTION primordial_block_runtime_delete();
+
+DROP TRIGGER IF EXISTS block_evidence_delete ON evidence;
+CREATE TRIGGER block_evidence_delete
+BEFORE DELETE ON evidence
+FOR EACH ROW EXECUTE FUNCTION primordial_block_runtime_delete();
+
+DROP TRIGGER IF EXISTS block_artifact_delete ON artifacts;
+CREATE TRIGGER block_artifact_delete
+BEFORE DELETE ON artifacts
+FOR EACH ROW EXECUTE FUNCTION primordial_block_runtime_delete();
+
+DROP TRIGGER IF EXISTS block_checkpoint_delete ON checkpoints;
+CREATE TRIGGER block_checkpoint_delete
+BEFORE DELETE ON checkpoints
+FOR EACH ROW EXECUTE FUNCTION primordial_block_runtime_delete();
+
+DROP TRIGGER IF EXISTS block_finding_delete ON findings;
+CREATE TRIGGER block_finding_delete
+BEFORE DELETE ON findings
+FOR EACH ROW EXECUTE FUNCTION primordial_block_runtime_delete();
+
+DROP TRIGGER IF EXISTS block_interest_delete ON interests;
+CREATE TRIGGER block_interest_delete
+BEFORE DELETE ON interests
+FOR EACH ROW EXECUTE FUNCTION primordial_block_runtime_delete();
+
+DROP TRIGGER IF EXISTS block_note_delete ON notes;
+CREATE TRIGGER block_note_delete
+BEFORE DELETE ON notes
+FOR EACH ROW EXECUTE FUNCTION primordial_block_runtime_delete();
 """
