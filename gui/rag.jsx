@@ -30,6 +30,7 @@ function RagMode() {
   const API = window.PD_API || {};
   const [status, setStatus] = useStateR(null);
   const [config, setConfig] = useStateR(null);
+  const [vulnStatus, setVulnStatus] = useStateR(null);
   const [busy, setBusy] = useStateR('');
   const [error, setError] = useStateR('');
   const [importForm, setImportForm] = useStateR({
@@ -59,8 +60,31 @@ function RagMode() {
   const [citationTab, setCitationTab] = useStateR('readable');
   const [evalQueries, setEvalQueries] = useStateR('What is the difference between BOLA and BFLA?\nMap this finding to OWASP and MITRE ATT&CK.');
   const [evalResult, setEvalResult] = useStateR(null);
+  const [vulnSyncForm, setVulnSyncForm] = useStateR({
+    since_year: 2020,
+    embed_all: true,
+    sources: 'nvd, kev, epss, cvelist_v5, osv, ghsa',
+    max_enrichment_cves: 250,
+    max_nvd_pages: '',
+    skip_embeddings: false,
+  });
+  const [vulnSyncResult, setVulnSyncResult] = useStateR(null);
+  const [vulnSearchForm, setVulnSearchForm] = useStateR({
+    query: 'OpenSSH CVE patch remediation',
+    cve_id: '',
+    ghsa_id: '',
+    osv_id: '',
+    package: '',
+    ecosystem: '',
+    kev: false,
+    epss_percentile: '',
+    limit: 8,
+  });
+  const [vulnSearchResult, setVulnSearchResult] = useStateR(null);
+  const [vulnHints, setVulnHints] = useStateR(null);
 
   const results = useMemoR(() => searchResult?.results || [], [searchResult]);
+  const vulnResults = useMemoR(() => vulnSearchResult?.results || [], [vulnSearchResult]);
   const selectedChunk = chunkDetail?.chunk || null;
   const selectedMetadata = selectedChunk?.metadata || {};
 
@@ -70,8 +94,10 @@ function RagMode() {
     try {
       const nextStatus = API.ragStatus ? await API.ragStatus() : await API.request('/api/rag/status');
       const nextConfig = API.ragConfig ? await API.ragConfig() : await API.request('/api/rag/config');
+      const nextVulnStatus = API.ragVulnStatus ? await API.ragVulnStatus() : await API.request('/api/rag/vuln/status');
       setStatus(nextStatus);
       setConfig(nextConfig);
+      setVulnStatus(nextVulnStatus);
       if (!importForm.chunks_dir && nextConfig?.default_chunks_dir) {
         setImportForm(prev => ({ ...prev, chunks_dir: nextConfig.default_chunks_dir }));
       }
@@ -94,6 +120,14 @@ function RagMode() {
     setSearchForm(prev => ({ ...prev, [key]: value }));
   }
 
+  function updateVulnSync(key, value) {
+    setVulnSyncForm(prev => ({ ...prev, [key]: value }));
+  }
+
+  function updateVulnSearch(key, value) {
+    setVulnSearchForm(prev => ({ ...prev, [key]: value }));
+  }
+
   function searchPayload() {
     return {
       query: searchForm.query,
@@ -103,6 +137,75 @@ function RagMode() {
       doc_id: asArray(searchForm.doc_id),
       chunk_type: asArray(searchForm.chunk_type),
     };
+  }
+
+  function vulnSearchPayload() {
+    const payload = {
+      query: vulnSearchForm.query,
+      limit: Number(vulnSearchForm.limit || 8),
+      cve_id: asArray(vulnSearchForm.cve_id),
+      ghsa_id: asArray(vulnSearchForm.ghsa_id),
+      osv_id: asArray(vulnSearchForm.osv_id),
+      package: asArray(vulnSearchForm.package),
+      ecosystem: asArray(vulnSearchForm.ecosystem),
+    };
+    if (vulnSearchForm.kev) payload.kev = true;
+    if (vulnSearchForm.epss_percentile) payload.epss_percentile = { gte: Number(vulnSearchForm.epss_percentile) };
+    return payload;
+  }
+
+  async function runVulnSync() {
+    setBusy('vuln-sync');
+    setError('');
+    try {
+      const payload = {
+        since_year: Number(vulnSyncForm.since_year || 2020),
+        embed_all: !!vulnSyncForm.embed_all,
+        sources: asArray(vulnSyncForm.sources),
+        max_enrichment_cves: Number(vulnSyncForm.max_enrichment_cves || 250),
+        max_nvd_pages: vulnSyncForm.max_nvd_pages ? Number(vulnSyncForm.max_nvd_pages) : undefined,
+        skip_embeddings: !!vulnSyncForm.skip_embeddings,
+      };
+      const response = API.ragVulnSync
+        ? await API.ragVulnSync(payload)
+        : await API.request('/api/rag/vuln/sync', { method: 'POST', body: payload, timeoutMs: 1200000 });
+      setVulnSyncResult(response.result || response);
+      await loadStatus();
+    } catch (err) {
+      setError(err.message || String(err));
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function runVulnSearch() {
+    setBusy('vuln-search');
+    setError('');
+    try {
+      const payload = await (API.ragVulnSearch
+        ? API.ragVulnSearch(vulnSearchPayload())
+        : API.request('/api/rag/vuln/search', { method: 'POST', body: vulnSearchPayload() }));
+      setVulnSearchResult(payload);
+    } catch (err) {
+      setError(err.message || String(err));
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function runVulnHints() {
+    setBusy('vuln-hints');
+    setError('');
+    try {
+      const payload = await (API.ragVulnHints
+        ? API.ragVulnHints(vulnSearchPayload())
+        : API.request('/api/rag/vuln/hints', { method: 'POST', body: vulnSearchPayload() }));
+      setVulnHints(payload);
+    } catch (err) {
+      setError(err.message || String(err));
+    } finally {
+      setBusy('');
+    }
   }
 
   async function runImport() {
@@ -217,6 +320,7 @@ function RagMode() {
         <div className="right">
           <div className="stats">
             <span className="stat"><span className="stat-k">chunks</span><span className="stat-v mono">{status?.document_chunks ?? 0}</span></span>
+            <span className="stat"><span className="stat-k">vuln</span><span className="stat-v mono">{vulnStatus?.vuln_intel_chunks ?? 0}</span></span>
             <span className="stat"><span className="stat-k">embeddings</span><span className="stat-v mono">{status?.record_embeddings ?? 0}</span></span>
             <span className="stat"><span className="stat-k">model</span><span className="stat-v mono">{embeddingModel.model || status?.configured_embeddings?.model || 'unknown'}</span></span>
           </div>
@@ -237,6 +341,7 @@ function RagMode() {
             <div className="kpi-grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
               <div><div className="kpi-k">document chunks</div><div className="mono strong">{status?.document_chunks ?? 0}</div></div>
               <div><div className="kpi-k">record embeddings</div><div className="mono strong">{status?.record_embeddings ?? 0}</div></div>
+              <div><div className="kpi-k">vuln chunks</div><div className="mono strong">{vulnStatus?.vuln_intel_chunks ?? 0}</div></div>
               <div><div className="kpi-k">dimension</div><div className="mono strong">{embeddingModel.dimension || status?.configured_embeddings?.dimension || 'unknown'}</div></div>
               <div><div className="kpi-k">failures</div><div className="mono strong">{lastImport.failures ?? 0}</div></div>
             </div>
@@ -244,6 +349,35 @@ function RagMode() {
               {(status?.domains || []).map(item => <Pill key={item.domain} tone="cyan">{item.domain}:{item.count}</Pill>)}
             </div>
             <div className="dim mono" style={{ marginTop: 10 }}>last import {lastImport.completed_at || 'none'}</div>
+          </Panel>
+
+          <Panel title="CVE/Vuln Sync" sub={busy === 'vuln-sync' ? 'syncing official feeds' : (vulnStatus?.last_vuln_sync?.completed_at || 'not synced')}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              <Field label="since year"><input className="input" type="number" value={vulnSyncForm.since_year} onChange={e => updateVulnSync('since_year', e.target.value)} /></Field>
+              <Field label="max enrich"><input className="input" type="number" value={vulnSyncForm.max_enrichment_cves} onChange={e => updateVulnSync('max_enrichment_cves', e.target.value)} /></Field>
+            </div>
+            <Field label="sources"><input className="input" value={vulnSyncForm.sources} onChange={e => updateVulnSync('sources', e.target.value)} /></Field>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              <Field label="max nvd pages"><input className="input" type="number" value={vulnSyncForm.max_nvd_pages} onChange={e => updateVulnSync('max_nvd_pages', e.target.value)} placeholder="full" /></Field>
+              <label className="dim mono" style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 10.5, marginTop: 18 }}>
+                <input type="checkbox" checked={!!vulnSyncForm.embed_all} onChange={e => updateVulnSync('embed_all', e.target.checked)} />
+                EMBED ALL CARDS
+              </label>
+            </div>
+            <label className="dim mono" style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 10.5, marginTop: 8 }}>
+              <input type="checkbox" checked={!!vulnSyncForm.skip_embeddings} onChange={e => updateVulnSync('skip_embeddings', e.target.checked)} />
+              SKIP VECTOR EMBEDDINGS
+            </label>
+            <button className="btn primary sm" onClick={runVulnSync} disabled={busy === 'vuln-sync'} style={{ marginTop: 8 }}>
+              {busy === 'vuln-sync' ? 'SYNCING' : 'SYNC VULN RAG'}
+            </button>
+            {vulnSyncResult && (
+              <pre className="mono" style={{ margin: '10px 0 0', maxHeight: 150, overflow: 'auto', fontSize: 10.5, whiteSpace: 'pre-wrap' }}>{JSON.stringify({
+                chunks: vulnSyncResult.vuln_intel_chunks,
+                sources: vulnSyncResult.sync?.sources,
+                import: vulnSyncResult.import,
+              }, null, 2)}</pre>
+            )}
           </Panel>
 
           <Panel title="Import/Reindex Controls" sub={busy === 'import' ? 'running' : 'ready'}>
@@ -286,6 +420,50 @@ function RagMode() {
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0 }}>
+          <Panel title="Vulnerability Intel" sub={`${vulnResults.length} cards`} actions={
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button className="btn sm" onClick={runVulnSearch} disabled={busy === 'vuln-search'}>{busy === 'vuln-search' ? 'SEARCHING' : 'SEARCH'}</button>
+              <button className="btn ghost sm" onClick={runVulnHints} disabled={busy === 'vuln-hints'}>{busy === 'vuln-hints' ? 'RUNNING' : 'HINTS'}</button>
+            </div>
+          }>
+            <Field label="query"><input className="input" value={vulnSearchForm.query} onChange={e => updateVulnSearch('query', e.target.value)} onKeyDown={e => { if (e.key === 'Enter') runVulnSearch(); }} /></Field>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 80px', gap: 8 }}>
+              <Field label="CVE"><input className="input" value={vulnSearchForm.cve_id} onChange={e => updateVulnSearch('cve_id', e.target.value)} /></Field>
+              <Field label="package"><input className="input" value={vulnSearchForm.package} onChange={e => updateVulnSearch('package', e.target.value)} /></Field>
+              <Field label="limit"><input className="input" type="number" value={vulnSearchForm.limit} onChange={e => updateVulnSearch('limit', e.target.value)} /></Field>
+              <Field label="GHSA"><input className="input" value={vulnSearchForm.ghsa_id} onChange={e => updateVulnSearch('ghsa_id', e.target.value)} /></Field>
+              <Field label="ecosystem"><input className="input" value={vulnSearchForm.ecosystem} onChange={e => updateVulnSearch('ecosystem', e.target.value)} /></Field>
+              <Field label="EPSS gte"><input className="input" type="number" step="0.01" value={vulnSearchForm.epss_percentile} onChange={e => updateVulnSearch('epss_percentile', e.target.value)} /></Field>
+            </div>
+            <label className="dim mono" style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 10.5, marginTop: 8 }}>
+              <input type="checkbox" checked={!!vulnSearchForm.kev} onChange={e => updateVulnSearch('kev', e.target.checked)} />
+              KEV ONLY
+            </label>
+            <div style={{ display: 'grid', gap: 8, maxHeight: 250, overflow: 'auto', marginTop: 10 }}>
+              {vulnResults.map(row => {
+                const metadata = row.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+                return (
+                  <button key={row.citation_id || row.chunk_id} className="btn ghost" onClick={() => inspectRow(row)} style={{ textAlign: 'left', justifyContent: 'flex-start', display: 'block', whiteSpace: 'normal' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                      <strong>{metadata.cve_id || metadata.vuln_id || row.title || row.chunk_id}</strong>
+                      <span className="mono dim">{row.citation_id}</span>
+                    </div>
+                    <div className="dim mono" style={{ fontSize: 10.5 }}>
+                      {metadata.card_type || 'card'} · {metadata.cvss_severity || 'severity unknown'} · KEV {metadata.kev ? 'yes' : 'no'} · EPSS {metadata.epss_percentile ?? 'n/a'}
+                    </div>
+                  </button>
+                );
+              })}
+              {!vulnResults.length && <div className="dim">No vulnerability cards returned yet.</div>}
+            </div>
+            {vulnHints && (
+              <pre className="mono" style={{ margin: '10px 0 0', maxHeight: 120, overflow: 'auto', fontSize: 10.5, whiteSpace: 'pre-wrap' }}>{JSON.stringify({
+                policy: vulnHints.policy,
+                hints: vulnHints.hints,
+              }, null, 2)}</pre>
+            )}
+          </Panel>
+
           <Panel title="Search" sub={`${results.length} retrieved`} actions={<button className="btn sm" onClick={runSearch} disabled={busy === 'search'}>{busy === 'search' ? 'SEARCHING' : 'SEARCH'}</button>}>
             <Field label="query"><input className="input" value={searchForm.query} onChange={e => updateSearch('query', e.target.value)} onKeyDown={e => { if (e.key === 'Enter') runSearch(); }} /></Field>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 80px', gap: 8 }}>

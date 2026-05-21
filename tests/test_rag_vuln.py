@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import tempfile
 import unittest
+from urllib import error
 
 from primordial.config import AppConfig
+from primordial.core.rag.vuln_sync import VulnFeedSyncer, VulnSyncOptions
 from primordial.core.rag.vuln_hints import vulnerability_hints_from_results
 from primordial.core.storage.runtime import RuntimeStore
 from primordial.runtime import PrimordialRuntime
@@ -71,6 +74,98 @@ class RagVulnRuntimeTests(unittest.TestCase):
         self.assertTrue(hints["hints"])
         self.assertFalse(hints["hints"][0]["creates_executable_task"])
         self.assertFalse(hints["hints"][0]["can_expand_scope"])
+
+    def test_vuln_feed_syncer_writes_raw_feeds_and_preprocesses_cards(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+
+        def fake_opener(req, *, timeout=45):
+            url = req.full_url
+            if "services.nvd.nist.gov" in url:
+                return _FakeHttpResponse(
+                    {
+                        "resultsPerPage": 2000,
+                        "startIndex": 0,
+                        "totalResults": 1,
+                        "vulnerabilities": [
+                            {
+                                "cve": {
+                                    "id": "CVE-2026-1111",
+                                    "published": "2026-01-01T00:00:00.000",
+                                    "lastModified": "2026-01-02T00:00:00.000",
+                                    "descriptions": [{"lang": "en", "value": "Example API vulnerability."}],
+                                    "metrics": {
+                                        "cvssMetricV31": [
+                                            {
+                                                "cvssData": {
+                                                    "baseScore": 9.8,
+                                                    "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+                                                },
+                                                "baseSeverity": "CRITICAL",
+                                            }
+                                        ]
+                                    },
+                                    "references": {"referenceData": [{"url": "https://vendor.example/CVE-2026-1111"}]},
+                                }
+                            }
+                        ],
+                    }
+                )
+            if "known_exploited_vulnerabilities.csv" in url:
+                return _FakeHttpResponse(
+                    "cveID,vendorProject,product,vulnerabilityName,dateAdded,shortDescription,requiredAction,dueDate,knownRansomwareCampaignUse,notes\n"
+                    "CVE-2026-1111,Example,API,Example known exploited API issue,2026-05-15,Fixture,Apply vendor update.,2026-06-01,Unknown,\n"
+                )
+            if "api.first.org/data/v1/epss" in url:
+                return _FakeHttpResponse(
+                    {
+                        "data": [
+                            {
+                                "cve": "CVE-2026-1111",
+                                "epss": "0.42",
+                                "percentile": "0.95",
+                                "date": "2026-05-15",
+                            }
+                        ]
+                    }
+                )
+            raise error.HTTPError(url, 404, "not found", hdrs=None, fp=None)
+
+        syncer = VulnFeedSyncer(
+            self.root,
+            preprocess_root=repo_root / "primordial-rag-preprocess",
+            opener=fake_opener,
+            sleeper=lambda _seconds: None,
+        )
+        summary = syncer.sync(
+            VulnSyncOptions(
+                since_year=2020,
+                sources={"nvd", "kev", "epss"},
+                rate_limit_seconds=0,
+                max_nvd_pages=1,
+                embed_all=True,
+            )
+        )
+
+        self.assertTrue(summary["ok"])
+        self.assertEqual(summary["sources"]["nvd"]["records"], 1)
+        self.assertEqual(summary["sources"]["kev"]["records"], 1)
+        self.assertEqual(summary["sources"]["epss"]["records"], 1)
+        self.assertGreaterEqual(summary["preprocess_manifest"]["cards"], 2)
+        self.assertTrue(Path(summary["preprocess_manifest"]["files"]["runtime_import_chunks"]).exists())
+
+
+class _FakeHttpResponse:
+    def __init__(self, payload: object) -> None:
+        self._payload = payload.encode("utf-8") if isinstance(payload, str) else json.dumps(payload).encode("utf-8")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _exc_type, _exc, _tb):
+        return False
+
+    def read(self) -> bytes:
+        return self._payload
 
 
 if __name__ == "__main__":

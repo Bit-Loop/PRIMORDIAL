@@ -70,6 +70,59 @@ class PrimordialWebApp:
             return self._json_response(self.runtime.rag_status())
         if method == "GET" and path == "/api/rag/config":
             return self._json_response(self.runtime.rag_config_payload())
+        if method == "GET" and path == "/api/rag/vuln/status":
+            return self._json_response(self.runtime.rag_vuln_status())
+        if method == "POST" and path == "/api/rag/vuln/sync":
+            payload = self._parse_json_body(body)
+            try:
+                return self._run_tracked_action(
+                    "Sync CVE/Vuln RAG",
+                    "rag-vuln-sync",
+                    lambda: self.runtime.rag_vuln_sync(
+                        since_year=self._optional_int(payload, "since_year") or 2020,
+                        embed_all=bool(payload.get("embed_all", True)),
+                        sources=self._payload_list(payload, "source") or self._payload_list(payload, "sources"),
+                        timeout_seconds=float(payload.get("timeout_seconds") or payload.get("timeout") or 45.0),
+                        rate_limit_seconds=(
+                            float(payload["rate_limit_seconds"]) if payload.get("rate_limit_seconds") not in {None, ""} else None
+                        ),
+                        max_nvd_pages=self._optional_int(payload, "max_nvd_pages"),
+                        max_enrichment_cves=self._optional_int(payload, "max_enrichment_cves") or 250,
+                        skip_import=bool(payload.get("skip_import", False)),
+                        force=bool(payload.get("force", False)),
+                        reembed=bool(payload.get("reembed", False)),
+                        skip_embeddings=bool(payload.get("skip_embeddings", False)),
+                        limit=self._optional_int(payload, "limit"),
+                    ),
+                    use_runtime_lock=False,
+                )
+            except (TypeError, ValueError) as exc:
+                return self._json_response({"ok": False, "error": str(exc)}, status=400)
+        if method == "POST" and path == "/api/rag/vuln/search":
+            payload = self._parse_json_body(body)
+            query_text = str(payload.get("query") or "vulnerability remediation detection affected package").strip()
+            try:
+                return self._json_response(
+                    self.runtime.rag_vuln_search(
+                        query_text,
+                        limit=self._optional_int(payload, "limit") or 8,
+                        filters=self._rag_filters_payload(payload),
+                    )
+                )
+            except ValueError as exc:
+                return self._json_response({"ok": False, "error": str(exc)}, status=400)
+        if method == "POST" and path == "/api/rag/vuln/hints":
+            payload = self._parse_json_body(body)
+            try:
+                return self._json_response(
+                    self.runtime.rag_vuln_hints(
+                        str(payload.get("query") or ""),
+                        limit=self._optional_int(payload, "limit") or 8,
+                        filters=self._rag_filters_payload(payload),
+                    )
+                )
+            except ValueError as exc:
+                return self._json_response({"ok": False, "error": str(exc)}, status=400)
         if method == "GET" and path.startswith("/api/inspect/group/"):
             group_id = unquote(path.rsplit("/", 1)[-1])
             try:
@@ -1114,6 +1167,10 @@ class PrimordialWebApp:
                     "ragImport": "/api/rag/import",
                     "ragSearch": "/api/rag/search",
                     "ragSynthesize": "/api/rag/synthesize",
+                    "ragVulnStatus": "/api/rag/vuln/status",
+                    "ragVulnSync": "/api/rag/vuln/sync",
+                    "ragVulnSearch": "/api/rag/vuln/search",
+                    "ragVulnHints": "/api/rag/vuln/hints",
                 },
             },
         }

@@ -226,6 +226,26 @@ def build_parser() -> argparse.ArgumentParser:
     rag_vuln_subparsers = rag_vuln.add_subparsers(dest="rag_vuln_command")
     rag_vuln_status = rag_vuln_subparsers.add_parser("status", help="Show vulnerability-intel RAG counts.")
     rag_vuln_status.add_argument("--json", action="store_true")
+    rag_vuln_sync = rag_vuln_subparsers.add_parser("sync", help="Sync official vulnerability feeds, preprocess cards, and import vuln RAG chunks.")
+    rag_vuln_sync.add_argument("--since-year", type=int, default=2020)
+    rag_vuln_sync.add_argument("--embed-all", dest="embed_all", action="store_true", default=True)
+    rag_vuln_sync.add_argument("--embed-relevant-only", dest="embed_all", action="store_false")
+    rag_vuln_sync.add_argument(
+        "--source",
+        action="append",
+        choices=["nvd", "kev", "epss", "cvelist_v5", "osv", "ghsa"],
+        help="Limit sync to a source. Repeat for multiple sources.",
+    )
+    rag_vuln_sync.add_argument("--max-nvd-pages", type=int, help="Bound NVD pagination for smoke tests or partial backfills.")
+    rag_vuln_sync.add_argument("--max-enrichment-cves", type=int, default=250)
+    rag_vuln_sync.add_argument("--rate-limit-seconds", type=float)
+    rag_vuln_sync.add_argument("--timeout", type=float, default=45.0)
+    rag_vuln_sync.add_argument("--skip-import", action="store_true")
+    rag_vuln_sync.add_argument("--force", action="store_true")
+    rag_vuln_sync.add_argument("--reembed", action="store_true")
+    rag_vuln_sync.add_argument("--skip-embeddings", action="store_true")
+    rag_vuln_sync.add_argument("--limit", type=int)
+    rag_vuln_sync.add_argument("--json", action="store_true")
     rag_vuln_import = rag_vuln_subparsers.add_parser("import", help="Import vulnerability-intel card chunks.")
     rag_vuln_import.add_argument("--chunks-dir", default="primordial-rag-preprocess/output/vuln/chunks")
     rag_vuln_import.add_argument("--dry-run", action="store_true")
@@ -650,13 +670,32 @@ def main(argv: list[str] | None = None) -> int:
                 if args.rag_vuln_command is None:
                     parser.error("rag vuln requires a subcommand")
                 if args.rag_vuln_command == "status":
-                    payload = runtime.rag_status()
-                    payload["vuln_intel_chunks"] = runtime.store.count_document_chunks(metadata_filters={"domain": ["vuln_intel"]})
+                    payload = runtime.rag_vuln_status()
                     if args.json:
                         print(json.dumps(payload, indent=2, sort_keys=True))
                     else:
                         print(_format_rag_status(payload))
                         print(f"vuln_intel_chunks={payload['vuln_intel_chunks']}")
+                    return 0
+                if args.rag_vuln_command == "sync":
+                    payload = runtime.rag_vuln_sync(
+                        since_year=args.since_year,
+                        embed_all=args.embed_all,
+                        sources=args.source,
+                        timeout_seconds=args.timeout,
+                        rate_limit_seconds=args.rate_limit_seconds,
+                        max_nvd_pages=args.max_nvd_pages,
+                        max_enrichment_cves=args.max_enrichment_cves,
+                        skip_import=args.skip_import,
+                        force=args.force,
+                        reembed=args.reembed,
+                        skip_embeddings=args.skip_embeddings,
+                        limit=args.limit,
+                    )
+                    if args.json:
+                        print(json.dumps(payload, indent=2, sort_keys=True))
+                    else:
+                        print(_format_rag_vuln_sync(payload))
                     return 0
                 if args.rag_vuln_command == "import":
                     payload = runtime.rag_import_chunks(
@@ -1068,6 +1107,39 @@ def _format_rag_vuln_hints(payload: dict[str, object]) -> str:
             f"citation={hint.get('citation_id')} task={hint.get('creates_executable_task')}"
         )
         lines.append(f"  {hint.get('summary')}")
+    return "\n".join(lines)
+
+
+def _format_rag_vuln_sync(payload: dict[str, object]) -> str:
+    sync = payload.get("sync") if isinstance(payload.get("sync"), dict) else {}
+    import_summary = payload.get("import") if isinstance(payload.get("import"), dict) else {}
+    manifest = sync.get("preprocess_manifest") if isinstance(sync.get("preprocess_manifest"), dict) else {}
+    lines = [
+        f"ok={payload.get('ok')}",
+        f"vuln_intel_chunks={payload.get('vuln_intel_chunks')}",
+        f"chunks_dir={payload.get('chunks_dir')}",
+        f"sync_duration_seconds={sync.get('duration_seconds')}",
+        f"records={manifest.get('records', 0)} cards={manifest.get('cards', 0)} events={manifest.get('events', 0)}",
+    ]
+    if import_summary:
+        lines.append(
+            "import "
+            f"seen={import_summary.get('records_seen', 0)} "
+            f"inserted={import_summary.get('chunks_inserted', 0)} "
+            f"updated={import_summary.get('chunks_updated', 0)} "
+            f"skipped={import_summary.get('chunks_skipped', 0)} "
+            f"embeddings={import_summary.get('embeddings_inserted', 0) + import_summary.get('embeddings_updated', 0)} "
+            f"failures={import_summary.get('failures', 0)}"
+        )
+    sources = sync.get("sources") if isinstance(sync.get("sources"), dict) else {}
+    for name, result in sorted(sources.items()):
+        if not isinstance(result, dict):
+            continue
+        lines.append(
+            f"{name}: status={result.get('status')} records={result.get('records', 0)} "
+            f"files={result.get('files_written', 0)} failures={result.get('failures', 0)}"
+        )
+    lines.append("policy=hints_only; no executable tasks or scope expansion are created from vuln RAG.")
     return "\n".join(lines)
 
 

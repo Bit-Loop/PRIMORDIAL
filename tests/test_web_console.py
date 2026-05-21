@@ -243,6 +243,82 @@ class WebConsoleTests(unittest.TestCase):
         self.assertIn("candidate_actions", hints)
         self.assertEqual(len(self.runtime.store.list_tasks(limit=500)), task_count)
 
+    def test_rag_vuln_api_status_search_hints_and_sync_route(self) -> None:
+        chunks_dir = self._write_rag_chunks(
+            [
+                {
+                    "chunk_id": "vuln_web_card_1",
+                    "doc_id": "CVE-2026-2222",
+                    "source_file": "CVE-2026-2222.vuln-intel-card",
+                    "source_sha256": "c" * 64,
+                    "source_type": "vulnerability_intel_card",
+                    "domain": "vuln_intel",
+                    "chunk_index": 0,
+                    "chunk_type": "vulnerability_intel_card",
+                    "title": "CVE-2026-2222 summary",
+                    "section": "vuln_summary",
+                    "retrieval_text": "Vulnerability: CVE-2026-2222\nAffected vendors/products/packages: Example API PyPI:example-api\nExploitability signals: KEV=true; EPSS probability=0.5 percentile=0.95",
+                    "raw_text": "Vulnerability: CVE-2026-2222",
+                    "requires_authorized_scope": True,
+                    "metadata": {
+                        "domain": "vuln_intel",
+                        "corpus_type": "vuln_intel",
+                        "vuln_id": "CVE-2026-2222",
+                        "cve_id": "CVE-2026-2222",
+                        "aliases": ["CVE-2026-2222", "GHSA-web-test-0001"],
+                        "alias": ["CVE-2026-2222", "GHSA-web-test-0001"],
+                        "ghsa_ids": ["GHSA-web-test-0001"],
+                        "card_type": "vuln_summary",
+                        "kev": True,
+                        "epss_percentile": 0.95,
+                        "package": ["example-api"],
+                        "ecosystem": ["PyPI"],
+                        "blocked_output_modes": ["exploit_execution", "action_selection", "scope_expansion"],
+                        "safety_level": "safe_planning",
+                    },
+                }
+            ]
+        )
+        self.runtime.rag_import_chunks(chunks_dir, domains=["vuln_intel"])
+
+        status_response = self.app.dispatch("GET", "/api/rag/vuln/status")
+        search_response = self.app.dispatch(
+            "POST",
+            "/api/rag/vuln/search",
+            json.dumps({"query": "Example API", "cve_id": ["CVE-2026-2222"], "limit": 3}).encode("utf-8"),
+        )
+        hints_response = self.app.dispatch(
+            "POST",
+            "/api/rag/vuln/hints",
+            json.dumps({"query": "Example API", "kev": True, "limit": 3}).encode("utf-8"),
+        )
+        with patch.object(
+            self.runtime,
+            "rag_vuln_sync",
+            return_value={"ok": True, "sync": {"sources": {}}, "import": None, "vuln_intel_chunks": 1, "chunks_dir": "fixture"},
+        ) as sync:
+            sync_response = self.app.dispatch(
+                "POST",
+                "/api/rag/vuln/sync",
+                json.dumps({"since_year": 2020, "embed_all": True, "sources": ["kev"], "skip_embeddings": True}).encode("utf-8"),
+            )
+
+        status = json.loads(status_response.body)
+        search = json.loads(search_response.body)
+        hints = json.loads(hints_response.body)
+        synced = json.loads(sync_response.body)
+
+        self.assertEqual(status_response.status, 200)
+        self.assertEqual(status["vuln_intel_chunks"], 1)
+        self.assertEqual(search_response.status, 200)
+        self.assertEqual(search["results"][0]["citation_id"], "rag:vuln_web_card_1")
+        self.assertEqual(hints_response.status, 200)
+        self.assertTrue(hints["hints"])
+        self.assertFalse(hints["hints"][0]["creates_executable_task"])
+        self.assertEqual(sync_response.status, 200)
+        self.assertEqual(synced["action"], "rag-vuln-sync")
+        sync.assert_called_once()
+
     def test_caido_health_status_reports_auth_failure_and_legacy_port_migration(self) -> None:
         self.runtime.credentials.update_service(
             "caido",
@@ -1152,9 +1228,14 @@ class WebConsoleTests(unittest.TestCase):
                 "READABLE",
                 "RAW",
                 "Evaluation Probes",
+                "CVE/Vuln Sync",
+                "Vulnerability Intel",
                 "/api/rag/status",
                 "/api/rag/search",
                 "/api/rag/synthesize",
+                "/api/rag/vuln/status",
+                "/api/rag/vuln/sync",
+                "/api/rag/vuln/search",
             ]:
                 self.assertIn(token, text)
             self.assertNotIn("pirate.htb scope", text)

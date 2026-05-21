@@ -2,7 +2,7 @@
 
 Target: `helix.htb`
 Profile: `hack_the_box`
-Generated: 2026-05-15T20:12:27.998289+00:00
+Generated: 2026-05-16T17:03:02.698635+00:00
 
 ## AI Agent Guidance
 
@@ -38,101 +38,31 @@ Generated: 2026-05-15T20:12:27.998289+00:00
 
 ## Recent Notes
 
-- AI strategy review: ## Summary
-helix.htb recon is effectively stalled. DNS returned zero records, AXFR failed, and a 38-port TCP bounded scan found no open services. All 16 recon_scan task executions failed under model gemma4:e4b, which is not a configured route in this system. Three HTTP probe tasks are blocked with no candidate ports to probe. No interests or findings exist. The target cannot be reached with the current primitive configuration.
-
-## Facts
-- DNS query against 10.129.64.253 for helix.htb returned 0 
-- Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
-- AI strategy review: ## Summary
-helix.htb recon is stalled. DNS returned nothing, TCP sweep of 38 ports found zero open services, and all HTTP probe tasks are blocked downstream of that null result. Fourteen consecutive recon_scan tasks have failed with the same model (gemma4:e4b), indicating a systemic executor or model-routing failure, not a target behavior. No evidence of live services exists in the current generation.
-
-## Facts
-- DNS enumeration returned 0 records; AXFR refused — no subdomain surface derivable f
-- Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
-- AI strategy review: ## Summary
-helix.htb generation-3 is effectively dark: DNS returned zero records, AXFR failed, and a 38-port TCP sweep found no open services. All recon_scan tasks are failing against model gemma4:e4b (16 consecutive failures), and the 3 HTTP probe tasks are blocked — almost certainly because no candidate ports were surfaced. No interests or findings exist. Progression is stalled at initial recon with zero confirmed attack surface.
-
-## Facts
-- DNS enumeration against 10.129.64.253 returned 0 rec
-- Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
-- AI strategy review: ## Summary
-helix.htb recon phase is stalled: DNS returned zero records (AXFR denied), TCP sweep across 38 ports on 2 hosts found nothing open, and HTTP probe tasks are blocked on missing candidate ports. 16 consecutive recon_scan failures on model gemma4:e4b signal a model-executor issue, not purely a target-resistance issue. Minimal surface confirmed; port coverage is critically insufficient.
-
-## Facts
-- DNS enumeration via 10.129.64.253 returned 0 records; AXFR was attempted and failed — hostn
-- Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
-- AI strategy review: ## Summary
-helix.htb generation-3 shows zero open TCP services across a 38-port bounded scan and zero DNS records. Sixteen consecutive recon_scan tasks failed under model gemma4:e4b. HTTP probe tasks are blocked because no candidate ports were produced. The scan surface is too narrow to conclude the host is unreachable; active IP validity for generation 3 is unverified.
-
-## Facts
-- DNS enumeration returned 0 records; AXFR refused or failed (evidence_4caa6aeeef3c, confidence=0.82).
-- TCP connect 
-- Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
-- AI strategy review: ## Summary
-Target helix.htb (gen 3) has yielded no actionable surface: DNS returned 0 records, AXFR failed, and TCP discovery across 38 ports on 2 hosts found nothing open. HTTP probe tasks are correctly blocked downstream of the empty port evidence. Sixteen consecutive recon_scan task failures with gemma4:e4b strongly suggest a model-routing or executor issue unrelated to target state — this must be resolved before trusting further task output.
-
-## Facts
-- DNS enumeration against 10.129.64.253 
-- Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
-- AI strategy review: ## Summary
-Current evidence supports only negative bounded recon: DNS returned no records, AXFR failed, and bounded TCP checks found no open services. Repeated recon_scan failures and blocked HTTP probes make the next safe move a bounded TCP primitive retry/expansion plus task-failure diagnostics before any web-specific work.
-
-## Facts
-- evidence_4caa6aeeef3c: DNS query for helix.htb via 10.129.64.253 parsed 0 records.
-- evidence_4caa6aeeef3c: AXFR did not succeed.
-- evidence_b3ff3d45169c: TCP c
-- Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
-- AI strategy review: ## Summary
-Current evidence supports only negative recon: DNS returned no records and bounded TCP checks found no open services. Next safe move is bounded service discovery plus task failure diagnostics before any HTTP/content work.
-
-## Facts
-- evidence_4caa6aeeef3c: DNS enumeration queried helix.htb via 10.129.64.253, parsed 0 records, and AXFR did not succeed.
-- evidence_b3ff3d45169c: TCP connect checks covered 2 hosts and 38 ports with no open services observed.
-- No findings are proven in th
-- AI strategy review: ## Summary
-Current evidence does not prove any reachable service on helix.htb. DNS yielded no records and AXFR failed; bounded TCP checks found no open services. Stop repeating the same failed recon_scan loop until the failure cause and scope/target resolution are clarified.
-
-## Facts
-- evidence_4caa6aeeef3c: DNS enumeration queried helix.htb via 10.129.64.253, parsed 0 records, and AXFR did not succeed.
-- evidence_b3ff3d45169c: TCP connect checks covered 2 hosts and 38 ports with no open servic
 - Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
 - Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
-- AI strategy review: ## Summary
-Current evidence does not prove any exposed service on helix.htb. The useful next move is bounded service-discovery validation and failure diagnosis, not HTTP/content work yet.
-
-## Facts
-- DNS enumeration against helix.htb via 10.129.64.253 returned 0 parsed records.
-- AXFR did not succeed.
-- Bounded TCP connect checks covered 2 hosts and 38 ports with no open services observed.
-- Multiple recent recon_scan tasks failed; HTTP probe tasks are blocked.
-- No findings or interests are pre
 - Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
-- AI strategy review: ## Summary
-Current evidence does not prove any exposed service on helix.htb. DNS returned no records and bounded TCP checks found no open ports; HTTP/content work is blocked until a current in-scope host and open web port are evidenced.
-
-## Facts
-- evidence_4caa6aeeef3c: DNS enumeration queried helix.htb via 10.129.64.253 and parsed 0 records.
-- evidence_4caa6aeeef3c: AXFR did not succeed.
-- evidence_b3ff3d45169c: TCP connect checks covered 2 hosts and 38 ports with no open services observed.
-- 
 - Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
-- AI strategy review: ## Summary
-Current evidence does not prove any reachable service or vulnerability on helix.htb. The next safe move is bounded service discovery and runtime failure triage before any HTTP or content workflow.
-
-## Facts
-- DNS enumeration against helix.htb via 10.129.64.253 returned 0 parsed records.
-- AXFR did not succeed.
-- Bounded TCP connect checks covered 2 hosts and 38 ports with no open services observed.
-- Multiple recent recon_scan tasks failed or were cancelled using model gemma4:e4b.
-- H
 - Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
-- AI strategy review: ## Summary
-Current evidence proves only negative bounded recon: DNS returned no parsed records and AXFR failed; bounded TCP checks found no open services. Next move is to repair/diagnose recon execution and run a bounded service-discovery primitive before any HTTP or content work.
-
-## Facts
-- evidence_4caa6aeeef3c: DNS enumeration queried helix.htb via 10.129.64.253, parsed 0 records, and AXFR did not succeed.
-- evidence_b3ff3d45169c: TCP connect checks covered 2 hosts and 38 ports with no open 
+- Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
+- Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
+- Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
+- Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
+- Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
+- Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
+- Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
+- Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
+- Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
+- Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
+- Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
+- Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
+- Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
+- Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
+- Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
+- Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
+- Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
+- Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
+- Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
+- Evidence analysis summary: Evidence-backed surface review found 0 normalized paths and 0 normalized query parameter names. Auth-adjacent evidence refs: 0. No exploit claim is promoted at this stage.
 
 ## Evidence References
 

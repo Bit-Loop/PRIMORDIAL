@@ -45,6 +45,7 @@ MANIFEST
 
 # Local RAG source drops
 docs/RAG_SRC/
+primordial-rag-preprocess/data_raw/
 primordial-rag-preprocess/output/*
 !primordial-rag-preprocess/output/.gitkeep
 primordial-rag-preprocess/.venv/

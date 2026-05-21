@@ -30,7 +30,8 @@ def parse_epss_row(row: dict[str, Any], *, raw_ref: str = "") -> VulnerabilityRe
 
 def event_for_epss_row(row: dict[str, Any], *, raw_ref: str = "", jump_threshold: float = 0.10) -> VulnEvent:
     cve_id = str(row.get("cve") or row.get("CVE") or "").upper()
-    event_type = "epss.jump" if _float(row.get("delta")) >= jump_threshold else "epss.updated"
+    delta = _float(row.get("delta")) or 0.0
+    event_type = "epss.jump" if delta >= jump_threshold else "epss.updated"
     return build_event(
         source_name="epss",
         event_type=event_type,

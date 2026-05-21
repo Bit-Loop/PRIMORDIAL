@@ -71,6 +71,7 @@ from primordial.core.rag import DocumentIngestionService, RagContextBroker
 from primordial.core.rag.citations import disallowed_rag_synthesis_model, validate_rag_citations
 from primordial.core.rag.embeddings import embedding_provider_from_config
 from primordial.core.rag.importer import RagChunkImporter, RagImportOptions
+from primordial.core.rag.vuln_sync import VulnFeedSyncer, VulnSyncOptions
 from primordial.core.rag.vuln_hints import vulnerability_hints_from_results
 from primordial.core.recovery.crash_journal import CrashJournal
 from primordial.core.recovery.resume_tracker import ResumeTracker
@@ -91,6 +92,7 @@ class PrimordialRuntime:
     MODEL_WRAPPER_MODE_SETTING = "model_wrapper_mode"
     AGENT_CHAT_PROCESS_SETTING = "agent_chat_api_process"
     RAG_LAST_IMPORT_SETTING = "rag_last_import"
+    RAG_LAST_VULN_SYNC_SETTING = "rag_last_vuln_sync"
     DEFAULT_WRAPPER_PRESET = "claude_sonnet"
     WRAPPER_EFFORTS = {"low", "medium", "high", "xhigh"}
     WRAPPER_PRESETS = {
@@ -1589,6 +1591,95 @@ class PrimordialRuntime:
             "last_import": self.store.get_setting(self.RAG_LAST_IMPORT_SETTING, {}),
             **counts,
         }
+
+    def rag_vuln_status(self) -> dict[str, object]:
+        payload = self.rag_status()
+        payload["vuln_intel_chunks"] = self.store.count_document_chunks(metadata_filters={"domain": ["vuln_intel"]})
+        payload["last_vuln_sync"] = self.store.get_setting(self.RAG_LAST_VULN_SYNC_SETTING, {})
+        manifest_path = self.config.project_root / "primordial-rag-preprocess" / "output" / "vuln" / "manifests" / "vuln_stream_manifest.json"
+        status_path = self.config.project_root / "primordial-rag-preprocess" / "output" / "vuln" / "status" / "vuln_sync_status.json"
+        payload["vuln_manifest"] = self._read_optional_json(manifest_path)
+        payload["vuln_sync_status_file"] = self._read_optional_json(status_path)
+        payload["vuln_chunks_dir"] = str(self.config.project_root / "primordial-rag-preprocess" / "output" / "vuln" / "chunks")
+        return payload
+
+    def rag_vuln_sync(
+        self,
+        *,
+        since_year: int = 2020,
+        embed_all: bool = True,
+        sources: list[str] | None = None,
+        timeout_seconds: float = 45.0,
+        rate_limit_seconds: float | None = None,
+        max_nvd_pages: int | None = None,
+        max_enrichment_cves: int = 250,
+        skip_import: bool = False,
+        force: bool = False,
+        reembed: bool = False,
+        skip_embeddings: bool = False,
+        limit: int | None = None,
+    ) -> dict[str, object]:
+        allowed_sources = {"nvd", "kev", "epss", "cvelist_v5", "osv", "ghsa"}
+        selected_sources = {str(source).strip() for source in sources or [] if str(source).strip()}
+        if not selected_sources:
+            selected_sources = set(allowed_sources)
+        unknown = sorted(selected_sources - allowed_sources)
+        if unknown:
+            raise ValueError(f"unsupported vuln sync source(s): {', '.join(unknown)}")
+        options = VulnSyncOptions(
+            since_year=max(1999, int(since_year)),
+            embed_all=bool(embed_all),
+            sources=selected_sources,
+            timeout_seconds=max(1.0, float(timeout_seconds)),
+            rate_limit_seconds=rate_limit_seconds,
+            max_nvd_pages=max_nvd_pages,
+            max_enrichment_cves=max(0, int(max_enrichment_cves)),
+        )
+        syncer = VulnFeedSyncer(self.config.project_root)
+        sync = syncer.sync(options)
+        chunks_dir = Path(sync.get("chunks_dir") or self.config.project_root / "primordial-rag-preprocess" / "output" / "vuln" / "chunks")
+        import_summary = None
+        if not skip_import:
+            import_summary = self.rag_import_chunks(
+                chunks_dir,
+                force=force,
+                reembed=reembed,
+                skip_embeddings=skip_embeddings,
+                domains=["vuln_intel"],
+                limit=limit,
+            )
+        result: dict[str, object] = {
+            "ok": True,
+            "sync": sync,
+            "import": import_summary,
+            "vuln_intel_chunks": self.store.count_document_chunks(metadata_filters={"domain": ["vuln_intel"]}),
+            "chunks_dir": str(chunks_dir),
+            "hints_only": True,
+        }
+        self.store.set_setting(
+            self.RAG_LAST_VULN_SYNC_SETTING,
+            {
+                "completed_at": utc_now().isoformat(),
+                "since_year": options.since_year,
+                "embed_all": options.embed_all,
+                "sources": sorted(selected_sources),
+                "source_failures": sync.get("source_failures", {}),
+                "preprocess_manifest": sync.get("preprocess_manifest", {}),
+                "import": import_summary,
+                "vuln_intel_chunks": result["vuln_intel_chunks"],
+                "chunks_dir": str(chunks_dir),
+            },
+        )
+        return result
+
+    def _read_optional_json(self, path: Path) -> dict[str, object]:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return {}
+        except (json.JSONDecodeError, OSError) as exc:
+            return {"error": str(exc), "path": str(path)}
+        return payload if isinstance(payload, dict) else {"value": payload}
 
     def rag_config_payload(self) -> dict[str, object]:
         return {
