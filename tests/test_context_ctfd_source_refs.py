@@ -77,6 +77,32 @@ class CTFdSourceRefTests(unittest.TestCase):
         self.assertEqual(submission_result.rejected_refs, ["ctfd:submission-malformed-source-refs"])
         self.assertTrue(any("malformed source_refs" in error for error in submission_result.errors))
 
+    def test_ctfd_flag_submission_rejects_non_ctfd_source_refs_metadata(self) -> None:
+        envelope = ContextEnvelope(
+            ref="ctfd:flag-submission-with-evidence-source",
+            kind="ctfd_submission",
+            authority="advisory",
+            source_type="ctfd",
+            target_id="lab-target",
+            purpose="ctfd_submission",
+            sink="ctfd_submission",
+            content="CTFd flag submissions must not carry evidence provenance.",
+            citations=["ctfd:challenge-101"],
+            metadata={
+                "active_intent": "ctf_solve_assisted",
+                "submission_type": "flag_submission",
+                "source_refs": ["ctfd:challenge-101", "evidence:http-banner"],
+            },
+        )
+
+        result = ContextSinkValidator().validate("ctfd_submission", [envelope])
+
+        self.assertFalse(result.valid)
+        self.assertEqual(result.accepted_refs, [])
+        self.assertEqual(result.rejected_refs, ["ctfd:flag-submission-with-evidence-source"])
+        self.assertTrue(any("non-CTFd source_refs" in error for error in result.errors))
+        self.assertTrue(any("evidence:http-banner" in error for error in result.errors))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -85,10 +85,9 @@ def validate_ctfd_submission_sink(envelope: ContextEnvelope) -> CtfdSinkDecision
             "reject",
             f"ctfd_submission accepts only CTFd source material ref={envelope.ref}",
         )
-    if _is_flag_submission(envelope):
-        if _active_intent(envelope) not in CTF_SOLVE_INTENTS:
-            return CtfdSinkDecision("reject", f"ctfd_submission requires ctf solve intent ref={envelope.ref}")
-        return CtfdSinkDecision("accept")
+    flag_submission = _is_flag_submission(envelope)
+    if flag_submission and _active_intent(envelope) not in CTF_SOLVE_INTENTS:
+        return CtfdSinkDecision("reject", f"ctfd_submission requires ctf solve intent ref={envelope.ref}")
     if _has_non_ctfd_citation_support(envelope):
         return CtfdSinkDecision(
             "reject",
@@ -102,6 +101,8 @@ def validate_ctfd_submission_sink(envelope: ContextEnvelope) -> CtfdSinkDecision
             "reject",
             f"ctfd_submission rejects non-CTFd source_refs ref={envelope.ref}: {', '.join(non_ctfd_source_refs)}",
         )
+    if flag_submission:
+        return CtfdSinkDecision("accept")
     if envelope.kind not in SUBMISSION_KINDS:
         return CtfdSinkDecision(
             "reject",
