@@ -9,7 +9,11 @@ from primordial.core.context.envelopes import ContextEnvelope
 from primordial.core.context.generated_exports import is_generated_export_context
 from primordial.core.context.normalization import normalized_context_key, normalized_context_keys
 from primordial.core.context.poison import has_context_flag
-from primordial.core.context.source_refs import source_refs_metadata_errors
+from primordial.core.context.source_refs import (
+    source_refs_metadata_errors,
+    source_refs_metadata_values,
+    unresolved_ai_derived_source_ref_errors,
+)
 from primordial.core.context.source_types import (
     COLLABORATION_SOURCE_TYPES,
     EVIDENCE_PROOF_KINDS,
@@ -156,6 +160,14 @@ def _validate_discord_notification(
                 "reject",
                 f"discord_notification rejects {source_ref_error} ref={envelope.ref}",
             )
+        unresolved_source_refs = unresolved_ai_derived_source_ref_errors(
+            envelope.ref,
+            source_refs_metadata_values(envelope),
+            known_evidence_refs=known_evidence_refs,
+            known_rag_refs=known_rag_refs,
+        )
+        if unresolved_source_refs:
+            return CollaborationSinkDecision("reject", "; ".join(unresolved_source_refs))
     citations = CitationValidator(
         known_evidence_refs=known_evidence_refs,
         known_rag_refs=known_rag_refs,

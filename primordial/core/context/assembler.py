@@ -11,7 +11,11 @@ from primordial.core.context.generated_exports import is_generated_export_contex
 from primordial.core.context.metadata_flags import metadata_value_is_false
 from primordial.core.context.normalization import normalized_context_key, normalized_context_keys
 from primordial.core.context.assembler_roles import role_specific_omission_reason, safety_sensitive_omission_reason
-from primordial.core.context.source_refs import source_refs_metadata_errors
+from primordial.core.context.source_refs import (
+    source_refs_metadata_errors,
+    source_refs_metadata_values,
+    unresolved_ai_derived_source_ref_errors,
+)
 from primordial.core.context.source_types import (
     COLLABORATION_REFERENCE_KINDS,
     COLLABORATION_SOURCE_TYPES,
@@ -247,7 +251,15 @@ class ContextAssembler:
             return "invalid_citation"
         if self._is_proof_from_non_evidence_source(envelope):
             return "non_evidence_source"
-        if envelope.kind in MODEL_DERIVED_TARGET_BOUND_KINDS and source_refs_metadata_errors(envelope):
+        if envelope.kind in MODEL_DERIVED_TARGET_BOUND_KINDS and (
+            source_refs_metadata_errors(envelope)
+            or unresolved_ai_derived_source_ref_errors(
+                envelope.ref,
+                source_refs_metadata_values(envelope),
+                known_evidence_refs=known_evidence_refs,
+                known_rag_refs=known_rag_refs,
+            )
+        ):
             return "invalid_citation"
         if self._is_raw_chat_context(envelope):
             return "raw_chat_context"
