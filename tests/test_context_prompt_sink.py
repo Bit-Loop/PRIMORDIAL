@@ -241,6 +241,37 @@ class ContextPromptSinkTests(unittest.TestCase):
         self.assertTrue(any("stale_generation" in error for error in result.errors))
         self.assertTrue(any("missing_generation_binding" in error for error in result.errors))
 
+    def test_prompt_sink_rejects_ai_summary_with_unsupported_source_refs(self) -> None:
+        envelope = ContextEnvelope(
+            ref="model:prompt-github-source-ref",
+            kind="model_summary",
+            authority="derived",
+            source_type="ai_output",
+            target_id="target-a",
+            active_generation_id="generation:2",
+            purpose="planner",
+            sink="prompt",
+            content="Prompt summaries must not hide unsupported collaboration provenance.",
+            citations=["evidence:http-banner"],
+            metadata={
+                "source_refs": ["evidence:http-banner", "github:issue-42"],
+                "current_target_id": "target-a",
+                "current_active_generation_id": "generation:2",
+            },
+        )
+
+        result = ContextSinkValidator().validate(
+            "prompt",
+            [envelope],
+            known_evidence_refs={"evidence:http-banner"},
+        )
+
+        self.assertFalse(result.valid)
+        self.assertEqual(result.accepted_refs, [])
+        self.assertEqual(result.rejected_refs, ["model:prompt-github-source-ref"])
+        self.assertTrue(any("unsupported source_refs" in error for error in result.errors))
+        self.assertTrue(any("github:issue-42" in error for error in result.errors))
+
     def test_prompt_sink_rejects_malformed_proof_records(self) -> None:
         evidence = ContextEnvelope(
             ref="evidence:scan-1",

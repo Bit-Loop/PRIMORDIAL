@@ -25,6 +25,11 @@ from primordial.core.context.notion_inbox import validate_notion_inbox_envelope
 from primordial.core.context.purposes import OPERATIONAL_CONTEXT_PURPOSES
 from primordial.core.context.rag_index import validate_rag_index_sink
 from primordial.core.context.report import validate_report_sink
+from primordial.core.context.source_refs import (
+    source_refs_metadata_errors,
+    source_refs_metadata_values,
+    unresolved_ai_derived_source_ref_errors,
+)
 from primordial.core.context.source_types import NON_EVIDENCE_SOURCE_TYPES, RAG_ADVISORY_SOURCE_TYPES
 from primordial.core.context.task_metadata import task_metadata_errors
 
@@ -35,6 +40,7 @@ DISALLOWED_EVIDENCE_CITATION_PREFIXES = ("rag:", "model:", "github:", "notion:",
 DISALLOWED_FINDING_SOURCE_TYPES = DISALLOWED_EVIDENCE_SOURCE_TYPES
 TASK_METADATA_KINDS = frozenset({"task", "candidate_task", "task_metadata"})
 PROMPT_RAW_CHAT_SOURCE_TYPES = frozenset({"chat"})
+PROMPT_AI_DERIVED_KINDS = frozenset({"model_summary", "hypothesis", "candidate_task"})
 
 
 @dataclass(slots=True)
@@ -295,6 +301,24 @@ class ContextSinkValidator:
                 f"prompt sink rejects proof record from source_type={envelope.source_type} ref={envelope.ref}",
             )
             return
+        if envelope.kind in PROMPT_AI_DERIVED_KINDS:
+            source_ref_errors = source_refs_metadata_errors(envelope)
+            if source_ref_errors:
+                self._reject(
+                    result,
+                    envelope,
+                    f"prompt sink rejects {source_ref_errors[0]} ref={envelope.ref}",
+                )
+                return
+            unresolved_source_refs = unresolved_ai_derived_source_ref_errors(
+                envelope.ref,
+                source_refs_metadata_values(envelope),
+                known_evidence_refs=known_evidence_refs,
+                known_rag_refs=known_rag_refs,
+            )
+            if unresolved_source_refs:
+                self._reject(result, envelope, "; ".join(unresolved_source_refs))
+                return
         citations = CitationValidator(
             known_evidence_refs=known_evidence_refs,
             known_rag_refs=known_rag_refs,
