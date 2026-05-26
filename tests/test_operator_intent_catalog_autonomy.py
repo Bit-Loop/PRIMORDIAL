@@ -46,6 +46,12 @@ class OperatorIntentCatalogAutonomyTests(unittest.TestCase):
         self.assertTrue(htb_lab.lab_policy.lab_flag_collection_allowed)
         self.assertTrue(htb_lab.lab_policy.htb_lab_behavior_allowed)
         self.assertTrue(htb_lab.lab_policy.reverse_shell_allowed)
+        local_ctf = registry.get("local_ctf_container").policy
+        self.assertTrue(local_ctf.poc_execution)
+        self.assertTrue(local_ctf.credential_policy.credential_validation_allowed)
+        self.assertTrue(local_ctf.lab_policy.lab_flag_collection_allowed)
+        self.assertFalse(local_ctf.public_poc_research)
+        self.assertFalse(local_ctf.lab_policy.reverse_shell_allowed)
         ad_intent = registry.get("ad_lab")
         self.assertIn("In-House AD Attack Path", ad_intent.label)
         self.assertTrue(ad_intent.policy.kerberos_policy.asrep_roast_check_allowed)
@@ -190,7 +196,7 @@ class OperatorIntentCatalogAutonomyTests(unittest.TestCase):
             self.assertEqual(blocked[0].metadata["active_intent"], "recon_only")
             runtime.shutdown()
 
-    def test_htb_scope_defaults_to_htb_lab_intent(self) -> None:
+    def test_htb_profile_without_environment_proof_stays_recon_only(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             config = AppConfig.from_env(project_root=root)
@@ -205,7 +211,76 @@ class OperatorIntentCatalogAutonomyTests(unittest.TestCase):
             runtime.initialize()
             runtime.import_scope(scope_path, ScopeProfile.HACK_THE_BOX)
 
+            self.assertEqual(runtime.active_operator_intent().id, "recon_only")
+            runtime.shutdown()
+
+    def test_verified_htb_environment_defaults_to_htb_lab_intent(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = AppConfig.from_env(project_root=root)
+            config.manifests_dir = MANIFESTS_DIR
+            config.catalog_dir = CATALOG_DIR
+            config.ensure_directories()
+            runtime = PrimordialRuntime(config)
+            runtime.initialize()
+            runtime.import_scope_payload(
+                {
+                    "profile": "hack_the_box",
+                    "metadata": {
+                        "environment_class": "platform_lab",
+                        "environment_verified": True,
+                    },
+                    "targets": [
+                        {
+                            "handle": "target.htb",
+                            "assets": [{"asset": "10.10.10.10", "asset_type": "ip"}],
+                        }
+                    ],
+                },
+                source_name="verified-htb-test",
+            )
+
             self.assertEqual(runtime.active_operator_intent().id, "htb_lab")
+            session = runtime.store.get_active_session()
+            self.assertIsNotNone(session)
+            classification = session.metadata["environment_classification"]  # type: ignore[index]
+            self.assertEqual(classification["environment"], "platform_lab")
+            self.assertTrue(classification["verified_lab"])
+            self.assertTrue(classification["upgrade_applied"])
+            runtime.shutdown()
+
+    def test_verified_local_ctf_environment_defaults_to_local_container_intent(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = AppConfig.from_env(project_root=root)
+            config.manifests_dir = MANIFESTS_DIR
+            config.catalog_dir = CATALOG_DIR
+            config.ensure_directories()
+            runtime = PrimordialRuntime(config)
+            runtime.initialize()
+            runtime.import_scope_payload(
+                {
+                    "profile": "co_internal_lab",
+                    "lab_id": "training-juice-shop",
+                    "provisioning": {"mode": "docker"},
+                    "scope": {"assets": ["http://127.0.0.1:3000"]},
+                    "targets": [
+                        {
+                            "handle": "training-juice-shop",
+                            "assets": [{"asset": "http://127.0.0.1:3000", "asset_type": "webapp"}],
+                        }
+                    ],
+                },
+                source_name="verified-local-ctf-test",
+            )
+
+            self.assertEqual(runtime.active_operator_intent().id, "local_ctf_container")
+            session = runtime.store.get_active_session()
+            self.assertIsNotNone(session)
+            classification = session.metadata["environment_classification"]  # type: ignore[index]
+            self.assertEqual(classification["environment"], "local_ctf_container")
+            self.assertTrue(classification["verified_lab"])
+            self.assertTrue(classification["upgrade_applied"])
             runtime.shutdown()
 
     def test_htb_lab_intent_allows_exploit_research_planning(self) -> None:

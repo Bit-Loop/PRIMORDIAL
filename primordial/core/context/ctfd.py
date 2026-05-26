@@ -80,13 +80,13 @@ def validate_ctfd_submission_sink(envelope: ContextEnvelope) -> CtfdSinkDecision
             "reject",
             f"ctfd_submission rejects {envelope.ref}: CTFd material cannot carry truth-like authority",
         )
-    if envelope.source_type != "ctfd":
+    if _has_non_ctfd_source_type(envelope):
         return CtfdSinkDecision(
             "reject",
             f"ctfd_submission accepts only CTFd source material ref={envelope.ref}",
         )
     flag_submission = _is_flag_submission(envelope)
-    if flag_submission and _active_intent(envelope) not in CTF_SOLVE_INTENTS:
+    if flag_submission and not _has_ctf_solve_intent(envelope):
         return CtfdSinkDecision("reject", f"ctfd_submission requires ctf solve intent ref={envelope.ref}")
     if _has_non_ctfd_citation_support(envelope):
         return CtfdSinkDecision(
@@ -108,7 +108,7 @@ def validate_ctfd_submission_sink(envelope: ContextEnvelope) -> CtfdSinkDecision
             "reject",
             f"ctfd_submission accepts only submission result material kind={envelope.kind} ref={envelope.ref}",
         )
-    if _record_type(envelope) not in SUBMISSION_RECORD_TYPES:
+    if _has_unsupported_record_type(envelope, SUBMISSION_RECORD_TYPES) or _record_type(envelope) not in SUBMISSION_RECORD_TYPES:
         return CtfdSinkDecision(
             "reject",
             f"ctfd_submission requires submission_result record_type or scoreboard projection ref={envelope.ref}",
@@ -135,7 +135,7 @@ def validate_ctfd_registry_sink(envelope: ContextEnvelope) -> CtfdSinkDecision:
             "reject",
             f"ctfd_registry rejects {envelope.ref}: CTFd material cannot carry truth-like authority",
         )
-    if envelope.source_type != "ctfd":
+    if _has_non_ctfd_source_type(envelope):
         return CtfdSinkDecision(
             "reject",
             f"ctfd_registry accepts only CTFd source material ref={envelope.ref}",
@@ -159,7 +159,7 @@ def validate_ctfd_registry_sink(envelope: ContextEnvelope) -> CtfdSinkDecision:
             f"ctfd_registry accepts only challenge and scoreboard metadata kind={envelope.kind} ref={envelope.ref}",
         )
     record_type = _record_type(envelope)
-    if record_type not in REGISTRY_RECORD_TYPES:
+    if _has_unsupported_record_type(envelope, REGISTRY_RECORD_TYPES) or record_type not in REGISTRY_RECORD_TYPES:
         return CtfdSinkDecision(
             "reject",
             f"ctfd_registry requires challenge or scoreboard record_type ref={envelope.ref}",
@@ -168,33 +168,104 @@ def validate_ctfd_registry_sink(envelope: ContextEnvelope) -> CtfdSinkDecision:
 
 
 def _is_flag_submission(envelope: ContextEnvelope) -> bool:
-    submission_type = normalized_context_key(_metadata_value(envelope, "submission_type"))
+    submission_types = normalized_context_keys(_metadata_values(envelope, "submission_type", "submission_types"))
     return (
-        submission_type in FLAG_SUBMISSION_TYPES
+        bool(submission_types & FLAG_SUBMISSION_TYPES)
         or has_context_flag(envelope, ("contains_captured_flag", "submits_flag"))
     )
 
 
-def _active_intent(envelope: ContextEnvelope) -> str:
-    return normalized_context_key(_metadata_value(envelope, "active_intent"))
+def _has_ctf_solve_intent(envelope: ContextEnvelope) -> bool:
+    active_intents = _active_intents(envelope)
+    return bool(active_intents) and active_intents <= CTF_SOLVE_INTENTS
+
+
+def _active_intents(envelope: ContextEnvelope) -> set[str]:
+    values: list[object] = []
+    for active_intent in _metadata_values(envelope, "active_intent", "active_intents"):
+        if isinstance(active_intent, (frozenset, list, set, tuple)):
+            values.extend(active_intent)
+        elif not isinstance(active_intent, dict):
+            values.append(active_intent)
+    return normalized_context_keys(values)
 
 
 def _metadata_value(envelope: ContextEnvelope, *names: str) -> object | None:
+    return _metadata_value_from(envelope.metadata, *names)
+
+
+def _metadata_values(envelope: ContextEnvelope, *names: str) -> list[object]:
+    return _metadata_values_from(envelope.metadata, *names)
+
+
+def _metadata_value_from(value: object, *names: str) -> object | None:
     normalized_names = normalized_context_keys(names)
-    for raw_key, value in envelope.metadata.items():
+    if isinstance(value, dict):
+        items = value.items()
+    elif isinstance(value, (list, tuple, set)):
+        for item in value:
+            nested = _metadata_value_from(item, *names)
+            if nested is not None:
+                return nested
+        return None
+    else:
+        return None
+    for raw_key, item_value in items:
         if normalized_context_key(raw_key) in normalized_names:
-            return value
+            return item_value
+        nested = _metadata_value_from(item_value, *names)
+        if nested is not None:
+            return nested
     return None
+
+
+def _metadata_values_from(value: object, *names: str) -> list[object]:
+    normalized_names = normalized_context_keys(names)
+    values: list[object] = []
+    if isinstance(value, dict):
+        items = value.items()
+    elif isinstance(value, (list, tuple, set)):
+        for item in value:
+            values.extend(_metadata_values_from(item, *names))
+        return values
+    else:
+        return values
+    for raw_key, item_value in items:
+        if normalized_context_key(raw_key) in normalized_names:
+            values.append(item_value)
+        values.extend(_metadata_values_from(item_value, *names))
+    return values
 
 
 def _authority_mutation_reason(envelope: ContextEnvelope) -> str:
     kind_reason = AUTHORITY_KIND_REASONS.get(envelope.kind)
     if kind_reason:
         return kind_reason
+    metadata_kind_reason = _metadata_authority_kind_reason(envelope)
+    if metadata_kind_reason:
+        return metadata_kind_reason
     for flag, reason in AUTHORITY_MUTATION_REASONS:
         if has_context_flag(envelope, (flag,)):
             return reason
     return ""
+
+
+def _metadata_authority_kind_reason(envelope: ContextEnvelope) -> str:
+    for kind in _metadata_kinds(envelope):
+        reason = AUTHORITY_KIND_REASONS.get(kind)
+        if reason:
+            return reason
+    return ""
+
+
+def _metadata_kinds(envelope: ContextEnvelope) -> list[str]:
+    values: list[object] = []
+    for kind in _metadata_values(envelope, "kind", "kinds"):
+        if isinstance(kind, (frozenset, list, set, tuple)):
+            values.extend(kind)
+        elif not isinstance(kind, dict):
+            values.append(kind)
+    return sorted(normalized_context_keys(values))
 
 
 def _has_target_fact_marker(envelope: ContextEnvelope) -> bool:
@@ -202,14 +273,51 @@ def _has_target_fact_marker(envelope: ContextEnvelope) -> bool:
 
 
 def _has_truth_like_authority(envelope: ContextEnvelope) -> bool:
-    return normalized_context_key(envelope.authority) in TRUTH_LIKE_AUTHORITIES
+    return (
+        normalized_context_key(envelope.authority) in TRUTH_LIKE_AUTHORITIES
+        or bool(_metadata_authorities(envelope) & TRUTH_LIKE_AUTHORITIES)
+    )
+
+
+def _metadata_authorities(envelope: ContextEnvelope) -> set[str]:
+    values: list[object] = []
+    for authority in _metadata_values(envelope, "authority", "authorities"):
+        if isinstance(authority, (frozenset, list, set, tuple)):
+            values.extend(authority)
+        elif not isinstance(authority, dict):
+            values.append(authority)
+    return normalized_context_keys(values)
+
+
+def _has_non_ctfd_source_type(envelope: ContextEnvelope) -> bool:
+    return bool(_source_types(envelope) - {"ctfd"})
+
+
+def _source_types(envelope: ContextEnvelope) -> set[str]:
+    values: list[object] = [envelope.source_type]
+    for source_type in _metadata_values(envelope, "source_type", "source_types"):
+        if isinstance(source_type, (frozenset, list, set, tuple)):
+            values.extend(source_type)
+        elif not isinstance(source_type, dict):
+            values.append(source_type)
+    return normalized_context_keys(values)
 
 
 def _has_non_ctfd_citation_support(envelope: ContextEnvelope) -> bool:
     return any(
         bool(citation_ref) and not citation_ref.startswith(CTFD_CITATION_PREFIX)
-        for citation_ref in (str(citation).strip().lower() for citation in envelope.citations)
+        for citation_ref in _citation_refs(envelope)
     )
+
+
+def _citation_refs(envelope: ContextEnvelope) -> list[str]:
+    values: list[object] = list(envelope.citations)
+    for citations in _metadata_values(envelope, "citation", "citation_ref", "citations", "citation_refs"):
+        if isinstance(citations, (frozenset, list, set, tuple)):
+            values.extend(citations)
+        elif not isinstance(citations, dict):
+            values.append(citations)
+    return [str(citation).strip().lower() for citation in values]
 
 
 def _non_ctfd_source_refs(envelope: ContextEnvelope) -> list[str]:
@@ -229,3 +337,17 @@ def _record_type(envelope: ContextEnvelope) -> str:
         or envelope.kind
         or ""
     ).strip().lower()
+
+
+def _has_unsupported_record_type(envelope: ContextEnvelope, allowed_record_types: frozenset[str]) -> bool:
+    return bool(_record_types(envelope) - allowed_record_types)
+
+
+def _record_types(envelope: ContextEnvelope) -> set[str]:
+    values: list[object] = []
+    for record_type in _metadata_values(envelope, "record_type", "record_types", "projection_type", "projection_types"):
+        if isinstance(record_type, (frozenset, list, set, tuple)):
+            values.extend(record_type)
+        elif not isinstance(record_type, dict):
+            values.append(record_type)
+    return normalized_context_keys(values)

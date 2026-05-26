@@ -91,6 +91,27 @@ class NotionInboxSinkTests(unittest.TestCase):
         )
         self.assertTrue(any("truth-like authority" in error for error in result.errors))
 
+    def test_notion_inbox_rejects_plural_nested_truth_like_authorities(self) -> None:
+        envelope = ContextEnvelope(
+            ref="notion:nested-confirmed-authorities",
+            kind="operator_note",
+            authority="asserted",
+            source_type="notion",
+            target_id="target-a",
+            purpose="notion_inbox",
+            sink="notion_inbox",
+            content="Nested plural Notion authorities must not turn a user proposal into target truth.",
+            citations=["notion:nested-confirmed-authorities"],
+            metadata={"metadata": {"authorities": ["confirmed"]}},
+        )
+
+        result = ContextSinkValidator().validate("notion_inbox", [envelope])
+
+        self.assertFalse(result.valid)
+        self.assertEqual(result.accepted_refs, [])
+        self.assertEqual(result.rejected_refs, ["notion:nested-confirmed-authorities"])
+        self.assertTrue(any("truth-like authority" in error for error in result.errors))
+
     def test_notion_inbox_rejects_authority_mutation_edits(self) -> None:
         envelopes = [
             ContextEnvelope(

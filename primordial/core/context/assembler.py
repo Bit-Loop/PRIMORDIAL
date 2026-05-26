@@ -5,13 +5,25 @@ from typing import Iterable
 
 from primordial.core.context.bindings import has_target_fact_marker
 from primordial.core.context.citations import CitationValidator, NON_EVIDENCE_PROOF_CITATION_PREFIXES, PLACEHOLDER_RAG_REFS
+from primordial.core.context.current_refs import (
+    current_evidence_refs,
+    current_note_refs,
+    current_rag_refs,
+    operator_note_source_omission_reason,
+    prompt_context_omission_reason,
+)
 from primordial.core.context.evidence_shape import EVIDENCE_CONTEXT_AUTHORITIES, FINDING_REF_PREFIX
 from primordial.core.context.envelopes import ContextEnvelope
-from primordial.core.context.generated_exports import is_generated_export_context
-from primordial.core.context.metadata_flags import metadata_value_is_false
-from primordial.core.context.normalization import normalized_context_key, normalized_context_keys
+from primordial.core.context.generated_exports import (
+    has_generated_export_path,
+    is_generated_export_context,
+    is_generated_export_path,
+)
+from primordial.core.context.metadata_flags import metadata_value_is_false, raw_metadata_value
+from primordial.core.context.normalization import normalized_context_key
 from primordial.core.context.assembler_roles import role_specific_omission_reason, safety_sensitive_omission_reason
 from primordial.core.context.source_refs import (
+    placeholder_source_refs,
     source_refs_metadata_errors,
     source_refs_metadata_values,
     unresolved_ai_derived_source_ref_errors,
@@ -25,6 +37,7 @@ from primordial.core.context.source_types import (
     TRUTH_LIKE_AUTHORITIES,
 )
 from primordial.core.context.task_metadata import task_metadata_errors
+from primordial.core.context.writeup_policy import prompt_writeup_omission_reason
 
 SECTION_ORDER = (
     "AUTHORITATIVE_RUNTIME_STATE",
@@ -64,6 +77,7 @@ KIND_SECTIONS = {
     "challenge_metadata": "COLLABORATION_REFS",
     "scoreboard_projection": "COLLABORATION_REFS",
     "solve_status": "COLLABORATION_REFS",
+    "submission_result": "COLLABORATION_REFS",
 }
 
 ROLE_FORBIDDEN_SECTIONS = {
@@ -71,16 +85,15 @@ ROLE_FORBIDDEN_SECTIONS = {
     "policy_gate": frozenset({"RAG_ADVISORY", "COLLABORATION_REFS", "OPERATOR_NOTES"}),
 }
 
-OPERATIONAL_PROMPT_FORBIDDEN_SOURCE_TYPES = frozenset({"chat"})
-PROMPT_SINK = "prompt"
 EVIDENCE_CITATION_PREFIX = "evidence:"
-RAG_CITATION_PREFIX = "rag:"
 CURRENT_TARGET_BOUND_KINDS = frozenset({"evidence", "finding"})
 MODEL_DERIVED_TARGET_BOUND_KINDS = frozenset({"model_summary", "hypothesis", "candidate_task"})
 POLICY_GATE_MODEL_DERIVED_KINDS = frozenset({"candidate_task"})
 POLICY_GATE_TARGET_BOUND_AUTHORITY_KINDS = frozenset({"approval", "policy_decision", "scope", "target_status"})
 POLICY_GATE_CURRENT_TARGET_BOUND_KINDS = POLICY_GATE_MODEL_DERIVED_KINDS | POLICY_GATE_TARGET_BOUND_AUTHORITY_KINDS
-
+CTFD_REFERENCE_KINDS = frozenset(
+    {"ctfd_ref", "challenge_metadata", "scoreboard_projection", "solve_status", "submission_result"}
+)
 
 class ContextAssembler:
     def assemble(
@@ -98,20 +111,98 @@ class ContextAssembler:
         omitted: list[dict[str, object]] = []
 
         envelope_list = list(envelopes)
-        known_evidence_refs = self._current_evidence_refs(
+        known_evidence_refs = current_evidence_refs(
             envelope_list,
             target_id=target_id,
             active_generation_id=active_generation_id,
             purpose=purpose,
             role=role,
         )
-        known_rag_refs = self._current_rag_refs(
+        known_evidence_refs -= {
+            envelope.ref
+            for envelope in envelope_list
+            if envelope.kind in EVIDENCE_PROOF_KINDS and self._is_generated_export_source(envelope)
+        }
+        while True:
+            invalid_evidence_refs = {
+                envelope.ref
+                for envelope in envelope_list
+                if envelope.kind in EVIDENCE_PROOF_KINDS
+                and (
+                    source_refs_metadata_errors(envelope)
+                    or unresolved_ai_derived_source_ref_errors(
+                        envelope.ref,
+                        source_refs_metadata_values(envelope),
+                        known_evidence_refs=known_evidence_refs,
+                    )
+                )
+            }
+            pruned_evidence_refs = known_evidence_refs - invalid_evidence_refs
+            if pruned_evidence_refs == known_evidence_refs:
+                break
+            known_evidence_refs = pruned_evidence_refs
+        known_rag_refs = current_rag_refs(
             envelope_list,
             target_id=target_id,
             active_generation_id=active_generation_id,
             purpose=purpose,
             role=role,
         )
+        known_rag_refs -= {
+            envelope.ref
+            for envelope in envelope_list
+            if envelope.kind == "rag" and self._is_generated_export_source(envelope)
+        }
+        known_note_refs = current_note_refs(
+            envelope_list,
+            target_id=target_id,
+            active_generation_id=active_generation_id,
+            purpose=purpose,
+            role=role,
+        )
+        known_note_refs -= {
+            envelope.ref
+            for envelope in envelope_list
+            if envelope.kind == "operator_note" and self._is_generated_export_source(envelope)
+        }
+        while True:
+            invalid_note_refs = {
+                envelope.ref
+                for envelope in envelope_list
+                if envelope.kind == "operator_note"
+                and (
+                    source_refs_metadata_errors(envelope)
+                    or unresolved_ai_derived_source_ref_errors(
+                        envelope.ref,
+                        source_refs_metadata_values(envelope),
+                        known_evidence_refs=known_evidence_refs,
+                        known_note_refs=known_note_refs,
+                        known_rag_refs=known_rag_refs,
+                    )
+                )
+            }
+            pruned_note_refs = known_note_refs - invalid_note_refs
+            invalid_rag_refs = {
+                envelope.ref
+                for envelope in envelope_list
+                if envelope.kind == "rag"
+                and (
+                    metadata_value_is_false(envelope, "operational_retrieval_allowed")
+                    or source_refs_metadata_errors(envelope)
+                    or unresolved_ai_derived_source_ref_errors(
+                        envelope.ref,
+                        source_refs_metadata_values(envelope),
+                        known_evidence_refs=known_evidence_refs,
+                        known_note_refs=pruned_note_refs,
+                        known_rag_refs=known_rag_refs,
+                    )
+                )
+            }
+            pruned_rag_refs = known_rag_refs - invalid_rag_refs
+            if pruned_note_refs == known_note_refs and pruned_rag_refs == known_rag_refs:
+                break
+            known_note_refs = pruned_note_refs
+            known_rag_refs = pruned_rag_refs
 
         for envelope in envelope_list:
             reason = self._omission_reason(
@@ -119,6 +210,7 @@ class ContextAssembler:
                 target_id=target_id,
                 active_generation_id=active_generation_id,
                 known_evidence_refs=known_evidence_refs,
+                known_note_refs=known_note_refs,
                 known_rag_refs=known_rag_refs,
                 purpose=purpose,
                 role=role,
@@ -185,6 +277,8 @@ class ContextAssembler:
             for item in items:
                 citations = item.get("citations") if isinstance(item.get("citations"), list) else []
                 citation_text = f" citations={','.join(str(cite) for cite in citations)}" if citations else ""
+                source_refs = item.get("source_refs") if isinstance(item.get("source_refs"), list) else []
+                source_ref_text = f" source_refs={','.join(str(ref) for ref in source_refs)}" if source_refs else ""
                 lines.append(
                     "- "
                     f"{item.get('ref')}: "
@@ -192,6 +286,7 @@ class ContextAssembler:
                     f"authority={item.get('authority')} "
                     f"source_type={item.get('source_type')}"
                     f"{citation_text} "
+                    f"{source_ref_text} "
                     f"{item.get('content')}"
                 )
         return "\n".join(lines).strip()
@@ -205,7 +300,7 @@ class ContextAssembler:
         *,
         authority: str | None = None,
     ) -> dict[str, object]:
-        return {
+        item: dict[str, object] = {
             "ref": envelope.ref,
             "kind": envelope.kind,
             "authority": authority or envelope.authority,
@@ -216,6 +311,10 @@ class ContextAssembler:
             "citations": list(envelope.citations),
             "content_hash": envelope.content_hash,
         }
+        source_refs = source_refs_metadata_values(envelope)
+        if source_refs:
+            item["source_refs"] = list(source_refs)
+        return item
 
     def _omission_reason(
         self,
@@ -224,27 +323,68 @@ class ContextAssembler:
         target_id: str | None,
         active_generation_id: str | None,
         known_evidence_refs: set[str],
+        known_note_refs: set[str],
         known_rag_refs: set[str],
         purpose: str,
         role: str,
     ) -> str:
         role_name = normalized_context_key(role)
+        prompt_context_reason = prompt_context_omission_reason(envelope, purpose=purpose, role=role_name)
         if target_id and envelope.target_id and envelope.target_id != target_id:
             return "wrong_target"
         if self._has_placeholder_rag_ref(envelope):
             return "placeholder_rag_ref"
+        if placeholder_source_refs(envelope.citations):
+            return "invalid_citation"
         safety_reason = safety_sensitive_omission_reason(envelope, role=role_name)
         if safety_reason:
             return safety_reason
-        if is_generated_export_context(envelope):
+        writeup_reason = prompt_writeup_omission_reason(envelope, role=role_name)
+        if writeup_reason:
+            return writeup_reason
+        if self._is_generated_export_source(envelope):
             return "generated_export"
         if metadata_value_is_false(envelope, "operational_retrieval_allowed"):
             return "operational_retrieval_disabled"
         evidence_shape_reason = self._evidence_proof_shape_omission_reason(envelope)
         if evidence_shape_reason:
             return evidence_shape_reason
+        note_source_reason = operator_note_source_omission_reason(envelope)
+        if note_source_reason:
+            return note_source_reason
+        if envelope.kind == "operator_note" and (
+            source_refs_metadata_errors(envelope)
+            or unresolved_ai_derived_source_ref_errors(
+                envelope.ref,
+                source_refs_metadata_values(envelope),
+                known_evidence_refs=known_evidence_refs,
+                known_note_refs=known_note_refs,
+                known_rag_refs=known_rag_refs,
+            )
+        ):
+            return "invalid_citation"
         if envelope.kind == "rag" and has_target_fact_marker(envelope):
             return "target_fact_rag"
+        if envelope.kind == "rag" and (
+            source_refs_metadata_errors(envelope)
+            or unresolved_ai_derived_source_ref_errors(
+                envelope.ref,
+                source_refs_metadata_values(envelope),
+                known_evidence_refs=known_evidence_refs,
+                known_note_refs=known_note_refs,
+                known_rag_refs=known_rag_refs,
+            )
+        ):
+            return "invalid_citation"
+        if envelope.kind in EVIDENCE_PROOF_KINDS and (
+            source_refs_metadata_errors(envelope)
+            or unresolved_ai_derived_source_ref_errors(
+                envelope.ref,
+                source_refs_metadata_values(envelope),
+                known_evidence_refs=known_evidence_refs,
+            )
+        ):
+            return "invalid_citation"
         if not CitationValidator().validate([envelope]).valid:
             return "invalid_citation"
         if self._has_non_evidence_proof_citation_support(envelope):
@@ -257,12 +397,13 @@ class ContextAssembler:
                 envelope.ref,
                 source_refs_metadata_values(envelope),
                 known_evidence_refs=known_evidence_refs,
+                known_note_refs=known_note_refs,
                 known_rag_refs=known_rag_refs,
             )
         ):
             return "invalid_citation"
-        if self._is_raw_chat_context(envelope):
-            return "raw_chat_context"
+        if prompt_context_reason == "raw_chat_context":
+            return prompt_context_reason
         if self._is_ctfd_truth_like_authority(envelope):
             return "ctfd_truth_like_authority"
         if self._is_collaboration_truth_like_authority(envelope):
@@ -280,11 +421,8 @@ class ContextAssembler:
             return "invalid_citation"
         if role_name == "policy_gate" and self._is_historical(envelope, active_generation_id=active_generation_id):
             return "stale_generation"
-        validity_reason = self._validity_omission_reason(envelope, purpose=purpose, role=role_name)
-        if validity_reason:
-            return validity_reason
-        if self._has_prompt_sink_mismatch(envelope):
-            return "sink_mismatch"
+        if prompt_context_reason:
+            return prompt_context_reason
         if (
             envelope.kind == "rag"
             and not self._is_historical(envelope, active_generation_id=active_generation_id)
@@ -311,99 +449,12 @@ class ContextAssembler:
             return "role_forbidden"
         return ""
 
-    def _validity_omission_reason(self, envelope: ContextEnvelope, *, purpose: str, role: str) -> str:
-        context_names = self._context_names(envelope, purpose=purpose, role=role)
-        invalid_for = self._normalized_names(envelope.invalid_for)
-        if invalid_for & context_names:
-            return "invalid_for_context"
-        valid_for = self._normalized_names(envelope.valid_for)
-        if valid_for and not valid_for & context_names:
-            return "not_valid_for_context"
-        return ""
-
-    def _context_names(self, envelope: ContextEnvelope, *, purpose: str, role: str) -> set[str]:
-        return self._normalized_names((purpose, role, "prompt"))
-
-    def _normalized_names(self, names: Iterable[str]) -> set[str]:
-        return normalized_context_keys(names)
-
-    def _current_evidence_refs(
-        self,
-        envelopes: Iterable[ContextEnvelope],
-        *,
-        target_id: str | None,
-        active_generation_id: str | None,
-        purpose: str,
-        role: str,
-    ) -> set[str]:
-        role_name = normalized_context_key(role)
-        refs: set[str] = set()
-        for envelope in envelopes:
-            if envelope.kind != "evidence":
-                continue
-            if not envelope.ref.startswith(EVIDENCE_CITATION_PREFIX):
-                continue
-            if envelope.source_type in NON_EVIDENCE_SOURCE_TYPES:
-                continue
-            if is_generated_export_context(envelope):
-                continue
-            if metadata_value_is_false(envelope, "operational_retrieval_allowed"):
-                continue
-            if self._evidence_proof_shape_omission_reason(envelope):
-                continue
-            if self._has_prompt_sink_mismatch(envelope):
-                continue
-            if self._has_non_evidence_proof_citation_support(envelope):
-                continue
-            if self._validity_omission_reason(envelope, purpose=purpose, role=role_name):
-                continue
-            if target_id and envelope.target_id != target_id:
-                continue
-            if active_generation_id and envelope.active_generation_id != active_generation_id:
-                continue
-            refs.add(envelope.ref)
-        return refs
-
-    def _current_rag_refs(
-        self,
-        envelopes: Iterable[ContextEnvelope],
-        *,
-        target_id: str | None,
-        active_generation_id: str | None,
-        purpose: str,
-        role: str,
-    ) -> set[str]:
-        role_name = normalized_context_key(role)
-        refs: set[str] = set()
-        for envelope in envelopes:
-            if envelope.kind != "rag":
-                continue
-            if not envelope.ref.startswith(RAG_CITATION_PREFIX):
-                continue
-            if envelope.source_type not in RAG_ADVISORY_SOURCE_TYPES:
-                continue
-            if safety_sensitive_omission_reason(envelope, role=role_name):
-                continue
-            if target_id and envelope.target_id and envelope.target_id != target_id:
-                continue
-            if active_generation_id and envelope.active_generation_id and envelope.active_generation_id != active_generation_id:
-                continue
-            if self._has_placeholder_rag_ref(envelope):
-                continue
-            if not CitationValidator().validate([envelope]).valid:
-                continue
-            if is_generated_export_context(envelope):
-                continue
-            if metadata_value_is_false(envelope, "operational_retrieval_allowed"):
-                continue
-            if self._is_raw_chat_context(envelope):
-                continue
-            if self._has_prompt_sink_mismatch(envelope):
-                continue
-            if self._validity_omission_reason(envelope, purpose=purpose, role=role_name):
-                continue
-            refs.add(envelope.ref)
-        return refs
+    def _is_generated_export_source(self, envelope: ContextEnvelope) -> bool:
+        return (
+            is_generated_export_context(envelope)
+            or has_generated_export_path(envelope)
+            or is_generated_export_path(raw_metadata_value(envelope, "source_url"))
+        )
 
     def _requires_current_target_binding(self, envelope: ContextEnvelope, *, role: str) -> bool:
         return envelope.kind in CURRENT_TARGET_BOUND_KINDS or (
@@ -422,47 +473,28 @@ class ContextAssembler:
 
     def _evidence_proof_shape_omission_reason(self, envelope: ContextEnvelope) -> str:
         if envelope.kind != "evidence":
-            if envelope.kind == "finding" and not envelope.ref.startswith(FINDING_REF_PREFIX):
-                return "invalid_finding_ref"
-            return ""
+            return "invalid_finding_ref" if envelope.kind == "finding" and not envelope.ref.startswith(FINDING_REF_PREFIX) else ""
         if envelope.authority not in EVIDENCE_CONTEXT_AUTHORITIES:
             return "invalid_evidence_authority"
-        if not envelope.ref.startswith(EVIDENCE_CITATION_PREFIX):
-            return "invalid_evidence_ref"
-        return ""
+        return "" if envelope.ref.startswith(EVIDENCE_CITATION_PREFIX) else "invalid_evidence_ref"
 
     def _has_non_evidence_proof_citation_support(self, envelope: ContextEnvelope) -> bool:
-        if envelope.kind not in EVIDENCE_PROOF_KINDS:
-            return False
         prefixes = tuple(prefix.lower() for prefix in NON_EVIDENCE_PROOF_CITATION_PREFIXES)
-        return any(str(citation).strip().lower().startswith(prefixes) for citation in envelope.citations)
-
-    def _is_raw_chat_context(self, envelope: ContextEnvelope) -> bool:
-        return envelope.source_type in OPERATIONAL_PROMPT_FORBIDDEN_SOURCE_TYPES
+        return envelope.kind in EVIDENCE_PROOF_KINDS and any(
+            str(citation).strip().lower().startswith(prefixes) for citation in envelope.citations
+        )
 
     def _is_ctfd_truth_like_authority(self, envelope: ContextEnvelope) -> bool:
-        return envelope.source_type == "ctfd" and envelope.authority in TRUTH_LIKE_AUTHORITIES
+        return (
+            normalized_context_key(envelope.source_type) == "ctfd"
+            or normalized_context_key(envelope.kind) in CTFD_REFERENCE_KINDS
+        ) and normalized_context_key(envelope.authority) in TRUTH_LIKE_AUTHORITIES
 
     def _is_collaboration_truth_like_authority(self, envelope: ContextEnvelope) -> bool:
-        return (
-            (
-                normalized_context_key(envelope.source_type) in COLLABORATION_SOURCE_TYPES
-                or normalized_context_key(envelope.kind) in COLLABORATION_REFERENCE_KINDS
-            )
-            and normalized_context_key(envelope.authority) in TRUTH_LIKE_AUTHORITIES
+        return normalized_context_key(envelope.authority) in TRUTH_LIKE_AUTHORITIES and (
+            normalized_context_key(envelope.source_type) in COLLABORATION_SOURCE_TYPES
+            or normalized_context_key(envelope.kind) in COLLABORATION_REFERENCE_KINDS
         )
 
-    def _has_prompt_sink_mismatch(self, envelope: ContextEnvelope) -> bool:
-        return normalized_context_key(envelope.sink) != PROMPT_SINK
-
-    def _is_historical(
-        self,
-        envelope: ContextEnvelope,
-        *,
-        active_generation_id: str | None,
-    ) -> bool:
-        return bool(
-            active_generation_id
-            and envelope.active_generation_id
-            and envelope.active_generation_id != active_generation_id
-        )
+    def _is_historical(self, envelope: ContextEnvelope, *, active_generation_id: str | None) -> bool:
+        return bool(active_generation_id and envelope.active_generation_id and envelope.active_generation_id != active_generation_id)

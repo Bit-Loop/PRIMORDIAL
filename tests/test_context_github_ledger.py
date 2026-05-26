@@ -86,6 +86,78 @@ class GitHubLedgerSinkTests(unittest.TestCase):
         )
         self.assertTrue(any("truth-like authority" in error for error in result.errors))
 
+    def test_github_ledger_rejects_nested_truth_like_authority(self) -> None:
+        envelope = ContextEnvelope(
+            ref="github:nested-confirmed-authority",
+            kind="github_ref",
+            authority="asserted",
+            source_type="github",
+            target_id="target-a",
+            purpose="patch_planning",
+            sink="github_ledger",
+            content="Nested GitHub authority must not turn engineering context into target truth.",
+            citations=["github:nested-confirmed-authority"],
+            metadata={
+                "context_type": "engineering_context",
+                "metadata": {"authority": "confirmed"},
+            },
+        )
+
+        result = ContextSinkValidator().validate("github_ledger", [envelope])
+
+        self.assertFalse(result.valid)
+        self.assertEqual(result.accepted_refs, [])
+        self.assertEqual(result.rejected_refs, ["github:nested-confirmed-authority"])
+        self.assertTrue(any("truth-like authority" in error for error in result.errors))
+
+    def test_github_ledger_rejects_plural_nested_truth_like_authorities(self) -> None:
+        envelope = ContextEnvelope(
+            ref="github:nested-confirmed-authorities",
+            kind="github_ref",
+            authority="asserted",
+            source_type="github",
+            target_id="target-a",
+            purpose="patch_planning",
+            sink="github_ledger",
+            content="Nested plural GitHub authorities must not turn engineering context into target truth.",
+            citations=["github:nested-confirmed-authorities"],
+            metadata={
+                "context_type": "engineering_context",
+                "metadata": {"authorities": ["confirmed"]},
+            },
+        )
+
+        result = ContextSinkValidator().validate("github_ledger", [envelope])
+
+        self.assertFalse(result.valid)
+        self.assertEqual(result.accepted_refs, [])
+        self.assertEqual(result.rejected_refs, ["github:nested-confirmed-authorities"])
+        self.assertTrue(any("truth-like authority" in error for error in result.errors))
+
+    def test_github_ledger_rejects_plural_nested_unsupported_source_types(self) -> None:
+        envelope = ContextEnvelope(
+            ref="github:nested-model-source-type",
+            kind="github_ref",
+            authority="asserted",
+            source_type="github",
+            target_id="target-a",
+            purpose="patch_planning",
+            sink="github_ledger",
+            content="Nested source metadata must not turn model output into GitHub ledger context.",
+            citations=["github:nested-model-source-type"],
+            metadata={
+                "context_type": "engineering_context",
+                "metadata": {"source_types": ["ai_output"]},
+            },
+        )
+
+        result = ContextSinkValidator().validate("github_ledger", [envelope])
+
+        self.assertFalse(result.valid)
+        self.assertEqual(result.accepted_refs, [])
+        self.assertEqual(result.rejected_refs, ["github:nested-model-source-type"])
+        self.assertTrue(any("unsupported source_type=ai_output" in error for error in result.errors))
+
     def test_github_ledger_rejects_target_truth_and_authority_mutations(self) -> None:
         envelopes = [
             ContextEnvelope(

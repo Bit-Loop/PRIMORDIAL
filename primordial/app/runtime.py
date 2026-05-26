@@ -17,6 +17,8 @@ from primordial.adapters.caido import CaidoIntegrationService
 from primordial.adapters.discord import DiscordNotificationService, validate_discord_webhook_url
 from primordial.adapters.notion import NotionSyncService
 from primordial.core.config import AppConfig
+from primordial.core.context import ContextEnvelope, ContextSinkValidator, is_operational_context_purpose
+from primordial.core.context.normalization import metadata_list_value, metadata_value
 from primordial.core.credentials import CredentialStore
 from primordial.core.domain.enums import (
     AgentRole,
@@ -37,6 +39,7 @@ from primordial.core.domain.enums import (
 from primordial.core.domain.models import (
     DashboardSnapshot,
     ArtifactRecord,
+    DocumentChunk,
     EventRecord,
     EvidenceRecord,
     Finding,
@@ -52,6 +55,7 @@ from primordial.core.domain.models import (
 )
 from primordial.core.events.bus import EventBus, RuntimeSignal
 from primordial.core.evidence import CredentialedAccessSurface, classify_credentialed_access_surface
+from primordial.core.environment import EnvironmentClassification, EnvironmentClassifier
 from primordial.core.findings_context import FindingsContextService
 from primordial.core.intent import OperatorIntentRegistry
 from primordial.core.intent.models import OperatorIntentPolicy
@@ -160,6 +164,7 @@ class PrimordialRuntime:
         self.store = RuntimeStore(config.database_url, schema=config.database_schema)
         self.credentials = CredentialStore(config.credentials_path)
         self.catalog = PrimitiveCatalog()
+        self.environment_classifier = self._load_environment_classifier(config.project_root)
         self.operator_intents = OperatorIntentRegistry(config.catalog_dir / "intents")
         self.event_bus = EventBus()
         self.modules = ModuleRegistry(self.event_bus)
@@ -320,12 +325,14 @@ class PrimordialRuntime:
         methodology: MethodologyName = MethodologyName.WEB_APP_CORE,
         profile: ScopeProfile = ScopeProfile.HACKERONE,
         title: str = "Default Primordial Session",
+        environment_classification: EnvironmentClassification | None = None,
     ) -> Session:
         previous_session = self.store.get_active_session()
         previous_intent = None
         if previous_session is not None:
             previous_intent = previous_session.metadata.get("operator_intent_id")
-        default_intent = self._default_operator_intent_for_profile(profile)
+        classification = environment_classification or self._classify_environment(profile=profile.value)
+        default_intent = self._default_operator_intent_for_environment(classification)
         selected_intent = str(previous_intent) if previous_intent and previous_intent != OperatorIntentRegistry.DEFAULT_INTENT_ID else default_intent
         self.store.pause_active_sessions()
         session = Session(
@@ -333,7 +340,10 @@ class PrimordialRuntime:
             profile=profile,
             autonomy_mode=self.config.autonomy.mode.value,
             title=title,
-            metadata={"operator_intent_id": selected_intent},
+            metadata={
+                "operator_intent_id": selected_intent,
+                "environment_classification": classification.as_payload(),
+            },
         )
         self.store.insert_session(session)
         self.store.insert_event(
@@ -427,12 +437,26 @@ class PrimordialRuntime:
     ) -> dict[str, object]:
         if not isinstance(payload, dict):
             raise ValueError("scope payload must be an object")
-        payload_profile = self.resolve_scope_profile(str(profile or payload.get("profile", ScopeProfile.HACKERONE.value)))
+        raw_profile = str(profile or payload.get("profile", ScopeProfile.HACKERONE.value))
+        try:
+            payload_profile = self.resolve_scope_profile(raw_profile)
+        except ValueError:
+            if not self.environment_classifier.has_profile_upgrade(raw_profile):
+                raise
+            payload_profile = ScopeProfile.HACKERONE
+        environment_classification = self._classify_environment(
+            profile=raw_profile,
+            resolved_profile=payload_profile.value,
+            payload=payload,
+        )
         targets = payload.get("targets", [])
         if not isinstance(targets, list):
             raise ValueError("scope payload targets must be a list")
-        session = self.store.get_active_session() or self.start_session(profile=payload_profile)
-        self._ensure_profile_default_operator_intent(payload_profile)
+        session = self.store.get_active_session() or self.start_session(
+            profile=payload_profile,
+            environment_classification=environment_classification,
+        )
+        self._ensure_profile_default_operator_intent(payload_profile, classification=environment_classification)
         session = self.store.get_active_session() or session
         imported_targets = 0
         imported_assets = 0
@@ -485,6 +509,7 @@ class PrimordialRuntime:
                     "session_id": session.id,
                     "targets_imported": imported_targets,
                     "assets_imported": imported_assets,
+                    "environment_classification": environment_classification.as_payload(),
                 },
             )
         )
@@ -494,6 +519,7 @@ class PrimordialRuntime:
             "session_id": session.id,
             "targets_imported": imported_targets,
             "assets_imported": imported_assets,
+            "environment_classification": environment_classification.as_payload(),
         }
 
     def run_tick(self, max_executions: int = 3):
@@ -791,7 +817,12 @@ class PrimordialRuntime:
                 in_scope=in_scope,
                 metadata=dict(metadata or {}),
             )
-        self._ensure_profile_default_operator_intent(profile)
+        environment_classification = self._classify_environment(
+            profile=profile.value,
+            target_metadata=metadata or {},
+            asset_metadata=self._asset_metadata_from_entries(assets or []),
+        )
+        self._ensure_profile_default_operator_intent(profile, classification=environment_classification)
         self.store.insert_target(target)
         self.findings_context.ensure_target(target)
 
@@ -978,7 +1009,11 @@ class PrimordialRuntime:
             raise ValueError("target handle is required")
         display_name = str(display_name or handle).strip() or handle
         parsed_active_ip = self._validated_optional_ip(active_ip) if active_ip else None
-        self._ensure_profile_default_operator_intent(profile)
+        environment_classification = self._classify_environment(
+            profile=profile.value,
+            asset_metadata=self._asset_metadata_from_entries(asset_rows),
+        )
+        self._ensure_profile_default_operator_intent(profile, classification=environment_classification)
         normalized_rows: list[dict[str, object]] = []
         for row in asset_rows:
             raw_asset = str(row["asset"]).strip()
@@ -1820,6 +1855,12 @@ class PrimordialRuntime:
             normalized = normalized[4:]
         chunk = self.store.get_document_chunk(normalized)
         if chunk is None:
+            citation_id = chunk_id.strip()
+            if citation_id and not citation_id.startswith("rag:"):
+                citation_id = f"rag:{citation_id}"
+            matches = self.store.list_document_chunks(metadata_filters={"citation_id": [citation_id]}, limit=2)
+            chunk = matches[0] if matches else None
+        if chunk is None:
             raise ValueError(f"RAG chunk not found: {chunk_id}")
         embedding = self.store.get_record_embedding(
             record_type="document_chunk",
@@ -1827,9 +1868,21 @@ class PrimordialRuntime:
             embedding_model=self.rag_embedding_provider.model_name,
         )
         return {
-            "chunk": {**chunk.as_payload(), "citation_id": f"rag:{chunk.id}"},
+            "chunk": {**chunk.as_payload(), "citation_id": self._rag_chunk_citation_id(chunk)},
             "embedding": embedding.as_payload() if embedding else None,
         }
+
+    def _rag_chunk_citation_id(self, chunk: DocumentChunk) -> str:
+        citation_id = str(chunk.metadata.get("citation_id") or "").strip()
+        if not citation_id or citation_id in {"rag:None", "rag:null", "rag:unknown"}:
+            citation_id = chunk.id
+        return citation_id if citation_id.startswith("rag:") else f"rag:{citation_id}"
+
+    def _rag_payload_citation_id(self, item: dict[str, object]) -> str:
+        citation_id = str(item.get("citation_id") or "").strip()
+        if not citation_id or citation_id in {"rag:None", "rag:null", "rag:unknown"}:
+            citation_id = str(item.get("chunk_id") or item.get("id") or "unknown").strip() or "unknown"
+        return citation_id if citation_id.startswith("rag:") else f"rag:{citation_id}"
 
     def rag_source_profile(self, doc_id: str, *, limit: int = 50) -> dict[str, object]:
         clean = str(doc_id or "").strip()
@@ -1877,7 +1930,7 @@ class PrimordialRuntime:
             sample_chunks.append(
                 {
                     "chunk_id": chunk.id,
-                    "citation_id": f"rag:{chunk.id}",
+                    "citation_id": self._rag_chunk_citation_id(chunk),
                     "title": chunk.title,
                     "section": metadata.get("section"),
                     "page_start": metadata.get("page_start"),
@@ -1929,7 +1982,7 @@ class PrimordialRuntime:
                 {
                     "query": query,
                     "result_count": len(top),
-                    "top_citations": [str(item.get("citation_id") or item.get("chunk_id")) for item in top[:5] if isinstance(item, dict)],
+                    "top_citations": [self._rag_payload_citation_id(item) for item in top[:5] if isinstance(item, dict)],
                     "top_results": top[:3],
                 }
             )
@@ -1952,9 +2005,37 @@ class PrimordialRuntime:
         retrieved_chunks: list[dict[str, object]] | None = None,
         safety_context: dict[str, object] | None = None,
     ) -> dict[str, object]:
-        chunks = retrieved_chunks or self.rag_search(query, limit=5)["results"]
+        if retrieved_chunks is None:
+            if is_operational_context_purpose(mode):
+                return {
+                    "ok": False,
+                    "status": "operational_context_required",
+                    "answer": "",
+                    "error": (
+                        "retrieved_chunks are required for operational RAG synthesis; "
+                        "unscoped fallback retrieval is not allowed"
+                    ),
+                    "retrieved_ids": [],
+                    "citation_map": [],
+                    "validation": validate_rag_citations("", [], mode=mode, require_citations=True).as_payload(),
+                }
+            chunks = self.rag_search(query, limit=5)["results"]
+        else:
+            chunks = retrieved_chunks
         clean_chunks = [item for item in chunks if isinstance(item, dict) and not item.get("error")]
         citation_map = self.rag_context_broker.citation_map_for_chunks(clean_chunks)
+        if is_operational_context_purpose(mode):
+            rag_context_validation = self._validate_operational_rag_synthesis_context(clean_chunks, mode=mode)
+            if not rag_context_validation.valid:
+                return {
+                    "ok": False,
+                    "status": "invalid_rag_context",
+                    "answer": "",
+                    "error": "; ".join(rag_context_validation.errors),
+                    "retrieved_ids": [self._rag_payload_citation_id(item) for item in clean_chunks],
+                    "citation_map": citation_map,
+                    "validation": validate_rag_citations("", clean_chunks, mode=mode, require_citations=True).as_payload(),
+                }
         if not clean_chunks:
             return {
                 "ok": False,
@@ -1974,7 +2055,7 @@ class PrimordialRuntime:
                 "status": "disallowed_model",
                 "answer": "",
                 "error": f"RAG synthesis model {self.config.rag.synthesis.model!r} is disallowed by pattern {disallowed!r}",
-                "retrieved_ids": [str(item.get("citation_id") or f"rag:{item.get('chunk_id')}") for item in clean_chunks],
+                "retrieved_ids": [self._rag_payload_citation_id(item) for item in clean_chunks],
                 "citation_map": citation_map,
                 "validation": validate_rag_citations("", clean_chunks, mode=mode, require_citations=True).as_payload(),
             }
@@ -2021,7 +2102,7 @@ class PrimordialRuntime:
                 "status": "provider_error",
                 "answer": "",
                 "error": str(exc),
-                "retrieved_ids": [str(item.get("citation_id") or f"rag:{item.get('chunk_id')}") for item in clean_chunks],
+                "retrieved_ids": [self._rag_payload_citation_id(item) for item in clean_chunks],
                 "citation_map": citation_map,
             }
         validation = validate_rag_citations(answer, clean_chunks, mode=mode, require_citations=True)
@@ -2052,7 +2133,7 @@ class PrimordialRuntime:
             "Retrieved context:",
         ]
         for item in chunks:
-            citation_id = str(item.get("citation_id") or f"rag:{item.get('chunk_id')}")
+            citation_id = self._rag_payload_citation_id(item)
             metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
             source_display = str(item.get("source_display") or metadata.get("source_display") or "")
             text = str(item.get("text") or item.get("retrieval_text") or "").strip()
@@ -2071,6 +2152,26 @@ class PrimordialRuntime:
             )
         lines.append("Answer with citations using only rag:<chunk_id> IDs shown above.")
         return "\n".join(lines)
+
+    def _validate_operational_rag_synthesis_context(
+        self,
+        chunks: list[dict[str, object]],
+        *,
+        mode: str,
+    ):
+        envelopes: list[ContextEnvelope] = []
+        errors: list[str] = []
+        for item in chunks:
+            try:
+                envelopes.append(ContextEnvelope.from_rag_chunk(item, purpose=mode, sink="prompt"))
+            except ValueError as exc:
+                errors.append(str(exc))
+        result = ContextSinkValidator().validate("prompt", envelopes)
+        if errors:
+            result.valid = False
+            result.errors.extend(errors)
+            result.rejected_refs.extend(f"rag_context:{index}" for index in range(len(errors)))
+        return result
 
     def _lmstudio_base_without_v1(self, base_url: str) -> str:
         clean = base_url.rstrip("/")
@@ -2091,8 +2192,8 @@ class PrimordialRuntime:
         for item in results:
             payload = item.as_payload()
             payload["applicability_classification"] = self.workflow._rag_applicability_classification(item.chunk, evidence)
-            payload["cve_ids"] = list(item.chunk.metadata.get("cve_ids", [])) if isinstance(item.chunk.metadata.get("cve_ids"), list) else []
-            payload["source_trust"] = item.chunk.metadata.get("source_trust")
+            payload["cve_ids"] = metadata_list_value(item.chunk.metadata, "cve_ids")
+            payload["source_trust"] = metadata_value(item.chunk.metadata, "source_trust")
             payload_results.append(payload)
         return {
             "target": target_record.as_payload(),
@@ -2922,13 +3023,16 @@ class PrimordialRuntime:
         return self.skills.payload(include_body=include_body)
 
     def scope_profiles_payload(self) -> dict[str, object]:
+        htb_environment = self._classify_environment(profile=ScopeProfile.HACK_THE_BOX.value)
+        hackerone_environment = self._classify_environment(profile=ScopeProfile.HACKERONE.value)
         builtins = [
             {
                 "id": ScopeProfile.HACK_THE_BOX.value,
                 "label": "Hack The Box",
                 "base_profile": ScopeProfile.HACK_THE_BOX.value,
-                "description": "Lab/CTF profile. Allows HTB-style workflows while still blocking DoS and unsafe primitives.",
-                "default_intent": "htb_lab",
+                "description": "Lab/CTF profile. Requires verified environment proof before stronger lab defaults apply.",
+                "default_intent": htb_environment.default_intent,
+                "environment_classification": htb_environment.as_payload(),
                 "builtin": True,
             },
             {
@@ -2936,7 +3040,8 @@ class PrimordialRuntime:
                 "label": "HackerOne",
                 "base_profile": ScopeProfile.HACKERONE.value,
                 "description": "Bug bounty profile. Requires stricter scope and program-rule awareness.",
-                "default_intent": OperatorIntentRegistry.DEFAULT_INTENT_ID,
+                "default_intent": hackerone_environment.default_intent,
+                "environment_classification": hackerone_environment.as_payload(),
                 "builtin": True,
             },
         ]
@@ -3077,6 +3182,9 @@ class PrimordialRuntime:
             )
             synced.append({"target": target.handle, "workspace": workspace.as_payload()})
         return {"synced": synced}
+
+    def audit_findings_context_exports(self) -> dict[str, object]:
+        return self.findings_context.audit_generated_exports()
 
     def caido_status_payload(self, *, check_health: bool = False) -> dict[str, object]:
         if not self.credentials.get("caido", "graphql_url") or not self.credentials.get("caido", "api_token"):
@@ -4604,9 +4712,11 @@ class PrimordialRuntime:
     def _rag_context_ids(self, rag_context: list[dict[str, object]]) -> list[str]:
         ids: list[str] = []
         for item in rag_context:
-            chunk_id = str(item.get("chunk_id") or "").strip()
-            if chunk_id:
-                ids.append(chunk_id)
+            for key in ("citation_id", "chunk_id"):
+                ref = str(item.get(key) or "").strip()
+                if not ref:
+                    continue
+                ids.append(ref if ref.startswith("rag:") else f"rag:{ref}")
         return sorted(set(ids))
 
     def _operator_answer_cites_rag_context(self, body: str, rag_context: list[dict[str, object]]) -> bool:
@@ -4627,13 +4737,16 @@ class PrimordialRuntime:
             if item.get("error"):
                 continue
             chunk_id = str(item.get("chunk_id") or "")
+            citation_id = str(item.get("citation_id") or chunk_id).strip()
+            if citation_id and not citation_id.startswith("rag:"):
+                citation_id = f"rag:{citation_id}"
             refs = item.get("evidence_refs", [])
             evidence = ", ".join(f"`{ref}`" for ref in refs) if isinstance(refs, list) else ""
             title = str(item.get("source_display") or item.get("title") or "Imported document")
             text = str(item.get("text") or "").replace("\n", " ").strip()
             if len(text) > 220:
                 text = text[:220].rstrip() + "..."
-            lines.append(f"- `rag:{chunk_id}` linked_evidence={evidence or 'none'} advisory_only=true {title}: {text}")
+            lines.append(f"- `{citation_id}` linked_evidence={evidence or 'none'} advisory_only=true {title}: {text}")
         if not lines:
             return base
         return base + "\n\n**RAG Hints (not evidence)**\n" + "\n".join(lines)
@@ -6148,37 +6261,93 @@ class PrimordialRuntime:
             ],
         }
 
-    def _default_operator_intent_for_profile(self, profile: ScopeProfile) -> str:
-        if profile == ScopeProfile.HACK_THE_BOX:
-            return "htb_lab"
-        return OperatorIntentRegistry.DEFAULT_INTENT_ID
+    def _load_environment_classifier(self, project_root: Path) -> EnvironmentClassifier:
+        candidates = [
+            project_root / "goal" / "fragments" / "environments.yaml",
+            Path(__file__).resolve().parents[2] / "goal" / "fragments" / "environments.yaml",
+        ]
+        for environment_contract in candidates:
+            if not environment_contract.exists():
+                continue
+            try:
+                return EnvironmentClassifier.from_goal_file(environment_contract)
+            except Exception:  # noqa: BLE001 - fall back to the next deterministic source.
+                continue
+        return EnvironmentClassifier.default()
 
-    def _ensure_profile_default_operator_intent(self, profile: ScopeProfile) -> None:
-        default_intent = self._default_operator_intent_for_profile(profile)
-        if default_intent == OperatorIntentRegistry.DEFAULT_INTENT_ID:
-            return
+    def _classify_environment(
+        self,
+        *,
+        profile: str,
+        resolved_profile: str | None = None,
+        payload: dict[str, object] | None = None,
+        target_metadata: dict[str, object] | None = None,
+        asset_metadata: list[dict[str, object]] | None = None,
+    ) -> EnvironmentClassification:
+        return self.environment_classifier.classify(
+            profile=profile,
+            resolved_profile=resolved_profile,
+            payload=payload,
+            target_metadata=target_metadata,
+            asset_metadata=asset_metadata,
+        )
+
+    def _default_operator_intent_for_environment(self, classification: EnvironmentClassification) -> str:
+        if not classification.upgrade_applied:
+            return OperatorIntentRegistry.DEFAULT_INTENT_ID
+        if not self._operator_intent_exists(classification.default_intent):
+            return OperatorIntentRegistry.DEFAULT_INTENT_ID
+        return classification.default_intent
+
+    def _operator_intent_exists(self, intent_id: str) -> bool:
         self._load_operator_intents()
         try:
-            intent = self.operator_intents.get(default_intent)
+            self.operator_intents.get(intent_id)
         except KeyError:
+            return False
+        return True
+
+    def _ensure_profile_default_operator_intent(
+        self,
+        profile: ScopeProfile,
+        *,
+        classification: EnvironmentClassification | None = None,
+    ) -> None:
+        classification = classification or self._classify_environment(profile=profile.value)
+        default_intent = self._default_operator_intent_for_environment(classification)
+        if default_intent == OperatorIntentRegistry.DEFAULT_INTENT_ID:
             return
+        intent = self.operator_intents.get(default_intent)
         session = self.store.get_active_session()
         if session is None:
-            self.start_session(profile=profile)
+            self.start_session(profile=profile, environment_classification=classification)
             return
         current_intent = str(session.metadata.get("operator_intent_id") or OperatorIntentRegistry.DEFAULT_INTENT_ID)
         if current_intent != OperatorIntentRegistry.DEFAULT_INTENT_ID:
             return
         session.metadata["operator_intent_id"] = intent.id
+        session.metadata["environment_classification"] = classification.as_payload()
         session.updated_at = utc_now()
         self.store.insert_session(session)
         self.store.insert_event(
             EventRecord(
                 type=EventType.BOOTSTRAP,
                 summary=f"Operator intent defaulted for {profile.value} scope: {intent.id}",
-                metadata={"operator_intent": intent.as_payload(), "profile": profile.value, "session_id": session.id},
+                metadata={
+                    "operator_intent": intent.as_payload(),
+                    "profile": profile.value,
+                    "session_id": session.id,
+                    "environment_classification": classification.as_payload(),
+                },
             )
         )
+
+    def _asset_metadata_from_entries(self, entries: list[str | dict[str, object]]) -> list[dict[str, object]]:
+        metadata: list[dict[str, object]] = []
+        for entry in entries:
+            if isinstance(entry, dict) and isinstance(entry.get("metadata"), dict):
+                metadata.append(dict(entry["metadata"]))
+        return metadata
 
     def _normalize_scope_profile_id(self, value: str) -> str:
         normalized = re.sub(r"[^a-z0-9_]+", "_", str(value).strip().lower())

@@ -32,6 +32,32 @@ class ContextReportSourceRefTests(unittest.TestCase):
         self.assertTrue(any("unsupported source_refs" in error for error in result.errors))
         self.assertTrue(any("github:issue-42" in error for error in result.errors))
 
+    def test_report_sink_rejects_ai_summary_with_unresolved_note_source_refs(self) -> None:
+        envelope = ContextEnvelope(
+            ref="model:fabricated-note-report-summary",
+            kind="model_summary",
+            authority="derived",
+            source_type="ai_output",
+            target_id="target-a",
+            purpose="report_generation",
+            sink="report",
+            content="Report summaries must not cite fabricated operator notes as provenance.",
+            citations=["note:made-up"],
+            metadata={"source_refs": ["note:made-up"]},
+        )
+
+        result = ContextSinkValidator().validate(
+            "report",
+            [envelope],
+            known_note_refs={"note:operator-1"},
+        )
+
+        self.assertFalse(result.valid)
+        self.assertEqual(result.accepted_refs, [])
+        self.assertEqual(result.rejected_refs, ["model:fabricated-note-report-summary"])
+        self.assertTrue(any("unresolved note citation" in error for error in result.errors))
+        self.assertTrue(any("note:made-up" in error for error in result.errors))
+
 
 if __name__ == "__main__":
     unittest.main()

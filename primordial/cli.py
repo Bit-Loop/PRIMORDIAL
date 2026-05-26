@@ -145,6 +145,8 @@ def build_parser() -> argparse.ArgumentParser:
     findings_show.add_argument("--json", action="store_true")
     findings_sync = findings_subparsers.add_parser("sync", help="Regenerate local Notion export mirrors from runtime state.")
     findings_sync.add_argument("--json", action="store_true")
+    findings_audit = findings_subparsers.add_parser("audit", help="Audit generated findings exports for quarantine metadata.")
+    findings_audit.add_argument("--json", action="store_true")
 
     rag = subparsers.add_parser("rag", help="Import selected local documents and search cited RAG chunks.")
     rag_subparsers = rag.add_subparsers(dest="rag_command")
@@ -580,6 +582,17 @@ def main(argv: list[str] | None = None) -> int:
                     for item in payload["synced"]:
                         workspace = item["workspace"]
                         print(f"{item['target']}: {workspace['notion_export_path']}")
+                return 0
+            if findings_command == "audit":
+                payload = runtime.audit_findings_context_exports()
+                if args.json:
+                    print(json.dumps(payload, indent=2, sort_keys=True))
+                else:
+                    summary = payload["summary"]
+                    print(
+                        f"generated_exports={summary['files_seen']} "
+                        f"quarantine_required={summary['quarantine_required']}"
+                    )
                 return 0
         if command == "rag":
             rag_command = args.rag_command

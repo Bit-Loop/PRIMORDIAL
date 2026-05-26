@@ -90,6 +90,47 @@ class ContextCitationValidatorTests(unittest.TestCase):
         self.assertTrue(any("unresolved evidence citation" in error for error in result.errors))
         self.assertTrue(any("evidence:made-up" in error for error in result.errors))
 
+    def test_human_readable_known_evidence_ref_resolves_canonical_citation(self) -> None:
+        envelope = ContextEnvelope(
+            ref="model:target-summary",
+            kind="model_summary",
+            authority="derived",
+            source_type="ai_output",
+            target_id="target-a",
+            purpose="target_state_answer",
+            sink="report",
+            content="The target is running Apache 2.4.49.",
+            citations=["evidence:observed-banner"],
+            metadata={"contains_target_fact": True},
+        )
+
+        result = CitationValidator(known_evidence_refs={"Evidence:observed-banner"}).validate([envelope])
+
+        self.assertTrue(result.valid)
+        self.assertEqual(result.accepted_refs, ["model:target-summary"])
+        self.assertEqual(result.rejected_refs, [])
+
+    def test_target_factual_claim_rejects_placeholder_evidence_citation_without_known_refs(self) -> None:
+        envelope = ContextEnvelope(
+            ref="model:target-summary",
+            kind="model_summary",
+            authority="derived",
+            source_type="ai_output",
+            target_id="target-a",
+            purpose="target_state_answer",
+            sink="report",
+            content="The target is running Apache 2.4.49.",
+            citations=["evidence:unknown"],
+            metadata={"contains_target_fact": True},
+        )
+
+        result = CitationValidator().validate([envelope])
+
+        self.assertFalse(result.valid)
+        self.assertEqual(result.rejected_refs, ["model:target-summary"])
+        self.assertTrue(any("placeholder evidence citation" in error for error in result.errors))
+        self.assertTrue(any("evidence:unknown" in error for error in result.errors))
+
     def test_target_factual_claim_rejects_mixed_non_evidence_citation_support(self) -> None:
         envelopes = [
             self._target_fact("model:evidence-only", ["evidence:observed-banner"]),

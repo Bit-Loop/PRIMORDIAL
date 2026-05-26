@@ -1,0 +1,34 @@
+version: 1
+source: goal/fragments/authority.yaml
+summary: Core PRIMORDIAL authority hierarchy for generated goal instructions.
+authoritative_sources:
+  - id: runtime_store
+    label: RuntimeStore durable state
+  - id: evidence_records
+    label: Evidence records
+  - id: target_scope
+    label: Target scope
+  - id: approvals
+    label: Durable approvals
+  - id: operator_intent
+    label: Active Operator Intent
+advisory_sources:
+  - id: chat
+    label: Chat
+  - id: rag
+    label: RAG
+  - id: model_output
+    label: Model output
+  - id: notion
+    label: Notion projections and inbox
+  - id: github
+    label: GitHub engineering ledger
+rules:
+  - id: authority.runtime_state
+    text: RuntimeStore, evidence records, target scope, approvals, and active Operator Intent are authoritative.
+  - id: authority.advisory_context
+    text: Chat, RAG, and model output are advisory unless deterministically promoted through evidence, policy, and review.
+  - id: authority.no_rag_to_evidence
+    text: RAG chunks cannot become evidence without explicit evidence records.
+  - id: authority.no_policy_duplication
+    text: Policy decisions must stay centralized and must not be reimplemented in UI, prompts, integrations, workers, or model-specific hacks.

@@ -110,38 +110,124 @@ class FindingsContextService:
         export_lines = [
             f"# {target.display_name} Notion Export",
             "",
+            "<!-- primordial-generated-export",
+            "origin: generated_export",
+            "ingest_allowed: false",
+            "operational_retrieval_allowed: false",
+            "-->",
+            "",
             f"Target: `{target.handle}`",
             f"Profile: `{target.profile.value}`",
             f"Generated: {utc_now().isoformat()}",
+            "",
+            "## Authoritative Runtime State",
+            "",
+            f"- Target ID: `{target.id}`",
+            f"- Target handle: `{target.handle}`",
+            f"- Scope profile: `{target.profile.value}`",
+            "- Active Operator Intent: managed by RuntimeStore.",
+            "- Policy constraints: managed by PolicyEngine.",
             "",
             "## AI Agent Guidance",
             "",
             self.read_guidance(target, max_chars=2400) or "No target-specific guidance recorded.",
             "",
-            "## Findings",
+            "## Observed Evidence",
             "",
         ]
-        if findings:
-            export_lines.extend(f"- `{finding.severity.value}` {finding.title}: {finding.summary}" for finding in findings[:25])
-        else:
-            export_lines.append("- No verified findings recorded.")
-        export_lines.extend(["", "## Open Interests", ""])
-        if interests:
-            export_lines.extend(f"- `{interest.status.value}` {interest.title}: {interest.summary}" for interest in interests[:25])
-        else:
-            export_lines.append("- No open interests recorded.")
-        export_lines.extend(["", "## Recent Notes", ""])
-        if notes:
-            export_lines.extend(f"- {note.title}: {note.body[:500]}" for note in notes[:25])
-        else:
-            export_lines.append("- No notes recorded.")
-        export_lines.extend(["", "## Evidence References", ""])
         if evidence:
             export_lines.extend(f"- `{item.id}` {item.title}: {item.summary}" for item in evidence[:25])
         else:
             export_lines.append("- No evidence recorded.")
+        export_lines.extend(["", "## Reviewed Findings", ""])
+        if findings:
+            export_lines.extend(f"- `{finding.severity.value}` {finding.title}: {finding.summary}" for finding in findings[:25])
+        else:
+            export_lines.append("- No reviewed findings recorded.")
+        export_lines.extend(["", "## Operator Notes", ""])
+        if notes:
+            export_lines.extend(f"- {note.title}: {note.body[:500]}" for note in notes[:25])
+        else:
+            export_lines.append("- No operator notes recorded.")
+        export_lines.extend(["", "## Candidate Tasks", "", "- No candidate tasks recorded."])
+        export_lines.extend(["", "## Hypotheses", ""])
+        if interests:
+            export_lines.extend(f"- `{interest.status.value}` {interest.title}: {interest.summary}" for interest in interests[:25])
+        else:
+            export_lines.append("- No open interests recorded.")
+        export_lines.extend(
+            [
+                "",
+                "## AI Summaries",
+                "",
+                "- No cited AI summaries recorded.",
+                "",
+                "## RAG Advisory Material",
+                "",
+                "- No RAG advisory material recorded.",
+                "",
+                "## Blocked Actions",
+                "",
+                "- No blocked actions recorded.",
+                "",
+                "## CTFd Scoreboard Projection",
+                "",
+                "- No CTFd scoreboard projection recorded.",
+                "",
+                "## GitHub Links",
+                "",
+                "- No GitHub links recorded.",
+                "",
+                "## Sync Log / Conflicts",
+                "",
+                "- No sync conflicts recorded.",
+            ]
+        )
         workspace.notion_export_path.write_text("\n".join(export_lines).rstrip() + "\n", encoding="utf-8")
         return workspace
+
+    def audit_generated_exports(self) -> dict[str, object]:
+        records: list[dict[str, object]] = []
+        for path in sorted(self.notion_exports_dir.glob("*/notion-export.md")):
+            markers = self._generated_export_markers(path)
+            missing = [
+                name
+                for name, expected in (
+                    ("origin", "generated_export"),
+                    ("ingest_allowed", "false"),
+                    ("operational_retrieval_allowed", "false"),
+                )
+                if markers.get(name) != expected
+            ]
+            requires_quarantine = bool(missing)
+            target_fragment = path.parent.name
+            archive_path = self.notion_exports_dir / "_archive" / target_fragment / path.name
+            records.append(
+                {
+                    "path": str(path),
+                    "status": "requires_quarantine" if requires_quarantine else "ok",
+                    "missing_metadata": missing,
+                    "origin": markers.get("origin", ""),
+                    "ingest_allowed": markers.get("ingest_allowed", ""),
+                    "operational_retrieval_allowed": markers.get("operational_retrieval_allowed", ""),
+                    "planned_action": "archive_quarantine" if requires_quarantine else "none",
+                    "archive_path": str(archive_path) if requires_quarantine else "",
+                    "quarantine_metadata": {
+                        "origin": "generated_export",
+                        "ingest_allowed": False,
+                        "operational_retrieval_allowed": False,
+                    }
+                    if requires_quarantine
+                    else {},
+                }
+            )
+        return {
+            "summary": {
+                "files_seen": len(records),
+                "quarantine_required": sum(1 for item in records if item["status"] == "requires_quarantine"),
+            },
+            "generated_exports": records,
+        }
 
     def read_guidance(self, target: Target, *, max_chars: int = 4000) -> str:
         workspace = self.ensure_target(target)
@@ -183,3 +269,15 @@ class FindingsContextService:
 
     def _safe_fragment(self, value: str) -> str:
         return re.sub(r"[^A-Za-z0-9_.-]+", "_", value.strip()).strip("._-")[:100] or "target"
+
+    def _generated_export_markers(self, path: Path) -> dict[str, str]:
+        body = self._bounded_read(path, max_chars=4096)
+        markers: dict[str, str] = {}
+        for line in body.splitlines():
+            if ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            clean_key = key.strip().lower()
+            if clean_key in {"origin", "ingest_allowed", "operational_retrieval_allowed"}:
+                markers[clean_key] = value.strip().lower()
+        return markers

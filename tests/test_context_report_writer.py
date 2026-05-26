@@ -55,6 +55,206 @@ class ContextReportWriterTests(unittest.TestCase):
         self.assertNotIn("Hidden solution sequence", rendered)
         self.assertNotIn("Unredacted secret", rendered)
 
+    def test_report_writer_rejects_model_summary_backed_by_active_postmortem_only_writeup(self) -> None:
+        envelopes = [
+            self._envelope(
+                "rag:generic-report-method",
+                "rag",
+                "methodology_doc",
+                "Generic reporting guidance is allowed as advisory context.",
+                ["rag:generic-report-method"],
+            ),
+            self._envelope(
+                "rag:postmortem-only-writeup",
+                "rag",
+                "writeup",
+                "Postmortem-only writeup content must not enter active report prompts.",
+                ["rag:postmortem-only-writeup"],
+                writeup_access_policy="postmortem_only",
+            ),
+            self._envelope(
+                "model:generic-report-method",
+                "model_summary",
+                "ai_output",
+                "Derived report guidance based on generic methodology.",
+                ["rag:generic-report-method"],
+                advisory_claim=True,
+            ),
+            self._envelope(
+                "model:postmortem-only-backed",
+                "model_summary",
+                "ai_output",
+                "Derived report prose based on postmortem-only writeup material.",
+                ["rag:postmortem-only-writeup"],
+                advisory_claim=True,
+            ),
+        ]
+
+        packet = ContextAssembler().assemble(
+            envelopes,
+            purpose="report_generation",
+            role="report_writer",
+            target_id="target-a",
+            active_generation_id="generation:2",
+        )
+
+        self.assertEqual([item["ref"] for item in packet["sections"]["RAG_ADVISORY"]], ["rag:generic-report-method"])
+        self.assertEqual([item["ref"] for item in packet["sections"]["MODEL_DERIVED"]], ["model:generic-report-method"])
+        omitted_refs = {item["ref"]: item["reason"] for item in packet["omitted"]}
+        self.assertEqual(omitted_refs["rag:postmortem-only-writeup"], "postmortem_only_forbidden")
+        self.assertEqual(omitted_refs["model:postmortem-only-backed"], "invalid_citation")
+        self.assertNotIn("model:postmortem-only-backed", packet["rendered"])
+
+    def test_report_writer_rejects_model_summary_backed_by_closed_book_writeup(self) -> None:
+        envelopes = [
+            self._envelope(
+                "rag:generic-report-method",
+                "rag",
+                "methodology_doc",
+                "Generic reporting guidance is allowed as advisory context.",
+                ["rag:generic-report-method"],
+            ),
+            self._envelope(
+                "rag:closed-book-writeup",
+                "rag",
+                "writeup",
+                "Closed-book writeup content must not enter active report prompts.",
+                ["rag:closed-book-writeup"],
+                benchmark_mode="closed_book",
+            ),
+            self._envelope(
+                "model:generic-report-method",
+                "model_summary",
+                "ai_output",
+                "Derived report guidance based on generic methodology.",
+                ["rag:generic-report-method"],
+                advisory_claim=True,
+            ),
+            self._envelope(
+                "model:closed-book-backed",
+                "model_summary",
+                "ai_output",
+                "Derived report prose based on closed-book writeup material.",
+                ["rag:closed-book-writeup"],
+                advisory_claim=True,
+            ),
+        ]
+
+        packet = ContextAssembler().assemble(
+            envelopes,
+            purpose="report_generation",
+            role="report_writer",
+            target_id="target-a",
+            active_generation_id="generation:2",
+        )
+
+        self.assertEqual([item["ref"] for item in packet["sections"]["RAG_ADVISORY"]], ["rag:generic-report-method"])
+        self.assertEqual([item["ref"] for item in packet["sections"]["MODEL_DERIVED"]], ["model:generic-report-method"])
+        omitted_refs = {item["ref"]: item["reason"] for item in packet["omitted"]}
+        self.assertEqual(omitted_refs["rag:closed-book-writeup"], "closed_book_forbidden")
+        self.assertEqual(omitted_refs["model:closed-book-backed"], "invalid_citation")
+        self.assertNotIn("model:closed-book-backed", packet["rendered"])
+
+    def test_report_writer_rejects_model_summary_backed_by_writeups_disabled_metadata(self) -> None:
+        envelopes = [
+            self._envelope(
+                "rag:generic-report-method",
+                "rag",
+                "methodology_doc",
+                "Generic reporting guidance is allowed as advisory context.",
+                ["rag:generic-report-method"],
+            ),
+            self._envelope(
+                "rag:writeups-disabled",
+                "rag",
+                "writeup",
+                "Writeup content with writeups disabled must not enter active report prompts.",
+                ["rag:writeups-disabled"],
+                writeups_allowed=False,
+            ),
+            self._envelope(
+                "model:generic-report-method",
+                "model_summary",
+                "ai_output",
+                "Derived report guidance based on generic methodology.",
+                ["rag:generic-report-method"],
+                advisory_claim=True,
+            ),
+            self._envelope(
+                "model:writeups-disabled-backed",
+                "model_summary",
+                "ai_output",
+                "Derived report prose based on writeup content that policy disabled.",
+                ["rag:writeups-disabled"],
+                advisory_claim=True,
+            ),
+        ]
+
+        packet = ContextAssembler().assemble(
+            envelopes,
+            purpose="report_generation",
+            role="report_writer",
+            target_id="target-a",
+            active_generation_id="generation:2",
+        )
+
+        self.assertEqual([item["ref"] for item in packet["sections"]["RAG_ADVISORY"]], ["rag:generic-report-method"])
+        self.assertEqual([item["ref"] for item in packet["sections"]["MODEL_DERIVED"]], ["model:generic-report-method"])
+        omitted_refs = {item["ref"]: item["reason"] for item in packet["omitted"]}
+        self.assertEqual(omitted_refs["rag:writeups-disabled"], "writeups_forbidden")
+        self.assertEqual(omitted_refs["model:writeups-disabled-backed"], "invalid_citation")
+        self.assertNotIn("model:writeups-disabled-backed", packet["rendered"])
+
+    def test_report_writer_rejects_model_summary_backed_by_forbidden_writeup_policy(self) -> None:
+        envelopes = [
+            self._envelope(
+                "rag:generic-report-method",
+                "rag",
+                "methodology_doc",
+                "Generic reporting guidance is allowed as advisory context.",
+                ["rag:generic-report-method"],
+            ),
+            self._envelope(
+                "rag:forbidden-writeup",
+                "rag",
+                "writeup",
+                "Writeup content with a forbidden policy must not enter active report prompts.",
+                ["rag:forbidden-writeup"],
+                writeup_access_policy="forbidden",
+            ),
+            self._envelope(
+                "model:generic-report-method",
+                "model_summary",
+                "ai_output",
+                "Derived report guidance based on generic methodology.",
+                ["rag:generic-report-method"],
+                advisory_claim=True,
+            ),
+            self._envelope(
+                "model:forbidden-writeup-backed",
+                "model_summary",
+                "ai_output",
+                "Derived report prose based on writeup content that policy forbids.",
+                ["rag:forbidden-writeup"],
+                advisory_claim=True,
+            ),
+        ]
+
+        packet = ContextAssembler().assemble(
+            envelopes,
+            purpose="report_generation",
+            role="report_writer",
+            target_id="target-a",
+            active_generation_id="generation:2",
+        )
+
+        self.assertEqual([item["ref"] for item in packet["sections"]["RAG_ADVISORY"]], ["rag:generic-report-method"])
+        self.assertEqual([item["ref"] for item in packet["sections"]["MODEL_DERIVED"]], ["model:generic-report-method"])
+        omitted_refs = {item["ref"]: item["reason"] for item in packet["omitted"]}
+        self.assertEqual(omitted_refs["rag:forbidden-writeup"], "writeups_forbidden")
+        self.assertEqual(omitted_refs["model:forbidden-writeup-backed"], "invalid_citation")
+        self.assertNotIn("model:forbidden-writeup-backed", packet["rendered"])
+
     def test_report_sink_rejects_ai_summary_with_only_collaboration_citation(self) -> None:
         envelope = ContextEnvelope(
             ref="model:github-only-summary",
@@ -116,6 +316,62 @@ class ContextReportWriterTests(unittest.TestCase):
         self.assertEqual(result.rejected_refs, ["model:confirmed-summary"])
         self.assertTrue(any("truth-like authority" in error for error in result.errors))
 
+    def test_report_sink_rejects_nested_truth_like_authority_on_ai_summary(self) -> None:
+        envelope = ContextEnvelope(
+            ref="model:nested-confirmed-summary",
+            kind="model_summary",
+            authority="derived",
+            source_type="ai_output",
+            target_id="target-a",
+            purpose="report_generation",
+            sink="report",
+            content="Nested metadata must not let AI-derived report context claim confirmed target truth.",
+            citations=["evidence:http-banner"],
+            metadata={
+                "source_refs": ["evidence:http-banner"],
+                "metadata": {"authority": "confirmed"},
+            },
+        )
+
+        result = ContextSinkValidator().validate(
+            "report",
+            [envelope],
+            known_evidence_refs={"evidence:http-banner"},
+        )
+
+        self.assertFalse(result.valid)
+        self.assertEqual(result.accepted_refs, [])
+        self.assertEqual(result.rejected_refs, ["model:nested-confirmed-summary"])
+        self.assertTrue(any("truth-like authority" in error for error in result.errors))
+
+    def test_report_sink_rejects_plural_nested_truth_like_authorities_on_ai_summary(self) -> None:
+        envelope = ContextEnvelope(
+            ref="model:nested-confirmed-authorities-summary",
+            kind="model_summary",
+            authority="derived",
+            source_type="ai_output",
+            target_id="target-a",
+            purpose="report_generation",
+            sink="report",
+            content="Nested plural metadata must not let AI-derived report context claim confirmed target truth.",
+            citations=["evidence:http-banner"],
+            metadata={
+                "source_refs": ["evidence:http-banner"],
+                "metadata": {"authorities": ["confirmed"]},
+            },
+        )
+
+        result = ContextSinkValidator().validate(
+            "report",
+            [envelope],
+            known_evidence_refs={"evidence:http-banner"},
+        )
+
+        self.assertFalse(result.valid)
+        self.assertEqual(result.accepted_refs, [])
+        self.assertEqual(result.rejected_refs, ["model:nested-confirmed-authorities-summary"])
+        self.assertTrue(any("truth-like authority" in error for error in result.errors))
+
     def test_report_sink_rejects_generated_export_recursion(self) -> None:
         envelopes = [
             ContextEnvelope(
@@ -155,6 +411,35 @@ class ContextReportWriterTests(unittest.TestCase):
             result.rejected_refs,
             ["model:export-origin-report-summary", "model:generated-export-report-summary"],
         )
+        self.assertTrue(any("generated export" in error for error in result.errors))
+
+    def test_report_sink_rejects_generated_export_source_path(self) -> None:
+        envelope = ContextEnvelope(
+            ref="model:export-path-report-summary",
+            kind="model_summary",
+            authority="derived",
+            source_type="ai_output",
+            target_id="target-a",
+            active_generation_id="generation:2",
+            purpose="report_generation",
+            sink="report",
+            content="AI prose sourced from a generated Notion export must not feed report output.",
+            citations=["evidence:http-banner"],
+            metadata={
+                "source_file": "findings/notion/target-a/notion-export.md",
+                "source_refs": ["evidence:http-banner"],
+            },
+        )
+
+        result = ContextSinkValidator().validate(
+            "report",
+            [envelope],
+            known_evidence_refs={"evidence:http-banner"},
+        )
+
+        self.assertFalse(result.valid)
+        self.assertEqual(result.accepted_refs, [])
+        self.assertEqual(result.rejected_refs, ["model:export-path-report-summary"])
         self.assertTrue(any("generated export" in error for error in result.errors))
 
     def test_report_sink_rejects_non_evidence_sources_from_evidence_records(self) -> None:
@@ -347,6 +632,64 @@ class ContextReportWriterTests(unittest.TestCase):
         )
         for source_type in ("ai_output", "github", "notion"):
             self.assertTrue(any(f"source_type={source_type}" in error for error in result.errors), source_type)
+
+    def test_report_sink_rejects_masked_nested_non_evidence_source_type(self) -> None:
+        envelope = ContextEnvelope(
+            ref="evidence:masked-model-proof",
+            kind="evidence",
+            authority="observed",
+            source_type="tool_output",
+            target_id="target-a",
+            purpose="report_generation",
+            sink="report",
+            content="Top-level evidence source type must not mask nested model provenance.",
+            citations=["evidence:masked-model-proof"],
+            metadata={
+                "metadata": {
+                    "source_type": "ai_output",
+                },
+            },
+        )
+
+        result = ContextSinkValidator().validate("report", [envelope])
+
+        self.assertFalse(result.valid)
+        self.assertEqual(result.accepted_refs, [])
+        self.assertEqual(result.rejected_refs, ["evidence:masked-model-proof"])
+        self.assertTrue(any("source_type=ai_output" in error for error in result.errors))
+
+    def test_report_sink_rejects_ai_output_disguised_as_operator_note(self) -> None:
+        envelopes = [
+            ContextEnvelope(
+                ref="note:manual-operator",
+                kind="operator_note",
+                authority="asserted",
+                source_type="manual_artifact",
+                target_id="target-a",
+                purpose="report_generation",
+                sink="report",
+                content="Human operator notes may provide report context.",
+                citations=["note:manual-operator"],
+            ),
+            ContextEnvelope(
+                ref="note:model-generated",
+                kind="operator_note",
+                authority="asserted",
+                source_type="ai_output",
+                target_id="target-a",
+                purpose="report_generation",
+                sink="report",
+                content="Model prose must not masquerade as an operator note in report context.",
+                citations=["note:model-generated"],
+            ),
+        ]
+
+        result = ContextSinkValidator().validate("report", envelopes)
+
+        self.assertFalse(result.valid)
+        self.assertEqual(result.accepted_refs, ["note:manual-operator"])
+        self.assertEqual(result.rejected_refs, ["note:model-generated"])
+        self.assertTrue(any("non_operator_note_source" in error for error in result.errors))
 
     def test_report_sink_rejects_finding_shaped_records_without_finding_refs(self) -> None:
         envelopes = [

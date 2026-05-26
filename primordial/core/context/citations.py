@@ -5,15 +5,19 @@ from typing import Iterable
 
 from primordial.core.context.envelopes import ContextEnvelope
 from primordial.core.context.poison import has_context_flag
+from primordial.core.context.source_refs import PLACEHOLDER_SOURCE_REFS, placeholder_source_refs
 
 
 EVIDENCE_CITATION_PREFIX = "evidence:"
 RAG_CITATION_PREFIX = "rag:"
-NON_EVIDENCE_PROOF_CITATION_PREFIXES = ("rag:", "model:", "github:", "notion:", "ctfd:", "chat:")
-TARGET_FACT_NON_EVIDENCE_CITATION_PREFIXES = ("model:", "github:", "notion:", "ctfd:", "chat:")
+CANONICAL_CITATION_PREFIXES = ("evidence:", "note:", "rag:")
+NON_EVIDENCE_PROOF_CITATION_PREFIXES = ("rag:", "note:", "model:", "github:", "notion:", "ctfd:", "chat:")
+TARGET_FACT_NON_EVIDENCE_CITATION_PREFIXES = ("note:", "model:", "github:", "notion:", "ctfd:", "chat:")
 TARGET_FACT_ADVISORY_CITATION_PREFIXES = ("rag:",)
 ADVISORY_NON_RAG_CITATION_PREFIXES = ("model:", "github:", "notion:", "ctfd:", "chat:")
-PLACEHOLDER_RAG_REFS = frozenset({"rag:none", "rag:null", "rag:unknown"})
+PLACEHOLDER_RAG_REFS = frozenset(
+    ref for ref in PLACEHOLDER_SOURCE_REFS if ref.startswith(RAG_CITATION_PREFIX)
+)
 REVIEWED_FINDING_AUTHORITIES = frozenset({"canonical", "authoritative", "confirmed", "observed", "reviewed"})
 TARGET_FACT_METADATA_KEYS = frozenset({"contains_target_fact", "target_factual_claim", "target_fact"})
 ADVISORY_CLAIM_METADATA_KEYS = frozenset({"advisory_claim", "contains_advisory_claim", "rag_advisory_claim"})
@@ -73,6 +77,13 @@ class CitationValidator:
         result: CitationValidationResult,
     ) -> None:
         evidence_citations = _citations_with_prefix(envelope, EVIDENCE_CITATION_PREFIX)
+        placeholder_refs = placeholder_source_refs(evidence_citations)
+        if placeholder_refs:
+            result.rejected_refs.append(envelope.ref)
+            result.errors.append(
+                f"{envelope.ref} has placeholder evidence citation(s): {', '.join(placeholder_refs)}"
+            )
+            return
         if evidence_citations:
             unresolved = _unresolved_refs(evidence_citations, self.known_evidence_refs)
             if unresolved:
@@ -206,7 +217,7 @@ def _citations_with_prefixes(envelope: ContextEnvelope, prefixes: Iterable[str])
 
 def _placeholder_rag_refs(envelope: ContextEnvelope, rag_citations: list[str]) -> list[str]:
     refs = [envelope.ref, *rag_citations]
-    return sorted({ref for ref in refs if str(ref).strip().lower() in PLACEHOLDER_RAG_REFS})
+    return [ref for ref in placeholder_source_refs(refs) if ref.startswith(RAG_CITATION_PREFIX)]
 
 
 def _has_target_fact_marker(envelope: ContextEnvelope) -> bool:
@@ -220,10 +231,18 @@ def _has_advisory_claim_marker(envelope: ContextEnvelope) -> bool:
 def _normalized_ref_set(refs: Iterable[str] | None) -> set[str] | None:
     if refs is None:
         return None
-    return {str(ref).strip() for ref in refs if str(ref).strip()}
+    return {_canonical_ref(ref) for ref in refs if _canonical_ref(ref)}
 
 
 def _unresolved_refs(citations: list[str], known_refs: set[str] | None) -> list[str]:
     if known_refs is None:
         return []
-    return sorted(set(citations) - known_refs)
+    return sorted({_canonical_ref(citation) for citation in citations} - known_refs)
+
+
+def _canonical_ref(value: object) -> str:
+    ref = str(value or "").strip()
+    for prefix in CANONICAL_CITATION_PREFIXES:
+        if ref.lower().startswith(prefix):
+            return f"{prefix}{ref[len(prefix):].strip()}"
+    return ref

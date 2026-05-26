@@ -188,6 +188,33 @@ class ContextAssemblerSourceBoundaryTests(unittest.TestCase):
         self.assertEqual(omitted_refs["note:raw-chat"], "raw_chat_context")
         self.assertNotIn("note:raw-chat", packet["rendered"])
 
+    def test_assembler_omits_model_context_backed_by_unresolved_note_source_refs(self) -> None:
+        envelopes = [
+            self._envelope("note:operator", "operator_note", "asserted", "manual_artifact", ["note:operator"]),
+            self._envelope(
+                "model:fabricated-note-summary",
+                "model_summary",
+                "derived",
+                "ai_output",
+                ["note:made-up"],
+                metadata={"source_refs": ["note:made-up"]},
+            ),
+        ]
+
+        packet = ContextAssembler().assemble(
+            envelopes,
+            purpose="planner",
+            role="methodology_advisor",
+            target_id="target-a",
+            active_generation_id="generation:2",
+        )
+
+        self.assertEqual([item["ref"] for item in packet["sections"]["OPERATOR_NOTES"]], ["note:operator"])
+        self.assertEqual(packet["sections"]["MODEL_DERIVED"], [])
+        omitted_refs = {item["ref"]: item["reason"] for item in packet["omitted"]}
+        self.assertEqual(omitted_refs["model:fabricated-note-summary"], "invalid_citation")
+        self.assertNotIn("model:fabricated-note-summary", packet["rendered"])
+
     def test_assembler_omits_reviewed_findings_with_unresolved_evidence_support(self) -> None:
         envelopes = [
             self._envelope("evidence:scan-1", "evidence", "observed", "tool_output", ["evidence:scan-1"]),

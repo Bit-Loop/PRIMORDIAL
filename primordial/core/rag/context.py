@@ -2,8 +2,27 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import re
+from types import SimpleNamespace
 from typing import Any
 
+from primordial.core.context.envelopes import ContextEnvelope
+from primordial.core.context.generated_exports import is_generated_export_metadata, is_generated_export_path
+from primordial.core.context.normalization import (
+    canonical_rag_domain,
+    metadata_bool_value,
+    metadata_list_value,
+    metadata_value,
+    normalized_context_key,
+    normalized_metadata_value,
+)
+from primordial.core.context.source_refs import (
+    has_malformed_source_refs_metadata,
+    placeholder_source_refs,
+    source_refs_metadata_values,
+    uncited_source_refs_metadata,
+    unsupported_ai_derived_source_refs,
+)
+from primordial.core.context.sinks import ContextSinkValidator
 from primordial.core.domain.enums import AgentRole, TaskKind
 from primordial.core.domain.models import DocumentChunk, Target, Task
 from primordial.core.intent.models import OperatorIntentPolicy
@@ -47,8 +66,6 @@ ACTION_SELECTION_PURPOSES = {
     "tool_execution",
     "planner",
 }
-
-
 @dataclass(slots=True)
 class RagContextSource:
     chunk_id: str
@@ -121,30 +138,110 @@ class RagContextPack:
             ]
             for item in self.chunks:
                 metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
-                source_display = str(item.get("source_display") or metadata.get("source_display") or item.get("title") or "")
-                text = str(item.get("text") or "").replace("\n", " ").strip()
+                explicit_source_display = metadata_value(item, "source_display") or metadata_value(
+                    metadata,
+                    "source_display",
+                )
+                title = str(metadata_value(item, "title") or metadata_value(metadata, "title") or "").strip()
+                source_file = str(
+                    metadata_value(item, "source_file")
+                    or metadata_value(item, "source_path")
+                    or metadata_value(metadata, "source_file")
+                    or metadata_value(metadata, "source_path")
+                    or ""
+                ).strip()
+                section = str(metadata_value(item, "section") or metadata_value(metadata, "section") or "").strip()
+                page_start = self._optional_int(metadata_value(item, "page_start") or metadata_value(metadata, "page_start"))
+                page_end = self._optional_int(metadata_value(item, "page_end") or metadata_value(metadata, "page_end"))
+                if explicit_source_display:
+                    source_display = str(explicit_source_display)
+                else:
+                    source_display = self._source_display(
+                        title=title,
+                        source_file=source_file,
+                        section=section,
+                        page_start=page_start,
+                        page_end=page_end,
+                    )
+                text = str(
+                    metadata_value(item, "text")
+                    or metadata_value(item, "retrieval_text")
+                    or metadata_value(item, "excerpt")
+                    or metadata_value(item, "raw_text")
+                    or metadata_value(metadata, "text")
+                    or metadata_value(metadata, "retrieval_text")
+                    or metadata_value(metadata, "excerpt")
+                    or metadata_value(metadata, "raw_text")
+                    or ""
+                ).replace("\n", " ").strip()
                 if len(text) > 520:
                     text = text[:520].rstrip() + "..."
+                domain = (
+                    metadata_value(item, "domain")
+                    or metadata_value(metadata, "domain")
+                    or metadata_value(item, "corpus_type")
+                    or metadata_value(metadata, "corpus_type")
+                    or ""
+                )
+                usage_policy = metadata_value(item, "usage_policy") or metadata_value(metadata, "usage_policy") or ""
                 lines.extend(
                     [
-                        f"[{item.get('citation_id')}] {source_display}",
-                        f"domain={metadata.get('domain') or metadata.get('corpus_type') or ''} "
-                        f"policy={metadata.get('usage_policy') or ''}",
+                        f"[{self._citation_id(item)}] {source_display}",
+                        f"domain={domain} policy={usage_policy}",
                         text,
                     ]
                 )
         if self.warnings:
             lines.append("Warnings: " + "; ".join(self.warnings[:5]))
         if self.omitted_sources:
-            omitted = ", ".join(f"{item.get('citation_id')}:{item.get('reason')}" for item in self.omitted_sources[:5])
+            omitted = ", ".join(f"{self._citation_id(item)}:{item.get('reason')}" for item in self.omitted_sources[:5])
             lines.append("Omitted RAG sources: " + omitted)
         rendered = "\n".join(lines).strip()
         return rendered[:max_chars].rstrip()
+
+    @staticmethod
+    def _citation_id(item: dict[str, object]) -> str:
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        citation_id = str(metadata_value(item, "citation_id") or metadata_value(metadata, "citation_id") or "").strip()
+        if not citation_id:
+            citation_id = str(metadata_value(item, "chunk_id") or metadata_value(item, "id") or "unknown").strip() or "unknown"
+        if citation_id.lower().startswith("rag:"):
+            return f"rag:{citation_id[4:].strip()}"
+        return f"rag:{citation_id}"
+
+    @staticmethod
+    def _source_display(
+        *,
+        title: str,
+        source_file: str,
+        section: str,
+        page_start: int | None,
+        page_end: int | None,
+    ) -> str:
+        label = section or title or source_file or ""
+        location = ""
+        if page_start and page_end and page_end != page_start:
+            location = f" pp. {page_start}-{page_end}"
+        elif page_start:
+            location = f" p. {page_start}"
+        if source_file and source_file not in label:
+            return f"{label} ({source_file}{location})"
+        return f"{label}{location}"
+
+    @staticmethod
+    def _optional_int(value: object) -> int | None:
+        if value is None or value == "":
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
 
 class RagContextBroker:
     def __init__(self, service: DocumentIngestionService) -> None:
         self.service = service
+        self.sink_validator = ContextSinkValidator()
 
     def build_pack(
         self,
@@ -193,20 +290,36 @@ class RagContextBroker:
                 pack.omitted_sources.append(omitted)
                 continue
             payload = item.as_payload(max_chars=1100)
+            payload["citation_id"] = source.citation_id
             payload["source_display"] = source.source_display
             metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
-            corpus_type = str(metadata.get("corpus_type") or source.domain)
-            cve_ids = metadata.get("cve_ids", [])
+            corpus_type = canonical_rag_domain(metadata_value(metadata, "corpus_type") or source.domain)
+            source_trust = normalized_metadata_value(metadata, "source_trust")
+            hint_policy = normalized_metadata_value(metadata, "hint_policy")
+            cve_ids = metadata_list_value(metadata, "cve_ids")
+            walkthrough_hint = metadata_bool_value(metadata, "walkthrough_hint")
             payload["metadata"] = {
                 **metadata,
+                "domain": source.domain,
+                "corpus_type": corpus_type,
                 "source_display": source.source_display,
                 "usage_policy": source.usage_policy,
+                "source_trust": source_trust,
+                "hint_policy": hint_policy,
+                "cve_ids": list(cve_ids),
+                "walkthrough_hint": walkthrough_hint,
             }
             payload["corpus_type"] = corpus_type
-            payload["source_trust"] = metadata.get("source_trust")
-            payload["hint_policy"] = metadata.get("hint_policy")
-            payload["cve_ids"] = list(cve_ids) if isinstance(cve_ids, list) else []
-            payload["walkthrough_hint"] = bool(metadata.get("walkthrough_hint") or corpus_type == "htb_writeup")
+            payload["source_trust"] = source_trust
+            payload["hint_policy"] = hint_policy
+            payload["cve_ids"] = list(cve_ids)
+            payload["walkthrough_hint"] = walkthrough_hint or corpus_type == "htb_writeup"
+            prompt_reject_reason = self._prompt_sink_reject_reason(payload, purpose=clean_purpose)
+            if prompt_reject_reason:
+                omitted = source.as_payload()
+                omitted["reason"] = prompt_reject_reason
+                pack.omitted_sources.append(omitted)
+                continue
             pack.chunks.append(payload)
             pack.citation_map.append(source.as_payload())
             if len(pack.chunks) >= limit:
@@ -221,27 +334,92 @@ class RagContextBroker:
             if not chunk_id:
                 continue
             metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
-            title = str(item.get("title") or metadata.get("title") or metadata.get("source_file") or chunk_id)
-            source_file = str(item.get("source_file") or metadata.get("source_file") or metadata.get("source_path") or "")
-            section = str(item.get("section") or metadata.get("section") or "")
+            title = str(
+                metadata_value(item, "title")
+                or metadata_value(metadata, "title")
+                or metadata_value(item, "source_file")
+                or metadata_value(item, "source_path")
+                or metadata_value(metadata, "source_file")
+                or metadata_value(metadata, "source_path")
+                or chunk_id
+            )
+            source_file = str(
+                metadata_value(item, "source_file")
+                or metadata_value(item, "source_path")
+                or metadata_value(metadata, "source_file")
+                or metadata_value(metadata, "source_path")
+                or ""
+            )
+            section = str(metadata_value(item, "section") or metadata_value(metadata, "section") or "")
+            page_start = self._optional_int(metadata_value(item, "page_start") or metadata_value(metadata, "page_start"))
+            page_end = self._optional_int(metadata_value(item, "page_end") or metadata_value(metadata, "page_end"))
+            source_display = str(
+                metadata_value(item, "source_display")
+                or metadata_value(metadata, "source_display")
+                or self._source_display(
+                    title=title,
+                    source_file=source_file,
+                    section=section,
+                    page_start=page_start,
+                    page_end=page_end,
+                )
+            )
+            usage_metadata = {
+                **metadata,
+                "domain": metadata_value(item, "domain") or metadata_value(metadata, "domain"),
+                "corpus_type": metadata_value(item, "corpus_type") or metadata_value(metadata, "corpus_type"),
+                "planner_visibility": metadata_value(item, "planner_visibility")
+                or metadata_value(metadata, "planner_visibility"),
+                "risk_level": metadata_value(item, "risk_level") or metadata_value(metadata, "risk_level"),
+                "requires_operator_approval": metadata_value(item, "requires_operator_approval")
+                or metadata_value(metadata, "requires_operator_approval"),
+            }
             source = RagContextSource(
                 chunk_id=chunk_id,
-                citation_id=str(item.get("citation_id") or f"rag:{chunk_id}"),
-                source_display=self._source_display(title=title, source_file=source_file, section=section, page_start=self._optional_int(metadata.get("page_start")), page_end=self._optional_int(metadata.get("page_end"))),
+                citation_id=self._normalize_citation_id(
+                    str(metadata_value(item, "citation_id") or metadata_value(metadata, "citation_id") or chunk_id)
+                ),
+                source_display=source_display,
                 source_file=source_file,
                 title=title,
                 section=section,
-                page_start=self._optional_int(metadata.get("page_start")),
-                page_end=self._optional_int(metadata.get("page_end")),
-                domain=str(metadata.get("domain") or metadata.get("corpus_type") or item.get("domain") or ""),
-                risk_level=str(metadata.get("risk_level") or ""),
-                planner_visibility=str(metadata.get("planner_visibility") or ""),
-                usage_policy=self._usage_policy_from_metadata(metadata),
-                excerpt=self._excerpt(str(item.get("text") or item.get("retrieval_text") or "")),
+                page_start=page_start,
+                page_end=page_end,
+                domain=canonical_rag_domain(
+                    metadata_value(item, "domain")
+                    or metadata_value(metadata, "domain")
+                    or metadata_value(item, "corpus_type")
+                    or metadata_value(metadata, "corpus_type")
+                ),
+                risk_level=normalized_metadata_value(item, "risk_level") or normalized_metadata_value(metadata, "risk_level"),
+                planner_visibility=normalized_metadata_value(item, "planner_visibility")
+                or normalized_metadata_value(metadata, "planner_visibility"),
+                usage_policy=self._usage_policy_from_metadata(usage_metadata),
+                excerpt=self._excerpt(
+                    str(
+                        metadata_value(item, "text")
+                        or metadata_value(item, "retrieval_text")
+                        or metadata_value(item, "excerpt")
+                        or metadata_value(item, "raw_text")
+                        or metadata_value(metadata, "text")
+                        or metadata_value(metadata, "retrieval_text")
+                        or metadata_value(metadata, "excerpt")
+                        or metadata_value(metadata, "raw_text")
+                        or ""
+                    )
+                ),
                 score=float(item.get("score") or 0.0),
             )
             sources.append(source.as_payload())
         return sources
+
+    def _normalize_citation_id(self, citation_id: str) -> str:
+        clean = citation_id.strip()
+        if not clean or clean.lower() in {"rag:none", "rag:null", "rag:unknown"}:
+            clean = "unknown"
+        if clean.lower().startswith("rag:"):
+            return f"rag:{clean[4:].strip()}"
+        return f"rag:{clean}"
 
     def _retrieve(
         self,
@@ -268,8 +446,18 @@ class RagContextBroker:
         intent_policy: OperatorIntentPolicy | None,
     ) -> str:
         metadata = chunk.metadata
-        domain = str(metadata.get("domain") or metadata.get("corpus_type") or "")
-        planner_visibility = str(metadata.get("planner_visibility") or "")
+        domain = canonical_rag_domain(metadata_value(metadata, "domain") or metadata_value(metadata, "corpus_type"))
+        planner_visibility = normalized_metadata_value(metadata, "planner_visibility")
+        if _is_generated_export_metadata(metadata):
+            return "generated_export"
+        source_refs_reason = _source_refs_metadata_reject_reason(metadata)
+        if source_refs_reason:
+            return source_refs_reason
+        if normalized_metadata_value(metadata, "operational_retrieval_allowed") in {"0", "false", "no", "off"}:
+            return "operational_retrieval_disabled"
+        rag_index_reason = self._rag_index_reject_reason(chunk)
+        if rag_index_reason:
+            return rag_index_reason
         if self._is_taxonomy_only(domain, planner_visibility) and purpose in ACTION_SELECTION_PURPOSES:
             return "taxonomy-only material cannot drive action selection"
         if self._is_taxonomy_only(domain, planner_visibility) and purpose == "operator_answer":
@@ -289,27 +477,43 @@ class RagContextBroker:
     def _source_for_item(self, item: RagContextItem) -> RagContextSource:
         chunk = item.chunk
         metadata = chunk.metadata
-        title = str(chunk.title or metadata.get("title") or metadata.get("source_file") or chunk.id)
-        source_file = str(metadata.get("source_file") or metadata.get("source_path") or "")
-        section = str(metadata.get("section") or "")
-        page_start = self._optional_int(metadata.get("page_start"))
-        page_end = self._optional_int(metadata.get("page_end"))
+        title = str(chunk.title or metadata_value(metadata, "title") or metadata_value(metadata, "source_file") or chunk.id)
+        source_file = str(metadata_value(metadata, "source_file") or metadata_value(metadata, "source_path") or "")
+        section = str(metadata_value(metadata, "section") or "")
+        page_start = self._optional_int(metadata_value(metadata, "page_start"))
+        page_end = self._optional_int(metadata_value(metadata, "page_end"))
+        source_display = str(
+            metadata_value(metadata, "source_display")
+            or self._source_display(
+                title=title,
+                source_file=source_file,
+                section=section,
+                page_start=page_start,
+                page_end=page_end,
+            )
+        )
         return RagContextSource(
             chunk_id=chunk.id,
-            citation_id=f"rag:{chunk.id}",
-            source_display=self._source_display(title=title, source_file=source_file, section=section, page_start=page_start, page_end=page_end),
+            citation_id=self._citation_id_for_chunk(chunk),
+            source_display=source_display,
             source_file=source_file,
             title=title,
             section=section,
             page_start=page_start,
             page_end=page_end,
-            domain=str(metadata.get("domain") or metadata.get("corpus_type") or ""),
-            risk_level=str(metadata.get("risk_level") or ""),
-            planner_visibility=str(metadata.get("planner_visibility") or ""),
+            domain=canonical_rag_domain(metadata_value(metadata, "domain") or metadata_value(metadata, "corpus_type")),
+            risk_level=normalized_metadata_value(metadata, "risk_level"),
+            planner_visibility=normalized_metadata_value(metadata, "planner_visibility"),
             usage_policy=self._usage_policy_from_metadata(metadata),
             excerpt=self._excerpt(chunk.text),
             score=item.score,
         )
+
+    def _citation_id_for_chunk(self, chunk: DocumentChunk) -> str:
+        citation_id = str(metadata_value(chunk.metadata, "citation_id") or "").strip()
+        if not citation_id or citation_id.lower() in {"rag:none", "rag:null", "rag:unknown"}:
+            citation_id = chunk.id
+        return self._normalize_citation_id(citation_id)
 
     def _allowed_domains_for(self, *, role: str, purpose: str) -> set[str]:
         if purpose == "rag_synthesis":
@@ -351,21 +555,52 @@ class RagContextBroker:
             or intent_policy.exploit_code_generation
         )
 
+    def _prompt_sink_reject_reason(self, payload: dict[str, Any], *, purpose: str) -> str:
+        try:
+            envelope = ContextEnvelope.from_rag_chunk(payload, purpose=purpose, sink="prompt")
+        except ValueError as exc:
+            return str(exc)
+        validation = self.sink_validator.validate("prompt", [envelope], known_rag_refs={envelope.ref})
+        if validation.valid:
+            return ""
+        return "; ".join(validation.errors)
+
+    def _rag_index_reject_reason(self, chunk: DocumentChunk) -> str:
+        payload = {
+            "chunk_id": chunk.id,
+            "citation_id": self._citation_id_for_chunk(chunk),
+            "text": chunk.text,
+            "metadata": chunk.metadata,
+        }
+        try:
+            envelope = ContextEnvelope.from_rag_chunk(
+                payload,
+                purpose="rag_retrieval",
+                sink="rag_index",
+                target_id=chunk.target_id,
+            )
+        except ValueError as exc:
+            return str(exc)
+        validation = self.sink_validator.validate("rag_index", [envelope], known_rag_refs={envelope.ref})
+        if validation.valid:
+            return ""
+        return "; ".join(validation.errors)
+
     def _is_restricted(self, domain: str, metadata: dict[str, Any]) -> bool:
         if domain in RESTRICTED_DOMAINS:
             return True
-        if str(metadata.get("planner_visibility") or "") in {"restricted", "quarantine"}:
+        if normalized_metadata_value(metadata, "planner_visibility") in {"restricted", "quarantine"}:
             return True
-        if str(metadata.get("risk_level") or "") in {"exploit_validation", "post_exploitation_sensitive"}:
+        if normalized_metadata_value(metadata, "risk_level") in {"exploit_validation", "post_exploitation_sensitive"}:
             return True
-        return bool(metadata.get("requires_operator_approval"))
+        return metadata_bool_value(metadata, "requires_operator_approval")
 
     def _is_taxonomy_only(self, domain: str, planner_visibility: str) -> bool:
         return domain == "mitre_attack" or planner_visibility == "taxonomy_only"
 
     def _usage_policy_from_metadata(self, metadata: dict[str, Any]) -> str:
-        domain = str(metadata.get("domain") or metadata.get("corpus_type") or "")
-        visibility = str(metadata.get("planner_visibility") or "")
+        domain = canonical_rag_domain(metadata_value(metadata, "domain") or metadata_value(metadata, "corpus_type"))
+        visibility = normalized_metadata_value(metadata, "planner_visibility")
         if self._is_taxonomy_only(domain, visibility):
             return "taxonomy_only"
         if self._is_restricted(domain, metadata):
@@ -422,3 +657,23 @@ class RagContextBroker:
             return int(value)
         except (TypeError, ValueError):
             return None
+
+
+def _is_generated_export_metadata(metadata: dict[str, Any]) -> bool:
+    return is_generated_export_metadata(metadata) or is_generated_export_path(metadata_value(metadata, "source_url"))
+
+
+def _source_refs_metadata_reject_reason(metadata: dict[str, Any]) -> str:
+    carrier = SimpleNamespace(metadata=metadata, citations=[])
+    if has_malformed_source_refs_metadata(carrier):
+        return "malformed source_refs"
+    unsupported_refs = unsupported_ai_derived_source_refs(source_refs_metadata_values(carrier))
+    if unsupported_refs:
+        return f"unsupported source_refs: {', '.join(unsupported_refs)}"
+    placeholder_refs = placeholder_source_refs(source_refs_metadata_values(carrier))
+    if placeholder_refs:
+        return f"placeholder source_refs: {', '.join(placeholder_refs)}"
+    uncited_refs = uncited_source_refs_metadata(carrier)
+    if uncited_refs:
+        return f"uncited source_refs: {', '.join(uncited_refs)}"
+    return ""

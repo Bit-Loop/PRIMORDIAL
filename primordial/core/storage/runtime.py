@@ -6,6 +6,8 @@ from contextlib import closing
 import re
 from typing import Any, Iterable
 
+from primordial.core.context.normalization import canonical_rag_domain, normalized_context_key
+
 try:
     import psycopg
     from psycopg.rows import dict_row
@@ -1870,10 +1872,14 @@ class RuntimeStore:
         table_alias: str = "",
     ) -> None:
         prefix = f"{table_alias}." if table_alias else ""
+        metadata_filters = {
+            self._document_chunk_metadata_filter_key(key): value for key, value in metadata_filters.items()
+        }
         mapping = {
             "domain": ["domain", "corpus_type"],
             "source_file": ["source_file", "source_name"],
             "doc_id": ["doc_id"],
+            "citation_id": ["citation_id"],
             "chunk_type": ["chunk_type"],
             "card_type": ["card_type"],
             "risk_family": ["risk_family"],
@@ -1913,6 +1919,7 @@ class RuntimeStore:
                     params.extend([item, "true" if value else "false"])
                 continue
             values = [str(item) for item in value] if isinstance(value, list | tuple | set) else [str(value)]
+            values = [self._document_chunk_metadata_filter_value(key, item) for item in values]
             clauses = [
                 f"({prefix}metadata->>%s = ANY(%s) OR COALESCE({prefix}metadata->%s, '[]'::jsonb) ?| %s)"
                 for _item in json_keys
@@ -1938,6 +1945,19 @@ class RuntimeStore:
                 continue
             where.append(f"NULLIF({prefix}metadata->>%s, '')::double precision >= %s")
             params.extend([json_key, numeric])
+
+    @staticmethod
+    def _document_chunk_metadata_filter_key(key: object) -> str:
+        normalized = normalized_context_key(key)
+        if normalized == "corpus_type":
+            return "domain"
+        return normalized
+
+    @staticmethod
+    def _document_chunk_metadata_filter_value(key: str, value: object) -> str:
+        if key != "domain":
+            return str(value)
+        return canonical_rag_domain(value)
 
     def insert_notification(self, notification: NotificationRecord) -> None:
         self._execute(

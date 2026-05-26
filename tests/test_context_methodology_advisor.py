@@ -72,6 +72,36 @@ class MethodologyAdvisorContextTests(unittest.TestCase):
         self.assertNotIn("Hidden benchmark", packet["rendered"])
         self.assertNotIn("Raw credential", packet["rendered"])
 
+    def test_methodology_advisor_omits_postmortem_only_writeups_outside_postmortem_scope(self) -> None:
+        envelopes = [
+            ContextEnvelope(
+                ref="rag:active-postmortem-only-writeup",
+                kind="rag",
+                authority="advisory",
+                source_type="writeup",
+                target_id="target-a",
+                active_generation_id="generation:2",
+                purpose="methodology_hint",
+                sink="prompt",
+                content="Postmortem-only writeup content must not enter active methodology prompts.",
+                citations=["rag:active-postmortem-only-writeup"],
+                metadata={"writeup_access_policy": "postmortem_only"},
+            ),
+        ]
+
+        packet = ContextAssembler().assemble(
+            envelopes,
+            purpose="methodology_hint",
+            role="methodology_advisor",
+            target_id="target-a",
+            active_generation_id="generation:2",
+        )
+
+        self.assertEqual(packet["sections"]["RAG_ADVISORY"], [])
+        omitted_refs = {item["ref"]: item["reason"] for item in packet["omitted"]}
+        self.assertEqual(omitted_refs["rag:active-postmortem-only-writeup"], "postmortem_only_forbidden")
+        self.assertNotIn("Postmortem-only writeup content", packet["rendered"])
+
 
 if __name__ == "__main__":
     unittest.main()

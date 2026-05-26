@@ -76,6 +76,27 @@ class ContextEnvelopeNormalizationTests(unittest.TestCase):
         self.assertEqual(override.target_id, "target-explicit")
         self.assertEqual(override.active_generation_id, "generation:explicit")
 
+    def test_from_rag_chunk_normalizes_human_readable_domain_and_corpus(self) -> None:
+        envelope = ContextEnvelope.from_rag_chunk(
+            {
+                "chunk_id": "human-readable-domain",
+                "citation_id": "rag:human-readable-domain",
+                "text": "RAG identity fields must not keep human-readable aliases.",
+                "metadata": {
+                    "Domain": "API Web",
+                    "Corpus Type": "HTB Writeup",
+                    "source_type": "markdown",
+                },
+            },
+            purpose="operator_answer",
+            sink="prompt",
+        )
+
+        self.assertEqual(envelope.domain, "api_security")
+        self.assertEqual(envelope.corpus, "htb_writeup")
+        self.assertEqual(envelope.as_payload()["domain"], "api_security")
+        self.assertEqual(envelope.as_payload()["corpus"], "htb_writeup")
+
     def test_from_rag_chunk_promotes_metadata_control_lists(self) -> None:
         envelope = ContextEnvelope.from_rag_chunk(
             {
@@ -160,13 +181,209 @@ class ContextEnvelopeNormalizationTests(unittest.TestCase):
         self.assertEqual(envelope.valid_for, ["planner", "report_writer"])
         self.assertEqual(envelope.invalid_for, ["prompt"])
         self.assertEqual(envelope.poison_flags, ["hidden_solution_material", "contains_raw_flag"])
-        self.assertEqual(envelope.citations, ["evidence:1", "RAG:ChunkA"])
+        self.assertEqual(envelope.citations, ["evidence:1", "rag:ChunkA"])
 
         payload = envelope.as_payload()
         self.assertEqual(payload["valid_for"], ["planner", "report_writer"])
         self.assertEqual(payload["invalid_for"], ["prompt"])
         self.assertEqual(payload["poison_flags"], ["hidden_solution_material", "contains_raw_flag"])
-        self.assertEqual(payload["citations"], ["evidence:1", "RAG:ChunkA"])
+        self.assertEqual(payload["citations"], ["evidence:1", "rag:ChunkA"])
+
+    def test_normalizes_supported_ref_prefix_before_payload_export(self) -> None:
+        envelope = ContextEnvelope(
+            ref=" RAG:ChunkA ",
+            kind="rag",
+            authority="advisory",
+            source_type="methodology_doc",
+            purpose="operator_answer",
+            sink="prompt",
+            content="Supported ref prefixes should serialize canonically.",
+            citations=["RAG:ChunkA"],
+        )
+
+        self.assertEqual(envelope.ref, "rag:ChunkA")
+        self.assertEqual(envelope.citations, ["rag:ChunkA"])
+        self.assertEqual(envelope.as_payload()["ref"], "rag:ChunkA")
+
+    def test_normalizes_supported_source_refs_metadata_before_payload_export(self) -> None:
+        envelope = ContextEnvelope(
+            ref="model:summary",
+            kind="model_summary",
+            authority="derived",
+            source_type="ai_output",
+            purpose="operator_answer",
+            sink="prompt",
+            content="Source refs should not carry human-readable prefixes across boundaries.",
+            citations=["Evidence:http-banner", "RAG:ChunkA"],
+            metadata={"source_refs": [" Evidence:http-banner ", "RAG:ChunkA"]},
+        )
+
+        self.assertEqual(envelope.metadata["source_refs"], ["evidence:http-banner", "rag:ChunkA"])
+        self.assertEqual(envelope.as_payload()["metadata"]["source_refs"], ["evidence:http-banner", "rag:ChunkA"])
+
+    def test_normalizes_human_readable_source_refs_metadata_key_before_payload_export(self) -> None:
+        envelope = ContextEnvelope(
+            ref="model:summary",
+            kind="model_summary",
+            authority="derived",
+            source_type="ai_output",
+            purpose="operator_answer",
+            sink="prompt",
+            content="Source ref metadata keys should serialize canonically.",
+            citations=["Evidence:http-banner"],
+            metadata={"Source Refs": ["Evidence:http-banner"]},
+        )
+
+        self.assertNotIn("Source Refs", envelope.metadata)
+        self.assertEqual(envelope.metadata["source_refs"], ["evidence:http-banner"])
+        self.assertEqual(envelope.as_payload()["metadata"], {"source_refs": ["evidence:http-banner"]})
+
+    def test_normalizes_source_reference_aliases_before_payload_export(self) -> None:
+        envelope = ContextEnvelope(
+            ref="model:summary",
+            kind="model_summary",
+            authority="derived",
+            source_type="ai_output",
+            purpose="operator_answer",
+            sink="prompt",
+            content="Source-reference aliases should serialize as canonical source_refs.",
+            citations=["Evidence:http-banner", "RAG:ChunkA", "Note:operator"],
+            metadata={
+                "Source reference": "Evidence:http-banner",
+                "Source references": ["RAG:ChunkA"],
+                "Source ref": "Note:operator",
+            },
+        )
+
+        self.assertNotIn("Source reference", envelope.metadata)
+        self.assertNotIn("Source references", envelope.metadata)
+        self.assertNotIn("Source ref", envelope.metadata)
+        self.assertEqual(envelope.metadata["source_refs"], ["evidence:http-banner", "rag:ChunkA", "note:operator"])
+        self.assertEqual(
+            envelope.as_payload()["metadata"],
+            {"source_refs": ["evidence:http-banner", "rag:ChunkA", "note:operator"]},
+        )
+
+    def test_normalizes_nested_source_reference_aliases_before_payload_export(self) -> None:
+        envelope = ContextEnvelope(
+            ref="model:summary",
+            kind="model_summary",
+            authority="derived",
+            source_type="ai_output",
+            purpose="operator_answer",
+            sink="prompt",
+            content="Nested source-reference aliases should not cross envelope boundaries.",
+            citations=["Evidence:http-banner", "RAG:ChunkA"],
+            metadata={
+                "audit": {
+                    "Source reference": "Evidence:http-banner",
+                    "kept": "value",
+                },
+                "layers": [{"Source references": ["RAG:ChunkA"]}],
+            },
+        )
+
+        self.assertEqual(envelope.metadata["source_refs"], ["evidence:http-banner", "rag:ChunkA"])
+        self.assertEqual(envelope.metadata["audit"], {"kept": "value"})
+        self.assertEqual(envelope.metadata["layers"], [{}])
+        self.assertEqual(
+            envelope.as_payload()["metadata"],
+            {
+                "audit": {"kept": "value"},
+                "layers": [{}],
+                "source_refs": ["evidence:http-banner", "rag:ChunkA"],
+            },
+        )
+
+    def test_normalizes_tuple_nested_source_reference_aliases_before_payload_export(self) -> None:
+        envelope = ContextEnvelope(
+            ref="model:summary",
+            kind="model_summary",
+            authority="derived",
+            source_type="ai_output",
+            purpose="operator_answer",
+            sink="prompt",
+            content="Tuple-nested source-reference aliases should not cross envelope boundaries.",
+            citations=["Evidence:http-banner", "RAG:ChunkA"],
+            metadata={
+                "audit": (
+                    {"Source reference": "Evidence:http-banner"},
+                    {"Source references": ["RAG:ChunkA"], "kept": "value"},
+                ),
+            },
+        )
+
+        self.assertEqual(envelope.metadata["source_refs"], ["evidence:http-banner", "rag:ChunkA"])
+        self.assertEqual(envelope.metadata["audit"], [{}, {"kept": "value"}])
+        self.assertEqual(
+            envelope.as_payload()["metadata"],
+            {
+                "audit": [{}, {"kept": "value"}],
+                "source_refs": ["evidence:http-banner", "rag:ChunkA"],
+            },
+        )
+
+    def test_from_rag_chunk_promotes_top_level_source_refs_metadata_before_payload_export(self) -> None:
+        envelope = ContextEnvelope.from_rag_chunk(
+            {
+                "chunk_id": "chunk-top-level-source-refs",
+                "text": "Top-level chunk provenance must not be dropped before envelope export.",
+                "Source references": ["Evidence:http-banner"],
+                "source_refs": ["RAG:ChunkA"],
+                "source_ref": "file:methodology.md:sha256",
+                "metadata": {
+                    "source_type": "methodology_doc",
+                    "source_ref": "file:metadata-locator.md:sha256",
+                },
+            },
+            purpose="operator_answer",
+            sink="prompt",
+        )
+
+        self.assertEqual(envelope.metadata["source_refs"], ["evidence:http-banner", "rag:ChunkA"])
+        self.assertEqual(envelope.metadata["source_ref"], "file:metadata-locator.md:sha256")
+        self.assertEqual(
+            envelope.as_payload()["metadata"]["source_refs"],
+            ["evidence:http-banner", "rag:ChunkA"],
+        )
+
+    def test_from_rag_chunk_merges_metadata_and_top_level_source_refs_before_payload_export(self) -> None:
+        envelope = ContextEnvelope.from_rag_chunk(
+            {
+                "chunk_id": "chunk-merged-source-refs",
+                "text": "Chunk and metadata provenance must both survive envelope export.",
+                "source_refs": ["RAG:ChunkA"],
+                "metadata": {
+                    "source_type": "methodology_doc",
+                    "source_refs": ["Evidence:http-banner"],
+                    "source_ref": "file:metadata-locator.md:sha256",
+                },
+            },
+            purpose="operator_answer",
+            sink="prompt",
+        )
+
+        self.assertEqual(envelope.metadata["source_refs"], ["evidence:http-banner", "rag:ChunkA"])
+        self.assertEqual(envelope.metadata["source_ref"], "file:metadata-locator.md:sha256")
+
+    def test_merges_source_refs_metadata_aliases_before_payload_export(self) -> None:
+        envelope = ContextEnvelope(
+            ref="model:summary",
+            kind="model_summary",
+            authority="derived",
+            source_type="ai_output",
+            purpose="operator_answer",
+            sink="prompt",
+            content="Source ref metadata aliases should not drop provenance.",
+            citations=["Evidence:http-banner", "RAG:ChunkA"],
+            metadata={
+                "Source Refs": ["Evidence:http-banner"],
+                "source_refs": ["RAG:ChunkA"],
+            },
+        )
+
+        self.assertNotIn("Source Refs", envelope.metadata)
+        self.assertEqual(envelope.metadata["source_refs"], ["evidence:http-banner", "rag:ChunkA"])
 
     def test_rejects_non_mapping_metadata_at_envelope_boundary(self) -> None:
         with self.assertRaisesRegex(ValueError, "metadata"):

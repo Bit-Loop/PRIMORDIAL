@@ -1,0 +1,18 @@
+version: 1
+source: goal/fragments/run_profiles.yaml
+run_profiles:
+  - id: contract_only
+    validation_tier: V0
+    description: Instruction, prompt-contract, staging, or reporting files only.
+  - id: context_slice
+    validation_tier: V2
+    description: Policy, context, evidence, sink, export, or assembler behavior.
+  - id: ctf_harness
+    validation_tier: V2
+    description: CTF manifests, adapters, benchmark objects, mutation, hardcode scanning, or closed-book packaging.
+  - id: lab_smoke
+    validation_tier: V4
+    description: Verified local manifest-backed lab/container smoke validation.
+  - id: goal_compiler
+    validation_tier: V2
+    description: Typed goal fragments, compiler, linter, and generated instruction output.

@@ -29,6 +29,7 @@ ALLOWED_CONTEXT_TYPES = frozenset(
         "test_status",
     }
 )
+ALLOWED_SOURCE_TYPES = frozenset({"github", "github_project_context"}) | ALLOWED_CONTEXT_TYPES
 AUTHORITY_MUTATION_KINDS = frozenset({"approval", "evidence", "operator_intent", "scope"})
 AUTHORITY_MUTATION_FLAGS = {
     "creates_evidence": "evidence",
@@ -82,6 +83,12 @@ def validate_github_ledger_envelope(envelope: ContextEnvelope) -> GitHubLedgerDe
             "reject",
             f"github_ledger rejects {envelope.ref}: GitHub material cannot carry truth-like authority",
         )
+    unsupported_source_type = _unsupported_source_type(envelope)
+    if unsupported_source_type:
+        return GitHubLedgerDecision(
+            "reject",
+            f"github_ledger rejects {envelope.ref}: unsupported source_type={unsupported_source_type}",
+        )
     if _has_sensitive_unredacted_material(envelope):
         return GitHubLedgerDecision(
             "reject",
@@ -110,8 +117,8 @@ def _authority_mutation(envelope: ContextEnvelope) -> str:
 
 
 def _is_confirmed_finding(envelope: ContextEnvelope) -> bool:
-    status = _metadata_text(envelope, FINDING_STATUS_METADATA_KEYS)
-    if status in CONFIRMED_FINDING_STATUSES:
+    statuses = _metadata_text_values(envelope, FINDING_STATUS_METADATA_KEYS)
+    if statuses & CONFIRMED_FINDING_STATUSES:
         return True
     return envelope.kind == "finding" and envelope.authority in CONFIRMED_FINDING_STATUSES
 
@@ -121,7 +128,18 @@ def _has_target_fact_marker(envelope: ContextEnvelope) -> bool:
 
 
 def _has_truth_like_authority(envelope: ContextEnvelope) -> bool:
-    return normalized_context_key(envelope.authority) in TRUTH_LIKE_AUTHORITIES
+    return (
+        normalized_context_key(envelope.authority) in TRUTH_LIKE_AUTHORITIES
+        or bool(_metadata_text_values(envelope, ("authority", "authorities")) & TRUTH_LIKE_AUTHORITIES)
+    )
+
+
+def _unsupported_source_type(envelope: ContextEnvelope) -> str:
+    source_types = {
+        normalized_context_key(envelope.source_type),
+        *_metadata_text_values(envelope, ("source_type", "source_types")),
+    }
+    return next(iter(sorted(source_type for source_type in source_types if source_type not in ALLOWED_SOURCE_TYPES)), "")
 
 
 def _has_sensitive_unredacted_material(envelope: ContextEnvelope) -> bool:
@@ -133,7 +151,11 @@ def _is_redacted(envelope: ContextEnvelope) -> bool:
 
 
 def _has_evidence_refs(envelope: ContextEnvelope) -> bool:
-    refs = _metadata_ref_values(_metadata_value(envelope, EVIDENCE_REF_METADATA_KEYS))
+    refs = [
+        ref
+        for value in _metadata_values(envelope, EVIDENCE_REF_METADATA_KEYS)
+        for ref in _metadata_ref_values(value)
+    ]
     return any(_ref_text(item).startswith("evidence:") for item in [*refs, *envelope.citations])
 
 
@@ -146,11 +168,57 @@ def _metadata_ref_values(value: object | None) -> list[object]:
 
 
 def _metadata_value(envelope: ContextEnvelope, keys: tuple[str, ...]) -> object | None:
+    return _metadata_value_from(envelope.metadata, keys)
+
+
+def _metadata_values(envelope: ContextEnvelope, keys: tuple[str, ...]) -> list[object]:
+    return _metadata_values_from(envelope.metadata, keys)
+
+
+def _metadata_text_values(envelope: ContextEnvelope, keys: tuple[str, ...]) -> set[str]:
+    values: list[object] = []
+    for value in _metadata_values(envelope, keys):
+        values.extend(_metadata_ref_values(value))
+    return normalized_context_keys(values)
+
+
+def _metadata_value_from(value: object, keys: tuple[str, ...]) -> object | None:
     normalized_keys = normalized_context_keys(keys)
-    for raw_key, value in envelope.metadata.items():
+    if isinstance(value, dict):
+        items = value.items()
+    elif isinstance(value, (list, tuple, set)):
+        for item in value:
+            nested = _metadata_value_from(item, keys)
+            if nested is not None:
+                return nested
+        return None
+    else:
+        return None
+    for raw_key, item_value in items:
         if normalized_context_key(raw_key) in normalized_keys:
-            return value
+            return item_value
+        nested = _metadata_value_from(item_value, keys)
+        if nested is not None:
+            return nested
     return None
+
+
+def _metadata_values_from(value: object, keys: tuple[str, ...]) -> list[object]:
+    normalized_keys = normalized_context_keys(keys)
+    values: list[object] = []
+    if isinstance(value, dict):
+        items = value.items()
+    elif isinstance(value, (list, tuple, set)):
+        for item in value:
+            values.extend(_metadata_values_from(item, keys))
+        return values
+    else:
+        return values
+    for raw_key, item_value in items:
+        if normalized_context_key(raw_key) in normalized_keys:
+            values.append(item_value)
+        values.extend(_metadata_values_from(item_value, keys))
+    return values
 
 
 def _ref_text(value: object) -> str:
@@ -158,14 +226,8 @@ def _ref_text(value: object) -> str:
 
 
 def _context_type(envelope: ContextEnvelope) -> str:
-    return str(envelope.metadata.get("context_type") or "").strip().lower()
+    return str(_metadata_value(envelope, ("context_type",)) or "").strip().lower()
 
 
 def _metadata_text(envelope: ContextEnvelope, keys: tuple[str, ...]) -> str:
-    normalized_keys = normalized_context_keys(keys)
-    for raw_key, value in envelope.metadata.items():
-        if normalized_context_key(raw_key) in normalized_keys:
-            text = normalized_context_key(value)
-            if text:
-                return text
-    return ""
+    return normalized_context_key(_metadata_value(envelope, keys) or "")

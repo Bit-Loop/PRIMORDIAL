@@ -10,6 +10,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from primordial.app.runtime import PrimordialRuntime
+from primordial.core.context import is_operational_context_purpose
 from primordial.core.domain.enums import AgentRole, ProviderRoute, ScopeProfile, TaskKind
 
 
@@ -214,6 +215,15 @@ class PrimordialWebApp:
             safety_context = payload.get("safety_context")
             if safety_context is not None and not isinstance(safety_context, dict):
                 return self._json_response({"ok": False, "error": "safety_context must be an object"}, status=400)
+            mode = str(payload.get("mode") or "grounded_answer")
+            if retrieved_chunks is None and is_operational_context_purpose(mode):
+                result = self.runtime.synthesize_rag_answer(
+                    query_text,
+                    mode=mode,
+                    retrieved_chunks=None,
+                    safety_context=safety_context or {},
+                )
+                return self._json_response(result, status=200 if result.get("status") != "provider_error" else 502)
             if retrieved_chunks is None:
                 try:
                     search = self.runtime.rag_search(
@@ -229,7 +239,7 @@ class PrimordialWebApp:
                 retrieved_chunks = search.get("results", []) if isinstance(search.get("results"), list) else []
             result = self.runtime.synthesize_rag_answer(
                 query_text,
-                mode=str(payload.get("mode") or "grounded_answer"),
+                mode=mode,
                 retrieved_chunks=[item for item in retrieved_chunks if isinstance(item, dict)],
                 safety_context=safety_context or {},
             )

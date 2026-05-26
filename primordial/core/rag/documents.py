@@ -19,6 +19,15 @@ from primordial.core.domain.models import (
     Target,
     utc_now,
 )
+from primordial.core.context.generated_exports import is_generated_export_path
+from primordial.core.context.normalization import (
+    RAG_CORPUS_ALIASES,
+    RAG_CORPUS_TYPES,
+    RAG_LEGACY_CORPUS_TYPES,
+    canonical_rag_domain,
+    metadata_value,
+    normalized_context_key,
+)
 from primordial.core.rag.embeddings import DeterministicHashEmbeddingProvider, EmbeddingProvider
 from primordial.core.storage.runtime import RuntimeStore
 
@@ -54,9 +63,12 @@ class RagContextItem:
         text = self.chunk.text
         if len(text) > max_chars:
             text = text[:max_chars].rstrip() + "\n...TRUNCATED_RAG_CHUNK..."
+        citation_id = str(metadata_value(self.chunk.metadata, "citation_id") or "").strip()
+        if not citation_id or citation_id in {"rag:None", "rag:null", "rag:unknown"}:
+            citation_id = f"rag:{self.chunk.id}"
         return {
             "chunk_id": self.chunk.id,
-            "citation_id": f"rag:{self.chunk.id}",
+            "citation_id": citation_id if citation_id.startswith("rag:") else f"rag:{citation_id}",
             "target_id": self.chunk.target_id,
             "source_artifact_id": self.chunk.source_artifact_id,
             "source_sha256": self.chunk.source_sha256,
@@ -72,45 +84,9 @@ class RagContextItem:
 
 
 class DocumentIngestionService:
-    LEGACY_CORPUS_TYPES = {"operator_note", "cve_advisory", "exploit_note", "htb_writeup"}
-    CORPUS_TYPES = {
-        *LEGACY_CORPUS_TYPES,
-        "api_security",
-        "web_security",
-        "kubernetes_cloud",
-        "container_security",
-        "network_infra",
-        "windows_linux",
-        "powershell_ops",
-        "methodology_standards",
-        "mitre_attack",
-        "binary_exploitation",
-        "kernel_security",
-        "hardware_security",
-        "formal_methods",
-        "platform_metadata",
-        "vuln_intel",
-        "package_security",
-        "cloud_security",
-        "general_security",
-    }
-    CORPUS_ALIASES = {
-        "api_web": "api_security",
-        "attack_taxonomy": "mitre_attack",
-        "binary_analysis": "binary_exploitation",
-        "cloud_native_security": "kubernetes_cloud",
-        "engagement_governance": "methodology_standards",
-        "firewall_admin": "network_infra",
-        "kubernetes_security": "kubernetes_cloud",
-        "network_security": "network_infra",
-        "program_analysis": "formal_methods",
-        "protocol_verification": "formal_methods",
-        "string_analysis": "formal_methods",
-        "tool_usage": "powershell_ops",
-        "vulnerability_intel": "vuln_intel",
-        "vulnerability": "vuln_intel",
-        "vuln": "vuln_intel",
-    }
+    LEGACY_CORPUS_TYPES = set(RAG_LEGACY_CORPUS_TYPES)
+    CORPUS_TYPES = set(RAG_CORPUS_TYPES)
+    CORPUS_ALIASES = dict(RAG_CORPUS_ALIASES)
     HINT_POLICIES = {"advisory", "direct_task_hints", "disabled"}
     TEXT_SUFFIXES = {".md", ".markdown", ".txt", ".text", ".qmd", ".rmd", ".json", ".yaml", ".yml", ".csv", ".log"}
     RICH_SUFFIXES = {
@@ -191,7 +167,7 @@ class DocumentIngestionService:
     ) -> dict[str, Any]:
         if not target.in_scope:
             raise DocumentIngestionError(f"target {target.handle} is out of scope")
-        raw_corpus_type = str(corpus_type or "operator_note").strip().lower().replace("-", "_")
+        raw_corpus_type = normalized_context_key(corpus_type or "operator_note")
         corpus_type = self._normalize_corpus_type(corpus_type)
         corpus_warning = (
             f"unknown corpus type {raw_corpus_type!r} mapped to general_security"
@@ -202,6 +178,9 @@ class DocumentIngestionService:
         source_trust = self._normalize_source_trust(source_trust, corpus_type=corpus_type)
         source = self._prepare_source(path, target=target, allow_remote_url=allow_remote_url)
         source_path = source.path
+        generated_export_reason = self._generated_export_block_reason(source_path)
+        if generated_export_reason:
+            raise DocumentIngestionError(generated_export_reason)
         source_sha256 = source.sha256
         converted = self._convert_document(source_path, use_docling=use_docling)
         redacted_markdown = self._redact(converted["markdown"])
@@ -364,7 +343,7 @@ class DocumentIngestionService:
         if not clean:
             return []
         normalized_corpus = self._normalize_corpus_filter(corpus_types)
-        metadata_filters = dict(filters or {})
+        metadata_filters = self._normalize_metadata_filters(filters)
         results = self.store.search_document_chunks_text(
             clean,
             target_id=target_id,
@@ -443,7 +422,7 @@ class DocumentIngestionService:
         return [
             item
             for item in items
-            if str(item.chunk.metadata.get("corpus_type") or "operator_note") in corpus_types
+            if str(metadata_value(item.chunk.metadata, "corpus_type") or "operator_note") in corpus_types
         ][:limit]
 
     def _rank_corpus_chunks(
@@ -459,7 +438,7 @@ class DocumentIngestionService:
         chunks = self.store.list_document_chunks(target_id=target_id, metadata_filters=filters, limit=500)
         ranked: list[RagContextItem] = []
         for chunk in chunks:
-            if str(chunk.metadata.get("corpus_type") or "operator_note") not in corpus_types:
+            if str(metadata_value(chunk.metadata, "corpus_type") or "operator_note") not in corpus_types:
                 continue
             chunk_terms = set(re.findall(r"[A-Za-z0-9_.:/-]+", f"{chunk.title}\n{chunk.text}".lower()))
             overlap = sorted(term for term in terms & chunk_terms if len(term) > 2)
@@ -485,6 +464,11 @@ class DocumentIngestionService:
                 f"document is too large for selected import: {size} bytes > {self.max_file_bytes} bytes"
             )
         return source_path
+
+    def _generated_export_block_reason(self, path: Path) -> str:
+        if is_generated_export_path(path):
+            return "generated export files cannot be ingested into active operational RAG"
+        return ""
 
     def _prepare_source(self, path: Path | str, *, target: Target, allow_remote_url: bool) -> SourceDocument:
         raw = str(path).strip()
@@ -590,11 +574,7 @@ class DocumentIngestionService:
         return RedactionResult(text=redacted, count=total, labels=labels)
 
     def _normalize_corpus_type(self, corpus_type: str) -> str:
-        normalized = str(corpus_type or "operator_note").strip().lower().replace("-", "_")
-        normalized = self.CORPUS_ALIASES.get(normalized, normalized)
-        if normalized not in self.CORPUS_TYPES:
-            return "general_security"
-        return normalized
+        return canonical_rag_domain(corpus_type, blank="operator_note")
 
     def _normalize_corpus_filter(
         self,
@@ -604,9 +584,22 @@ class DocumentIngestionService:
             return None
         return {self._normalize_corpus_type(item) for item in corpus_types}
 
+    def _normalize_metadata_filters(self, filters: dict[str, object] | None) -> dict[str, object]:
+        normalized: dict[str, object] = {}
+        for key, value in (filters or {}).items():
+            filter_key = normalized_context_key(key)
+            if filter_key == "corpus_type":
+                filter_key = "domain"
+            if filter_key == "domain":
+                values = value if isinstance(value, list | tuple | set) else [value]
+                normalized[filter_key] = [self._normalize_corpus_type(str(item)) for item in values]
+                continue
+            normalized[filter_key] = value
+        return normalized
+
     def _normalize_hint_policy(self, hint_policy: str | None, *, corpus_type: str) -> str:
         default = "advisory"
-        normalized = str(hint_policy or default).strip().lower().replace("-", "_")
+        normalized = normalized_context_key(hint_policy or default)
         if normalized not in self.HINT_POLICIES:
             raise DocumentIngestionError(
                 f"unsupported RAG hint policy: {hint_policy}; expected one of {', '.join(sorted(self.HINT_POLICIES))}"
@@ -615,7 +608,7 @@ class DocumentIngestionService:
 
     def _normalize_source_trust(self, source_trust: str | None, *, corpus_type: str) -> str:
         if source_trust:
-            return self._safe_fragment(source_trust.lower().replace("-", "_"))
+            return self._safe_fragment(normalized_context_key(source_trust))
         if corpus_type == "cve_advisory":
             return "advisory"
         if corpus_type == "exploit_note":

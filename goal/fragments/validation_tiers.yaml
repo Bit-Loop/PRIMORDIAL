@@ -1,0 +1,27 @@
+version: 1
+source: goal/fragments/validation_tiers.yaml
+validation_tiers:
+  - id: V0
+    label: contract-only validation
+    commands:
+      - git diff --check
+  - id: V1
+    label: focused tests
+    commands:
+      - python3 -m unittest tests.test_goal_compile -q
+  - id: V2
+    label: focused plus nearby regression tests
+    commands:
+      - python3 -m unittest tests.test_goal_compile -q
+      - python3 tools/goal_compile.py --check
+      - python3 tools/goal_compile.py --verify-generated
+      - git diff --check
+  - id: V3
+    label: broad repository suite
+    commands:
+      - python3 -m unittest discover -s tests -q
+  - id: V4
+    label: deterministic verified local lab smoke
+    commands:
+      - python3 -m unittest tests.test_goal_compile -q
+      - "# add declared manifest-backed local lab smoke command"

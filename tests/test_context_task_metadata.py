@@ -137,6 +137,7 @@ class ContextTaskMetadataTests(unittest.TestCase):
             "task_metadata",
             [envelope],
             known_evidence_refs={"evidence:observed-service"},
+            known_policy_decision_refs={"policy_decision:assisted-lab"},
         )
 
         self.assertFalse(result.valid)
@@ -144,6 +145,37 @@ class ContextTaskMetadataTests(unittest.TestCase):
         self.assertEqual(result.rejected_refs, ["task:fabricated-supporting-evidence"])
         self.assertTrue(any("unresolved supporting evidence refs" in error for error in result.errors))
         self.assertTrue(any("evidence:made-up" in error for error in result.errors))
+
+    def test_executable_task_resolves_human_readable_supporting_evidence_refs(self) -> None:
+        envelope = ContextEnvelope(
+            ref="task:display-supporting-evidence",
+            kind="candidate_task",
+            authority="asserted",
+            source_type="tool_output",
+            target_id="target-a",
+            active_generation_id="generation:2",
+            purpose="task_generation",
+            sink="task_metadata",
+            content="Schedule a tool action using a registered evidence citation.",
+            citations=["policy_decision:assisted-lab", "evidence:observed-service"],
+            metadata={
+                "Active intent": "ctf_solve_assisted",
+                "Action class": "Tool execution",
+                "Creates executable task": "true",
+                "Supporting evidence refs": ["Evidence:observed-service"],
+            },
+        )
+
+        result = ContextSinkValidator().validate(
+            "task_metadata",
+            [envelope],
+            known_evidence_refs={"Evidence:observed-service"},
+            known_policy_decision_refs={"policy_decision:assisted-lab"},
+        )
+
+        self.assertTrue(result.valid)
+        self.assertEqual(result.accepted_refs, ["task:display-supporting-evidence"])
+        self.assertEqual(result.rejected_refs, [])
 
     def test_executable_task_requires_active_operator_intent(self) -> None:
         envelope = ContextEnvelope(
@@ -268,6 +300,174 @@ class ContextTaskMetadataTests(unittest.TestCase):
         self.assertFalse(result.valid)
         self.assertEqual(result.accepted_refs, [])
         self.assertEqual(result.rejected_refs, ["task:export-recursive-service-check"])
+        self.assertTrue(any("generated export" in error for error in result.errors))
+
+    def test_generated_export_path_cannot_authorize_executable_task(self) -> None:
+        envelope = ContextEnvelope(
+            ref="task:export-path-service-check",
+            kind="candidate_task",
+            authority="asserted",
+            source_type="tool_output",
+            target_id="target-a",
+            active_generation_id="generation:2",
+            purpose="task_generation",
+            sink="task_metadata",
+            content="A generated export path must not authorize executable task metadata.",
+            citations=["policy_decision:assisted-lab", "evidence:observed-service"],
+            metadata={
+                "Active intent": "ctf_solve_assisted",
+                "Action class": "Tool execution",
+                "Creates executable task": "true",
+                "Supporting evidence refs": ["evidence:observed-service"],
+                "source_file": "findings/notion/rag.htb/notion-export.md",
+            },
+        )
+
+        result = ContextSinkValidator().validate(
+            "task_metadata",
+            [envelope],
+            known_evidence_refs={"evidence:observed-service"},
+        )
+
+        self.assertFalse(result.valid)
+        self.assertEqual(result.accepted_refs, [])
+        self.assertEqual(result.rejected_refs, ["task:export-path-service-check"])
+        self.assertTrue(any("generated export" in error for error in result.errors))
+
+    def test_human_readable_generated_export_path_cannot_authorize_executable_task(self) -> None:
+        envelope = ContextEnvelope(
+            ref="task:display-export-path-service-check",
+            kind="candidate_task",
+            authority="asserted",
+            source_type="tool_output",
+            target_id="target-a",
+            active_generation_id="generation:2",
+            purpose="task_generation",
+            sink="task_metadata",
+            content="Human-readable generated export metadata must not authorize executable tasks.",
+            citations=["policy_decision:assisted-lab", "evidence:observed-service"],
+            metadata={
+                "Active intent": "ctf_solve_assisted",
+                "Action class": "Tool execution",
+                "Creates executable task": "true",
+                "Supporting evidence refs": ["evidence:observed-service"],
+                "Source file": "findings/notion/rag.htb/notion-export.md",
+            },
+        )
+
+        result = ContextSinkValidator().validate(
+            "task_metadata",
+            [envelope],
+            known_evidence_refs={"evidence:observed-service"},
+        )
+
+        self.assertFalse(result.valid)
+        self.assertEqual(result.accepted_refs, [])
+        self.assertEqual(result.rejected_refs, ["task:display-export-path-service-check"])
+        self.assertTrue(any("generated export" in error for error in result.errors))
+
+    def test_findings_notion_path_cannot_authorize_executable_task(self) -> None:
+        envelope = ContextEnvelope(
+            ref="task:findings-notion-export-path-service-check",
+            kind="candidate_task",
+            authority="asserted",
+            source_type="tool_output",
+            target_id="target-a",
+            active_generation_id="generation:2",
+            purpose="task_generation",
+            sink="task_metadata",
+            content="Any generated Notion export path must not authorize executable task metadata.",
+            citations=["policy_decision:assisted-lab", "evidence:observed-service"],
+            metadata={
+                "Active intent": "ctf_solve_assisted",
+                "Action class": "Tool execution",
+                "Creates executable task": "true",
+                "Supporting evidence refs": ["evidence:observed-service"],
+                "Source file": "findings/notion/rag.htb/operator-summary.md",
+            },
+        )
+
+        result = ContextSinkValidator().validate(
+            "task_metadata",
+            [envelope],
+            known_evidence_refs={"evidence:observed-service"},
+        )
+
+        self.assertFalse(result.valid)
+        self.assertEqual(result.accepted_refs, [])
+        self.assertEqual(result.rejected_refs, ["task:findings-notion-export-path-service-check"])
+        self.assertTrue(any("generated export" in error for error in result.errors))
+
+    def test_source_path_list_cannot_hide_generated_export_task_authority(self) -> None:
+        envelope = ContextEnvelope(
+            ref="task:list-export-path-service-check",
+            kind="candidate_task",
+            authority="asserted",
+            source_type="tool_output",
+            target_id="target-a",
+            active_generation_id="generation:2",
+            purpose="task_generation",
+            sink="task_metadata",
+            content="List-shaped source path metadata must not hide generated export task authority.",
+            citations=["policy_decision:assisted-lab", "evidence:observed-service"],
+            metadata={
+                "Active intent": "ctf_solve_assisted",
+                "Action class": "Tool execution",
+                "Creates executable task": "true",
+                "Supporting evidence refs": ["evidence:observed-service"],
+                "Source path": [
+                    "artifacts/tool-output.json",
+                    "findings/notion/rag.htb/operator-summary.md",
+                ],
+            },
+        )
+
+        result = ContextSinkValidator().validate(
+            "task_metadata",
+            [envelope],
+            known_evidence_refs={"evidence:observed-service"},
+            known_policy_decision_refs={"policy_decision:assisted-lab"},
+        )
+
+        self.assertFalse(result.valid)
+        self.assertEqual(result.accepted_refs, [])
+        self.assertEqual(result.rejected_refs, ["task:list-export-path-service-check"])
+        self.assertTrue(any("generated export" in error for error in result.errors))
+
+    def test_source_path_mapping_cannot_hide_generated_export_task_authority(self) -> None:
+        envelope = ContextEnvelope(
+            ref="task:mapping-export-path-service-check",
+            kind="candidate_task",
+            authority="asserted",
+            source_type="tool_output",
+            target_id="target-a",
+            active_generation_id="generation:2",
+            purpose="task_generation",
+            sink="task_metadata",
+            content="Mapping-shaped source path metadata must not hide generated export task authority.",
+            citations=["policy_decision:assisted-lab", "evidence:observed-service"],
+            metadata={
+                "Active intent": "ctf_solve_assisted",
+                "Action class": "Tool execution",
+                "Creates executable task": "true",
+                "Supporting evidence refs": ["evidence:observed-service"],
+                "Source path": {
+                    "kind": "projection",
+                    "path": "findings/notion/rag.htb/operator-summary.md",
+                },
+            },
+        )
+
+        result = ContextSinkValidator().validate(
+            "task_metadata",
+            [envelope],
+            known_evidence_refs={"evidence:observed-service"},
+            known_policy_decision_refs={"policy_decision:assisted-lab"},
+        )
+
+        self.assertFalse(result.valid)
+        self.assertEqual(result.accepted_refs, [])
+        self.assertEqual(result.rejected_refs, ["task:mapping-export-path-service-check"])
         self.assertTrue(any("generated export" in error for error in result.errors))
 
     def test_ctfd_cannot_authorize_executable_task(self) -> None:

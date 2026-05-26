@@ -81,7 +81,7 @@ class ContextBoundaryTests(unittest.TestCase):
             metadata={"source_refs": ["rag:method-1", "evidence:scan-1"]},
         )
 
-        result = ContextSinkValidator().validate("notion_export", [first, duplicate])
+        result = ContextSinkValidator().validate("notion_export", [first, duplicate], known_rag_refs=["rag:method-1"])
 
         self.assertFalse(result.valid)
         self.assertEqual(result.accepted_refs, ["model:summary-1"])

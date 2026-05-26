@@ -12,19 +12,25 @@ from primordial.core.context.evidence_shape import (
     finding_shape_omission_reason,
 )
 from primordial.core.context.envelopes import ContextEnvelope
-from primordial.core.context.generated_exports import is_generated_export_context
-from primordial.core.context.normalization import normalized_context_key, normalized_context_keys
+from primordial.core.context.generated_exports import has_generated_export_path, is_generated_export_context
+from primordial.core.context.normalization import normalized_context_key
+from primordial.core.context.operator_notes import operator_note_source_omission_reason
 from primordial.core.context.poison import has_context_flag
 from primordial.core.context.source_refs import (
     AI_DERIVED_SOURCE_REF_REQUIREMENT,
     has_ai_derived_source_ref,
+    placeholder_source_refs,
+    source_refs_metadata_errors,
+    source_refs_metadata_values,
     unsupported_ai_derived_source_refs,
     unresolved_ai_derived_source_ref_errors,
 )
 from primordial.core.context.source_types import EVIDENCE_PROOF_KINDS, NON_EVIDENCE_SOURCE_TYPES, TRUTH_LIKE_AUTHORITIES
+from primordial.core.context.writeup_policy import prompt_writeup_omission_reason
 
 
 AI_DERIVED_KINDS = frozenset({"model_summary", "hypothesis", "candidate_task"})
+SOURCE_REF_VALIDATED_KINDS = AI_DERIVED_KINDS | {"operator_note", "rag"}
 FORBIDDEN_REPORT_SOURCE_TYPES = frozenset({"chat"})
 FORBIDDEN_REPORT_FLAGS = (
     "contains_raw_expected_flag",
@@ -45,19 +51,32 @@ def validate_report_sink(
     envelope: ContextEnvelope,
     *,
     known_evidence_refs: Iterable[str] | None = None,
+    known_note_refs: Iterable[str] | None = None,
     known_rag_refs: Iterable[str] | None = None,
 ) -> ReportSinkDecision:
-    if is_generated_export_context(envelope):
+    if is_generated_export_context(envelope) or has_generated_export_path(envelope):
         return ReportSinkDecision(
             "reject",
             f"report sink rejects generated export recursion ref={envelope.ref}",
         )
-    if envelope.source_type in FORBIDDEN_REPORT_SOURCE_TYPES:
+    if _forbidden_report_source_type(envelope):
         return ReportSinkDecision("reject", f"report sink rejects raw chat context ref={envelope.ref}")
     if has_context_flag(envelope, FORBIDDEN_REPORT_FLAGS):
         return ReportSinkDecision(
             "reject",
             f"report sink rejects hidden or raw sensitive material ref={envelope.ref}",
+        )
+    note_source_reason = operator_note_source_omission_reason(envelope)
+    if note_source_reason:
+        return ReportSinkDecision(
+            "reject",
+            f"report sink rejects {note_source_reason} ref={envelope.ref}",
+        )
+    writeup_reason = prompt_writeup_omission_reason(envelope, role="report_writer")
+    if writeup_reason:
+        return ReportSinkDecision(
+            "reject",
+            f"report sink rejects {writeup_reason} ref={envelope.ref}",
         )
     proof_shape_reason = evidence_shape_omission_reason(envelope)
     if proof_shape_reason == "ref":
@@ -76,10 +95,11 @@ def validate_report_sink(
             "reject",
             f"report sink requires {FINDING_REF_PREFIX}<id> ref={envelope.ref}",
         )
-    if _is_proof_from_non_evidence_source(envelope):
+    non_evidence_proof_source_type = _non_evidence_proof_source_type(envelope)
+    if non_evidence_proof_source_type:
         return ReportSinkDecision(
             "reject",
-            f"report sink rejects proof record from source_type={envelope.source_type} ref={envelope.ref}",
+            f"report sink rejects proof record from source_type={non_evidence_proof_source_type} ref={envelope.ref}",
         )
     binding_reason = current_context_binding_error(envelope, proof_records=True, target_facts=True)
     if binding_reason:
@@ -87,7 +107,7 @@ def validate_report_sink(
             "reject",
             f"report sink rejects {binding_reason} context ref={envelope.ref}",
         )
-    if envelope.kind in AI_DERIVED_KINDS and envelope.authority in TRUTH_LIKE_AUTHORITIES:
+    if envelope.kind in AI_DERIVED_KINDS and _has_truth_like_authority(envelope):
         return ReportSinkDecision(
             "reject",
             f"report sink rejects truth-like authority on AI-derived context ref={envelope.ref}",
@@ -96,6 +116,13 @@ def validate_report_sink(
         return ReportSinkDecision(
             "reject",
             f"report sink requires citations for AI-derived context ref={envelope.ref}",
+        )
+    placeholder_citations = placeholder_source_refs(envelope.citations)
+    if envelope.kind in AI_DERIVED_KINDS and placeholder_citations:
+        refs = ", ".join(placeholder_citations)
+        return ReportSinkDecision(
+            "reject",
+            f"report sink rejects placeholder citations for AI-derived context ref={envelope.ref}: {refs}",
         )
     if envelope.kind in AI_DERIVED_KINDS and not has_ai_derived_report_citation(envelope):
         return ReportSinkDecision(
@@ -110,32 +137,20 @@ def validate_report_sink(
             "reject",
             f"report sink rejects unsupported citations for AI-derived context ref={envelope.ref}: {refs}",
         )
-    if envelope.kind in AI_DERIVED_KINDS and _has_malformed_source_refs(envelope):
+    source_ref_errors = source_refs_metadata_errors(envelope)
+    if envelope.kind in SOURCE_REF_VALIDATED_KINDS and source_ref_errors:
         return ReportSinkDecision(
             "reject",
-            f"report sink rejects malformed source_refs for AI-derived context ref={envelope.ref}",
-        )
-    unsupported_source_refs = _unsupported_source_refs(envelope)
-    if envelope.kind in AI_DERIVED_KINDS and unsupported_source_refs:
-        refs = ", ".join(unsupported_source_refs)
-        return ReportSinkDecision(
-            "reject",
-            f"report sink rejects unsupported source_refs for AI-derived context ref={envelope.ref}: {refs}",
-        )
-    uncited_source_refs = _uncited_source_refs(envelope)
-    if envelope.kind in AI_DERIVED_KINDS and uncited_source_refs:
-        refs = ", ".join(uncited_source_refs)
-        return ReportSinkDecision(
-            "reject",
-            f"report sink rejects uncited source_refs for AI-derived context ref={envelope.ref}: {refs}",
+            f"report sink rejects {source_ref_errors[0]} for source-ref validated context ref={envelope.ref}",
         )
     unresolved_source_refs = unresolved_ai_derived_source_ref_errors(
         envelope.ref,
-        envelope.citations,
+        source_refs_metadata_values(envelope),
         known_evidence_refs=known_evidence_refs,
+        known_note_refs=known_note_refs,
         known_rag_refs=known_rag_refs,
     )
-    if envelope.kind in AI_DERIVED_KINDS and unresolved_source_refs:
+    if envelope.kind in SOURCE_REF_VALIDATED_KINDS and unresolved_source_refs:
         return ReportSinkDecision("reject", "; ".join(unresolved_source_refs))
     citations = CitationValidator(
         known_evidence_refs=known_evidence_refs,
@@ -154,50 +169,64 @@ def unsupported_ai_derived_report_citations(envelope: ContextEnvelope) -> list[s
     return unsupported_ai_derived_source_refs(envelope.citations)
 
 
-def _unsupported_source_refs(envelope: ContextEnvelope) -> list[str]:
-    refs = _source_ref_values(envelope)
-    if refs is None:
-        return []
-    return unsupported_ai_derived_source_refs(refs)
+def _forbidden_report_source_type(envelope: ContextEnvelope) -> str:
+    source_types = {normalized_context_key(envelope.source_type), *_metadata_text_values(envelope, "source_type")}
+    return next(iter(sorted(source_types & FORBIDDEN_REPORT_SOURCE_TYPES)), "")
 
 
-def _uncited_source_refs(envelope: ContextEnvelope) -> list[str]:
-    refs = _source_ref_values(envelope)
-    if refs is None:
-        return []
-    citations = {str(item).strip() for item in envelope.citations if str(item).strip()}
-    return sorted({ref for ref in refs if ref not in citations})
+def _has_truth_like_authority(envelope: ContextEnvelope) -> bool:
+    return normalized_context_key(envelope.authority) in TRUTH_LIKE_AUTHORITIES or bool(
+        _metadata_text_values(envelope, "authority", "authorities") & TRUTH_LIKE_AUTHORITIES
+    )
 
 
-def _source_ref_values(envelope: ContextEnvelope) -> list[str] | None:
-    refs = _metadata_value(envelope, "source_refs")
-    if refs is None:
-        return None
-    if isinstance(refs, str):
-        values = [refs]
-    elif isinstance(refs, list | tuple | set):
-        values = list(refs)
+def _metadata_text_values(envelope: ContextEnvelope, *names: str) -> set[str]:
+    values: set[str] = set()
+    for value in _metadata_values_from(envelope.metadata, *names):
+        for item in _metadata_scalar_values(value):
+            text = normalized_context_key(item)
+            if text:
+                values.add(text)
+    return values
+
+
+def _metadata_values_from(value: object, *names: str) -> list[object]:
+    normalized_names = {normalized_context_key(name) for name in names}
+    if "source_type" in normalized_names:
+        normalized_names.add("source_types")
+    values: list[object] = []
+    if isinstance(value, dict):
+        items = value.items()
+    elif isinstance(value, list | tuple | set):
+        for item in value:
+            values.extend(_metadata_values_from(item, *names))
+        return values
     else:
-        return []
-    return [str(item).strip() for item in values if str(item).strip()]
-
-
-def _has_malformed_source_refs(envelope: ContextEnvelope) -> bool:
-    refs = _metadata_value(envelope, "source_refs")
-    return refs is not None and not isinstance(refs, str | list | tuple | set)
-
-
-def _metadata_value(envelope: ContextEnvelope, *names: str) -> object | None:
-    normalized_names = normalized_context_keys(names)
-    for raw_key, value in envelope.metadata.items():
+        return values
+    for raw_key, item_value in items:
         if normalized_context_key(raw_key) in normalized_names:
-            return value
-    return None
+            values.append(item_value)
+        values.extend(_metadata_values_from(item_value, *names))
+    return values
+
+
+def _metadata_scalar_values(value: object) -> list[object]:
+    if isinstance(value, dict):
+        return []
+    if isinstance(value, list | tuple | set):
+        values: list[object] = []
+        for item in value:
+            values.extend(_metadata_scalar_values(item))
+        return values
+    return [value]
 
 
 def _has_citations(envelope: ContextEnvelope) -> bool:
     return any(str(citation).strip() for citation in envelope.citations)
 
 
-def _is_proof_from_non_evidence_source(envelope: ContextEnvelope) -> bool:
-    return envelope.kind in EVIDENCE_PROOF_KINDS and envelope.source_type in NON_EVIDENCE_SOURCE_TYPES
+def _non_evidence_proof_source_type(envelope: ContextEnvelope) -> str:
+    if envelope.kind not in EVIDENCE_PROOF_KINDS:
+        return ""
+    source_types = {normalized_context_key(envelope.source_type), *_metadata_text_values(envelope, "source_type")}
+    return next(iter(sorted(source_types & NON_EVIDENCE_SOURCE_TYPES)), "")

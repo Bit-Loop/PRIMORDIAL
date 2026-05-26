@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Callable, Protocol
 
 from primordial.core.config import AutonomySettings
+from primordial.core.context.normalization import metadata_bool_value, metadata_list_value, metadata_value
 from primordial.core.domain.constants import AD_INDICATOR_PORTS, DNS_PORTS
 from primordial.core.domain.enums import (
     AgentRole,
@@ -1240,13 +1241,11 @@ class WorkflowOrchestrator:
                     "source_artifact_id": chunk.source_artifact_id,
                     "title": chunk.title,
                     "excerpt": text,
-                    "corpus_type": chunk.metadata.get("corpus_type"),
-                    "source_trust": chunk.metadata.get("source_trust"),
-                    "hint_policy": chunk.metadata.get("hint_policy"),
-                    "cve_ids": list(chunk.metadata.get("cve_ids", []))
-                    if isinstance(chunk.metadata.get("cve_ids"), list)
-                    else [],
-                    "walkthrough_hint": bool(chunk.metadata.get("walkthrough_hint")),
+                    "corpus_type": metadata_value(chunk.metadata, "corpus_type"),
+                    "source_trust": metadata_value(chunk.metadata, "source_trust"),
+                    "hint_policy": metadata_value(chunk.metadata, "hint_policy"),
+                    "cve_ids": metadata_list_value(chunk.metadata, "cve_ids"),
+                    "walkthrough_hint": metadata_bool_value(chunk.metadata, "walkthrough_hint"),
                     "evidence_refs": list(chunk.evidence_refs),
                     "applicability_classification": self._rag_applicability_classification(chunk, evidence),
                 }
@@ -1740,7 +1739,7 @@ class WorkflowOrchestrator:
         for chunk in chunks:
             recommendation, local_reject = self._rag_hint_recommendation(target, chunk, evidence)
             title = str(recommendation.get("title") if recommendation else chunk.title)
-            corpus_type = str(chunk.metadata.get("corpus_type") or "operator_note")
+            corpus_type = str(metadata_value(chunk.metadata, "corpus_type") or "operator_note")
             if local_reject:
                 rejected.append(
                     {
@@ -1794,11 +1793,11 @@ class WorkflowOrchestrator:
                 "source_rag_chunk_id": chunk.id,
                 "source_rag_artifact_id": chunk.source_artifact_id,
                 "rag_corpus_type": corpus_type,
-                "rag_source_trust": chunk.metadata.get("source_trust"),
-                "rag_hint_policy": chunk.metadata.get("hint_policy"),
-                "rag_walkthrough_hint": corpus_type == "htb_writeup",
+                "rag_source_trust": metadata_value(chunk.metadata, "source_trust"),
+                "rag_hint_policy": metadata_value(chunk.metadata, "hint_policy"),
+                "rag_walkthrough_hint": metadata_bool_value(chunk.metadata, "walkthrough_hint") or corpus_type == "htb_writeup",
                 "rag_applicability_classification": classification,
-                "rag_cve_ids": list(chunk.metadata.get("cve_ids", [])) if isinstance(chunk.metadata.get("cve_ids"), list) else [],
+                "rag_cve_ids": metadata_list_value(chunk.metadata, "cve_ids"),
                 "primitive_hint": primitive_hint,
                 "evidence_refs": action_refs,
                 "supporting_evidence_refs": action_refs,
@@ -1842,9 +1841,9 @@ class WorkflowOrchestrator:
         chunks = [
             chunk
             for chunk in self.store.list_document_chunks(target_id=target.id, limit=500)
-            if str(chunk.metadata.get("corpus_type") or "") in self.RAG_HINT_CORPUS_TYPES
-            and str(chunk.metadata.get("hint_policy") or "advisory") == "direct_task_hints"
-            and str(chunk.metadata.get("planner_visibility") or "normal") != "taxonomy_only"
+            if str(metadata_value(chunk.metadata, "corpus_type") or "") in self.RAG_HINT_CORPUS_TYPES
+            and str(metadata_value(chunk.metadata, "hint_policy") or "advisory") == "direct_task_hints"
+            and str(metadata_value(chunk.metadata, "planner_visibility") or "normal") != "taxonomy_only"
         ]
         if not terms:
             return chunks[:limit]
@@ -1867,8 +1866,8 @@ class WorkflowOrchestrator:
         chunk: DocumentChunk,
         evidence: list[object],
     ) -> tuple[dict[str, object] | None, str]:
-        corpus_type = str(chunk.metadata.get("corpus_type") or "")
-        if corpus_type == "mitre_attack" or str(chunk.metadata.get("planner_visibility") or "") == "taxonomy_only":
+        corpus_type = str(metadata_value(chunk.metadata, "corpus_type") or "")
+        if corpus_type == "mitre_attack" or str(metadata_value(chunk.metadata, "planner_visibility") or "") == "taxonomy_only":
             return None, "taxonomy-only RAG chunks cannot drive action selection"
         primitive_hint = self._rag_hint_primitive(chunk)
         if not primitive_hint:
@@ -1879,8 +1878,8 @@ class WorkflowOrchestrator:
         if classification == "rejected":
             return None, "RAG applicability classified rejected"
         evidence_refs = [str(item.id) for item in evidence[:8] if getattr(item, "id", None)]
-        cve_ids = chunk.metadata.get("cve_ids", [])
-        cve_label = ", ".join(str(item) for item in cve_ids[:3]) if isinstance(cve_ids, list) and cve_ids else ""
+        cve_ids = metadata_list_value(chunk.metadata, "cve_ids")
+        cve_label = ", ".join(str(item) for item in cve_ids[:3]) if cve_ids else ""
         if corpus_type == "htb_writeup":
             title = f"HTB writeup hint: {chunk.title}"
             summary = (
@@ -1910,10 +1909,10 @@ class WorkflowOrchestrator:
         )
 
     def _rag_hint_primitive(self, chunk: DocumentChunk) -> str:
-        metadata_hint = normalize_primitive_hint(chunk.metadata.get("primitive_hint"))
+        metadata_hint = normalize_primitive_hint(metadata_value(chunk.metadata, "primitive_hint"))
         if metadata_hint:
             return metadata_hint
-        corpus_type = str(chunk.metadata.get("corpus_type") or "")
+        corpus_type = str(metadata_value(chunk.metadata, "corpus_type") or "")
         text = f"{chunk.title}\n{chunk.text}".lower()
         if corpus_type in {"cve_advisory", "exploit_note"}:
             if re.search(r"\b(cve-\d{4}-\d{4,7}|poc|exploit|vulnerab|searchsploit)\b", text):

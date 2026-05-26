@@ -624,11 +624,11 @@ class WebConsoleTests(unittest.TestCase):
         self.assertTrue(wrapper["local_wrapper_available"])
         self.assertEqual(wrapper["status"], "local wrapper")
         self.assertTrue(wrapper["remote_premium_policy_gate_bypassed_for_wrapper"])
-        self.assertEqual(payload["plan"]["intent"]["id"], "htb_lab")
-        self.assertTrue(payload["plan"]["intent"]["flags"]["credential_guessing"])
-        self.assertTrue(payload["plan"]["intent"]["flags"]["credential_spraying"])
-        self.assertTrue(payload["plan"]["intent"]["flags"]["hash_cracking"])
-        self.assertTrue(payload["plan"]["intent"]["flags"]["reverse_shell"])
+        self.assertEqual(payload["plan"]["intent"]["id"], "recon_only")
+        self.assertFalse(payload["plan"]["intent"]["flags"]["credential_guessing"])
+        self.assertFalse(payload["plan"]["intent"]["flags"]["credential_spraying"])
+        self.assertFalse(payload["plan"]["intent"]["flags"]["hash_cracking"])
+        self.assertFalse(payload["plan"]["intent"]["flags"]["reverse_shell"])
 
     def test_control_plane_marks_wrapper_backed_claude_gpt_tasks(self) -> None:
         target = self.runtime.store.list_targets()[0]

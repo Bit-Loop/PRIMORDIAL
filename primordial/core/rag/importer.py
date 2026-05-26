@@ -7,10 +7,11 @@ from pathlib import Path
 import re
 from typing import Any
 
+from primordial.core.context.normalization import canonical_rag_domain, normalized_context_key
 from primordial.core.domain.enums import ArtifactKind, ScopeProfile
 from primordial.core.domain.models import ArtifactRecord, DocumentChunk, RecordEmbedding, Target
-from primordial.core.rag.documents import DocumentIngestionService
 from primordial.core.rag.embeddings import EmbeddingProvider
+from primordial.core.rag.import_validation import RagImportRecordValidator
 from primordial.core.storage.runtime import RuntimeStore
 
 
@@ -77,6 +78,7 @@ class RagChunkImporter:
         self.store = store
         self.embedding_provider = embedding_provider
         self.batch_size = max(1, int(batch_size))
+        self._record_validator = RagImportRecordValidator()
 
     def import_chunks(self, options: RagImportOptions) -> RagImportSummary:
         summary = RagImportSummary(
@@ -108,11 +110,14 @@ class RagChunkImporter:
                     record = json.loads(raw)
                     if not isinstance(record, dict):
                         raise ValueError("JSONL row is not an object")
-                    if bool(record.get("policy_blocked")):
+                    if bool(self._record_value(record, "policy_blocked")):
                         raise ValueError("policy-blocked chunk must not be imported")
                     if not self._record_matches_filters(record, options):
                         summary.chunks_skipped += 1
                         continue
+                    domain = self._domain(record)
+                    metadata = self._metadata(record, domain=domain)
+                    self._record_validator.validate_rag_index_record(record, domain=domain, metadata=metadata)
                     chunk = self._chunk_from_record(record, target_id=corpus_target.id if corpus_target else "dry_run")
                     content_hash = self._content_hash(chunk.text)
                     if options.dry_run:
@@ -259,23 +264,24 @@ class RagChunkImporter:
 
     def _record_matches_filters(self, record: dict[str, Any], options: RagImportOptions) -> bool:
         domain = self._domain(record)
-        source_file = str(record.get("source_file") or "")
-        doc_id = str(record.get("doc_id") or record.get("source_id") or "")
-        if options.domains and domain not in options.domains:
+        source_file = str(self._record_value(record, "source_file") or "")
+        doc_id = str(self._record_value(record, "doc_id") or self._record_value(record, "source_id") or "")
+        domains = {self._canonical_domain(value) for value in options.domains}
+        if domains and domain not in domains:
             return False
         if options.source_files and source_file not in options.source_files:
             return False
         return not (options.doc_ids and doc_id not in options.doc_ids)
 
     def _chunk_from_record(self, record: dict[str, Any], *, target_id: str) -> DocumentChunk:
-        text = str(record.get("retrieval_text") or record.get("text") or "").strip()
+        text = str(self._record_value(record, "retrieval_text") or self._record_value(record, "text") or "").strip()
         if not text:
             raise ValueError("chunk has no retrieval_text/text")
-        source_sha256 = str(record.get("source_sha256") or "").strip()
+        source_sha256 = str(self._record_value(record, "source_sha256") or "").strip()
         if not source_sha256:
             raise ValueError("chunk is missing source_sha256")
-        chunk_index = self._int(record.get("chunk_index"), 0)
-        chunk_id = str(record.get("chunk_id") or "").strip() or self._derive_chunk_id(record, text, chunk_index)
+        chunk_index = self._int(self._record_value(record, "chunk_index"), 0)
+        chunk_id = str(self._record_value(record, "chunk_id") or "").strip() or self._derive_chunk_id(record, text, chunk_index)
         domain = self._domain(record)
         metadata = self._metadata(record, domain=domain)
         return DocumentChunk(
@@ -284,45 +290,52 @@ class RagChunkImporter:
             source_artifact_id="pending",
             source_sha256=source_sha256,
             chunk_index=chunk_index,
-            title=str(record.get("title") or record.get("section") or record.get("source_file") or chunk_id),
+            title=str(self._record_value(record, "title") or self._record_value(record, "section") or self._record_value(record, "source_file") or chunk_id),
             text=text,
-            token_count=self._int(record.get("token_estimate"), max(1, len(re.findall(r"\S+", text)))),
+            token_count=self._int(self._record_value(record, "token_estimate"), max(1, len(re.findall(r"\S+", text)))),
             evidence_refs=[],
             metadata=metadata,
         )
 
     def _metadata(self, record: dict[str, Any], *, domain: str) -> dict[str, Any]:
         nested = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
-        raw_text = str(record.get("raw_text") or "")
+        raw_text = str(self._record_value(record, "raw_text") or "")
+        section_path = self._record_value(record, "section_path")
+        requires_authorized_scope = self._record_value(record, "requires_authorized_scope")
+        scope_gate_required = self._record_value(record, "scope_gate_required")
+        requires_operator_approval = self._record_value(record, "requires_operator_approval")
+        allowed_use_modes = self._record_value(record, "allowed_use_modes")
+        allowed_contexts = self._record_value(record, "allowed_contexts")
+        secondary_domains = self._record_value(record, "secondary_domains")
         metadata = {
             **nested,
             "import_source": "primordial-rag-preprocess",
-            "citation_id": f"rag:{record.get('chunk_id')}",
-            "doc_id": record.get("doc_id") or record.get("source_id"),
-            "source_file": record.get("source_file"),
-            "source_path": record.get("source_path"),
-            "source_type": record.get("source_type"),
+            "citation_id": self._citation_id(record),
+            "doc_id": self._record_value(record, "doc_id") or self._record_value(record, "source_id"),
+            "source_file": self._record_value(record, "source_file"),
+            "source_path": self._record_value(record, "source_path"),
+            "source_type": self._record_value(record, "source_type"),
             "domain": domain,
-            "original_domain": record.get("domain"),
-            "secondary_domains": record.get("secondary_domains") if isinstance(record.get("secondary_domains"), list) else [],
+            "original_domain": self._record_value(record, "domain"),
+            "secondary_domains": secondary_domains if isinstance(secondary_domains, list) else [],
             "corpus_type": domain,
-            "authority_level": record.get("authority_level"),
-            "chunk_type": record.get("chunk_type"),
-            "section": record.get("section"),
-            "section_path": record.get("section_path") if isinstance(record.get("section_path"), list) else [],
-            "page_start": record.get("page_start"),
-            "page_end": record.get("page_end"),
-            "risk_level": record.get("risk_level"),
-            "planner_visibility": record.get("planner_visibility") or ("taxonomy_only" if domain == "mitre_attack" else "normal"),
-            "requires_authorized_scope": bool(record.get("requires_authorized_scope", True)),
-            "scope_gate_required": bool(record.get("scope_gate_required", True)),
-            "requires_operator_approval": bool(record.get("requires_operator_approval", False)),
-            "allowed_use_modes": record.get("allowed_use_modes") if isinstance(record.get("allowed_use_modes"), list) else [],
-            "allowed_contexts": record.get("allowed_contexts") if isinstance(record.get("allowed_contexts"), list) else [],
-            "license_status": record.get("license_status"),
+            "authority_level": self._record_value(record, "authority_level"),
+            "chunk_type": self._record_value(record, "chunk_type"),
+            "section": self._record_value(record, "section"),
+            "section_path": section_path if isinstance(section_path, list) else [],
+            "page_start": self._record_value(record, "page_start"),
+            "page_end": self._record_value(record, "page_end"),
+            "risk_level": self._record_value(record, "risk_level"),
+            "planner_visibility": self._record_value(record, "planner_visibility") or ("taxonomy_only" if domain == "mitre_attack" else "normal"),
+            "requires_authorized_scope": bool(requires_authorized_scope if requires_authorized_scope is not None else True),
+            "scope_gate_required": bool(scope_gate_required if scope_gate_required is not None else True),
+            "requires_operator_approval": bool(requires_operator_approval if requires_operator_approval is not None else False),
+            "allowed_use_modes": allowed_use_modes if isinstance(allowed_use_modes, list) else [],
+            "allowed_contexts": allowed_contexts if isinstance(allowed_contexts, list) else [],
+            "license_status": self._record_value(record, "license_status"),
             "raw_text": raw_text,
             "raw_text_sha256": hashlib.sha256(raw_text.encode("utf-8")).hexdigest() if raw_text else "",
-            "source_sha256": record.get("source_sha256"),
+            "source_sha256": self._record_value(record, "source_sha256"),
         }
         for key in (
             "vuln_id",
@@ -357,11 +370,16 @@ class RagChunkImporter:
             "content_hash",
             "embedding_policy",
             "source_refs",
+            "kind",
+            "authority",
+            "ingest_allowed",
+            "operational_retrieval_allowed",
+            "valid_for",
+            "invalid_for",
         ):
-            if key in record:
-                metadata[key] = record[key]
-            elif key in nested:
-                metadata[key] = nested[key]
+            value = self._record_value(record, key)
+            if value is not None:
+                metadata[key] = value
         if domain == "mitre_attack":
             metadata["planner_visibility"] = "taxonomy_only"
             metadata["allowed_uses"] = [
@@ -380,23 +398,56 @@ class RagChunkImporter:
             ]
         return metadata
 
+    def _citation_id(self, record: dict[str, Any]) -> str:
+        explicit = str(self._record_value(record, "citation_id") or "").strip()
+        if explicit:
+            return explicit if explicit.startswith("rag:") else f"rag:{explicit}"
+        chunk_id = str(self._record_value(record, "chunk_id") or "").strip()
+        if chunk_id:
+            return chunk_id if chunk_id.startswith("rag:") else f"rag:{chunk_id}"
+        text = str(self._record_value(record, "retrieval_text") or self._record_value(record, "text") or "").strip()
+        source_sha256 = str(self._record_value(record, "source_sha256") or "").strip()
+        if text and source_sha256:
+            chunk_index = self._int(self._record_value(record, "chunk_index"), 0)
+            return f"rag:{self._derive_chunk_id(record, text, chunk_index)}"
+        fallback = str(
+            self._record_value(record, "record_id")
+            or self._record_value(record, "doc_id")
+            or self._record_value(record, "source_id")
+            or ""
+        ).strip()
+        if fallback:
+            return fallback if fallback.startswith("rag:") else f"rag:{fallback}"
+        return "rag:unknown"
+
+    @staticmethod
+    def _record_value(record: dict[str, Any], name: str) -> Any:
+        nested = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+        for source in (record, nested):
+            for raw_key, value in source.items():
+                if normalized_context_key(raw_key) == name:
+                    return value
+        return None
+
     def _artifact_for_record(self, record: dict[str, Any], *, target_id: str) -> ArtifactRecord:
-        source_sha256 = str(record.get("source_sha256") or "missing")
-        doc_id = str(record.get("doc_id") or record.get("source_id") or source_sha256[:20])
+        source_sha256 = str(self._record_value(record, "source_sha256") or "missing")
+        doc_id = str(self._record_value(record, "doc_id") or self._record_value(record, "source_id") or source_sha256[:20])
+        source_file = self._record_value(record, "source_file")
+        source_path = self._record_value(record, "source_path")
         digest = hashlib.sha256(f"{source_sha256}:{doc_id}".encode("utf-8")).hexdigest()[:20]
         return ArtifactRecord(
             id=f"artifact_rag_{digest}",
             task_id=None,
             target_id=target_id,
             kind=ArtifactKind.RAG_DOCUMENT,
-            path=f"rag-preprocess:{record.get('source_file') or doc_id}",
+            path=f"rag-preprocess:{source_file or doc_id}",
             sha256=source_sha256,
             size_bytes=0,
             metadata={
                 "import_source": "primordial-rag-preprocess",
                 "doc_id": doc_id,
-                "source_file": record.get("source_file"),
-                "source_path": record.get("source_path"),
+                "source_file": source_file,
+                "source_path": source_path,
                 "domain": self._domain(record),
             },
         )
@@ -417,28 +468,22 @@ class RagChunkImporter:
         return target
 
     def _domain(self, record: dict[str, Any]) -> str:
-        corpus_type = record.get("corpus_type")
+        corpus_type = self._record_value(record, "corpus_type")
         if isinstance(corpus_type, list) and corpus_type:
             value = str(corpus_type[0])
         else:
-            value = str(corpus_type or record.get("domain") or "general_security")
-        normalized = value.strip().lower().replace("-", "_")
-        return DocumentIngestionService.CORPUS_ALIASES.get(
-            normalized,
-            {
-                "api_web": "api_security",
-                "kubernetes_cloud": "kubernetes_cloud",
-                "methodology_standards": "methodology_standards",
-                "mitre_attack": "mitre_attack",
-                "systems_exploitation": "binary_exploitation",
-                "vulnerability_intel": "vuln_intel",
-                "vuln_intel": "vuln_intel",
-            }.get(normalized, normalized if normalized in DocumentIngestionService.CORPUS_TYPES else "general_security"),
-        )
+            value = str(corpus_type or self._record_value(record, "domain") or "general_security")
+        return self._canonical_domain(value)
+
+    @staticmethod
+    def _canonical_domain(value: str) -> str:
+        return canonical_rag_domain(value)
 
     def _derive_chunk_id(self, record: dict[str, Any], text: str, chunk_index: int) -> str:
+        source_sha256 = self._record_value(record, "source_sha256")
+        source_id = self._record_value(record, "doc_id") or self._record_value(record, "source_id")
         digest = hashlib.sha256(
-            f"{record.get('source_sha256')}:{record.get('doc_id') or record.get('source_id')}:{chunk_index}:{self._content_hash(text)}".encode(
+            f"{source_sha256}:{source_id}:{chunk_index}:{self._content_hash(text)}".encode(
                 "utf-8"
             )
         ).hexdigest()[:24]
@@ -454,7 +499,13 @@ class RagChunkImporter:
             return "invalid_json"
         if not isinstance(data, dict):
             return "invalid_record"
-        return str(data.get("chunk_id") or data.get("record_id") or data.get("doc_id") or "unknown")
+        return str(
+            self._record_value(data, "chunk_id")
+            or self._record_value(data, "record_id")
+            or self._record_value(data, "doc_id")
+            or self._record_value(data, "source_id")
+            or "unknown"
+        )
 
     def _int(self, value: object, default: int) -> int:
         if isinstance(value, bool):
