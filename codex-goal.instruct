@@ -99,6 +99,10 @@ Expected files:
 - tests/test_ctf_harness_hardcode_scan.py
 - tests/test_ctf_harness_postmortem.py
 
+Lifecycle commands:
+- python3 tools/goal_pack.py preflight
+- python3 tools/goal_pack.py finish
+
 Validation commands:
 - python3 -m unittest tests.test_ctf_harness_targets tests.test_ctf_harness_sessions tests.test_ctf_harness_closed_book tests.test_ctf_harness_hardcode_scan tests.test_ctf_harness_postmortem -q
 - python3 -m unittest tests.test_goal_compile -q

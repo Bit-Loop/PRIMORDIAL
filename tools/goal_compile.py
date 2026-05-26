@@ -219,6 +219,15 @@ def render_instruct(config: dict[str, Any], slice_pack: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
+            "Lifecycle commands:",
+            "- python3 tools/goal_pack.py preflight",
+            "- python3 tools/goal_pack.py finish",
+        ]
+    )
+
+    lines.extend(
+        [
+            "",
             "Validation commands:",
         ]
     )

@@ -33,7 +33,9 @@ slice_packs:
       - goal/fragments/report_contract.yaml
       - goal/slices.yaml
       - tools/goal_compile.py
+      - tools/goal_pack.py
       - tests/test_goal_compile.py
+      - tests/test_goal_pack.py
     source_refs:
       - /home/bitloop/Desktop/goal-instruct-idea.md
       - goal/fragments/authority.yaml

@@ -126,10 +126,21 @@ class GoalCompileTests(unittest.TestCase):
         self.assertIn("Do not self-continue after RUN_DONE", instruct)
         self.assertIn("PROGRAM_DONE remains reserved for all typed milestones", instruct)
 
+    def test_generated_instruct_includes_goal_pack_lifecycle_commands(self) -> None:
+        result, _ = _run_goal_compile("--root", str(self.root), "--slice-pack", "context-boundaries")
+
+        self.assertEqual(result, 0)
+        instruct = (self.root / "codex-goal.instruct").read_text(encoding="utf-8")
+
+        self.assertIn("Lifecycle commands:", instruct)
+        self.assertIn("- python3 tools/goal_pack.py preflight", instruct)
+        self.assertIn("- python3 tools/goal_pack.py finish", instruct)
+
     def test_prompt_goal_uses_advance_and_bounded_run_done(self) -> None:
         prompt = (REPO_ROOT / "prompt.goal").read_text(encoding="utf-8")
 
-        self.assertIn("python3 tools/goal_compile.py --advance", prompt)
+        self.assertIn("python3 tools/goal_pack.py preflight", prompt)
+        self.assertIn("python3 tools/goal_pack.py finish", prompt)
         self.assertIn("RUN_DONE closes the current `/goal` invocation", prompt)
         self.assertIn("Do not self-continue after RUN_DONE", prompt)
         self.assertNotIn("No `RUN_DONE` while milestone work remains", prompt)
