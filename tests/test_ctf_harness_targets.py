@@ -59,6 +59,22 @@ class CTFTargetManifestTests(unittest.TestCase):
         self.assertEqual(target.evidence_expectations.required, ("http_request", "http_response"))
         self.assertEqual(target.scoreboard_ref["challenge_id"], "juice-shop-foundation")
 
+    def test_local_container_manifest_selects_local_ctf_default_intent(self) -> None:
+        manifest = {
+            "lab_id": "local-container-target",
+            "title": "Local Container Target",
+            "platform": "docker",
+            "category": "web",
+            "difficulty": "foundation",
+            "scope": {"network": "lab_local_container", "assets": ["http://127.0.0.1:3116"]},
+            "provisioning": {"mode": "docker", "network": "lab_local_container"},
+            "allowed_engagement_profiles": ["co_internal_lab"],
+        }
+
+        target = load_ctf_target_manifest(manifest)
+
+        self.assertEqual(target.default_intent, "local_ctf_container")
+
     def test_ctf_target_manifest_rejects_hidden_expected_flags(self) -> None:
         manifest = {
             "lab_id": "unsafe-target",

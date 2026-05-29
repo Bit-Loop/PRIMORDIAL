@@ -56,8 +56,8 @@ class GoalCompileTests(unittest.TestCase):
         self.assertIn("Active slice pack: compiler-bootstrap", instruct)
         self.assertIn("Program milestone coverage:", instruct)
         self.assertIn("Missing slice-pack coverage: none", instruct)
-        self.assertIn("Fully complete milestones: M0, M1, M2, M3, M7", instruct)
-        self.assertIn("Not fully complete milestones: M4, M5, M6, M8", instruct)
+        self.assertIn("Fully complete milestones: M0, M1, M2, M3, M5, M6, M7", instruct)
+        self.assertIn("Not fully complete milestones: M4, M8", instruct)
         self.assertIn("Milestone progress:", instruct)
         self.assertIn("- M0 100% fully_complete", instruct)
         self.assertIn("RUN_DONE closes this invocation after the selected run slices are validated", instruct)
@@ -65,11 +65,8 @@ class GoalCompileTests(unittest.TestCase):
         self.assertEqual(current["active_slice_pack"], "compiler-bootstrap")
         self.assertEqual(current["active_milestones"], ["M0", "M4", "M8"])
         self.assertEqual(current["missing_milestones"], [])
-        self.assertEqual(current["fully_complete_milestones"], ["M0", "M1", "M2", "M3", "M7"])
-        self.assertEqual(
-            current["not_fully_complete_milestones"],
-            ["M4", "M5", "M6", "M8"],
-        )
+        self.assertEqual(current["fully_complete_milestones"], ["M0", "M1", "M2", "M3", "M5", "M6", "M7"])
+        self.assertEqual(current["not_fully_complete_milestones"], ["M4", "M8"])
         self.assertEqual(current["milestone_progress"]["M0"]["completion_percent"], 100)
         self.assertTrue(current["milestone_progress"]["M0"]["evidence"])
         self.assertEqual(current["validation_tier"], "V2")
@@ -83,8 +80,8 @@ class GoalCompileTests(unittest.TestCase):
         self.assertEqual(result, 0)
         current = json.loads((self.root / ".goal" / "current.json").read_text(encoding="utf-8"))
 
-        self.assertEqual(current["overall_completion_percent"], 75)
-        self.assertEqual(current["partially_complete_milestones"], ["M4", "M5", "M6", "M8"])
+        self.assertEqual(current["overall_completion_percent"], 86)
+        self.assertEqual(current["partially_complete_milestones"], ["M4", "M8"])
         self.assertEqual(current["milestone_progress"]["M1"]["completion_percent"], 100)
         self.assertEqual(current["milestone_progress"]["M1"]["status"], "fully_complete")
         self.assertTrue(current["milestone_progress"]["M1"]["evidence"])
@@ -110,7 +107,7 @@ class GoalCompileTests(unittest.TestCase):
                 "modular_context_refactor",
             ],
         )
-        self.assertEqual(current["next_slice_pack"], "ctf-harness-controls")
+        self.assertEqual(current["next_slice_pack"], "compiler-bootstrap")
         self.assertTrue(current["active_pack_complete"])
         self.assertTrue(current["advance_ready"])
 
@@ -161,8 +158,8 @@ class GoalCompileTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertIn("wrote codex-goal.instruct", output)
         current = json.loads((self.root / ".goal" / "current.json").read_text(encoding="utf-8"))
-        self.assertEqual(current["active_slice_pack"], "ctf-harness-controls")
-        self.assertEqual(current["active_milestones"], ["M5", "M6"])
+        self.assertEqual(current["active_slice_pack"], "compiler-bootstrap")
+        self.assertEqual(current["active_milestones"], ["M0", "M4", "M8"])
 
     def test_non_bootstrap_slice_pack_does_not_emit_bootstrap_specific_markdown_rule(self) -> None:
         result, _ = _run_goal_compile("--root", str(self.root), "--slice-pack", "context-boundaries")
@@ -376,6 +373,7 @@ class GoalCompileTests(unittest.TestCase):
         for milestone in data["milestones"]:
             if milestone["id"] == "M6":
                 milestone["status"] = "in_progress"
+                milestone["completion_percent"] = 50
                 milestone["evidence"] = []
         _write_yaml(milestones_path, data)
 

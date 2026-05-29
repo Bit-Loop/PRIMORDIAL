@@ -42,18 +42,21 @@ milestones:
       - tests/test_environment_classifier.py and tests/test_operator_intent_catalog_autonomy.py cover policy integration paths.
   - id: M5
     label: CTF harness contracts
-    status: in_progress
-    completion_percent: 55
+    status: fully_complete
+    completion_percent: 100
     evidence:
       - primordial/labs/ctf/targets.py and primordial/labs/ctf/sessions.py define target/session contracts.
       - tests/test_ctf_harness_targets.py and tests/test_ctf_harness_sessions.py validate core harness objects.
+      - tests/test_ctf_harness_benchmark.py, tests/test_ctf_harness_ctfd_client.py, tests/test_ctf_harness_integrity.py, tests/test_ctf_harness_mutation.py, tests/test_ctf_harness_patch_proposal.py, and tests/test_ctf_harness_solve_verification.py validate solve lifecycle, scoring, mutation, CTFd, and integrity contracts.
+      - tests/test_ctf_harness_targets.py validates local manifest-backed container targets select local_ctf_container default intent unless an explicit safe recon_only policy override is supplied.
   - id: M6
     label: anti-cheating controls
-    status: in_progress
-    completion_percent: 50
+    status: fully_complete
+    completion_percent: 100
     evidence:
       - primordial/labs/ctf/closed_book.py, hardcode.py, and hidden_material.py define anti-cheating boundaries.
       - tests/test_ctf_harness_closed_book.py and tests/test_ctf_harness_hardcode_scan.py validate closed-book and hardcode contracts.
+      - tests/test_ctf_harness_postmortem.py, tests/test_ctf_harness_failure_analysis.py, and tests/test_ctf_harness_integrity.py validate postmortem-only writeup use, hidden-material rejection, and anti-cheating integrity gates.
   - id: M7
     label: modular refactor
     status: fully_complete

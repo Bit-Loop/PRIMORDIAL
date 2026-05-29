@@ -62,6 +62,7 @@ class GoalPackTests(unittest.TestCase):
         self.assertIn("generated instruct is stale", output)
 
     def test_finish_refuses_to_commit_incomplete_active_pack(self) -> None:
+        _mark_active_milestones_incomplete(self.root, {"M5", "M6"})
         (self.root / "implementation.txt").write_text("work that is not evidenced complete\n", encoding="utf-8")
 
         result, output = _run_goal_pack(self.root, "finish", "--skip-validation", "--no-push", "--no-switch")
@@ -105,6 +106,19 @@ def _complete_active_milestones(root: Path, milestone_ids: set[str]) -> None:
             milestone["evidence"] = [f"unit-test completion evidence for {milestone['id']}"]
     milestones_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     _run_goal_compile(root, "--from-current")
+
+
+def _mark_active_milestones_incomplete(root: Path, milestone_ids: set[str]) -> None:
+    milestones_path = root / "goal" / "fragments" / "milestones.yaml"
+    payload = yaml.safe_load(milestones_path.read_text(encoding="utf-8"))
+    assert isinstance(payload, dict)
+    for milestone in payload["milestones"]:
+        if milestone["id"] in milestone_ids:
+            milestone["status"] = "in_progress"
+            milestone["completion_percent"] = 50
+            milestone["evidence"] = [f"unit-test partial evidence for {milestone['id']}"]
+    milestones_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    _run_goal_compile(root, "--slice-pack", "ctf-harness-controls")
 
 
 def _run_goal_compile(root: Path, *args: str) -> tuple[int, str]:

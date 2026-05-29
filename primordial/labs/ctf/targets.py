@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 from primordial.labs.ctf.hidden_material import normalized_hidden_material_key, reject_hidden_flag_material
 
 SAFE_DEFAULT_INTENT = "recon_only"
+LOCAL_CTF_DEFAULT_INTENT = "local_ctf_container"
 ALLOWED_ENGAGEMENT_PROFILES = frozenset({"co_internal_lab", "co_hack_the_box"})
 ALLOWED_WRITEUP_ACCESS_POLICIES = frozenset({"closed_book", "postmortem_only"})
 
@@ -68,7 +69,7 @@ def load_ctf_target_manifest(manifest: Mapping[str, Any]) -> CTFTarget:
     source = _mapping(manifest.get("source"))
     scope_assets = _text_tuple(scope.get("assets"))
     _validate_local_scope_assets(scope_assets)
-    default_intent = _default_intent(policy)
+    default_intent = _default_intent(manifest=manifest, policy=policy)
     writeup_access_policy = _writeup_access_policy(closed_book)
 
     return CTFTarget(
@@ -128,7 +129,9 @@ def _required_text(manifest: Mapping[str, Any], key: str) -> str:
     return value
 
 
-def _default_intent(policy: Mapping[str, Any]) -> str:
+def _default_intent(*, manifest: Mapping[str, Any], policy: Mapping[str, Any]) -> str:
+    if "default_intent" not in policy and _is_local_ctf_container_manifest(manifest):
+        return LOCAL_CTF_DEFAULT_INTENT
     intent = str(policy.get("default_intent", SAFE_DEFAULT_INTENT)).strip() or SAFE_DEFAULT_INTENT
     if _normalized_token(intent) != SAFE_DEFAULT_INTENT:
         raise ValueError("CTF target manifest default_intent must be recon_only")
@@ -199,3 +202,10 @@ def _dict_tuple(value: Any) -> tuple[dict[str, Any], ...]:
             raise ValueError("CTF target manifest published_ports entries must be mappings")
         ports.append(dict(item))
     return tuple(ports)
+
+
+def _is_local_ctf_container_manifest(manifest: Mapping[str, Any]) -> bool:
+    provisioning = _mapping(manifest.get("provisioning"))
+    scope = _mapping(manifest.get("scope"))
+    mode = _normalized_token(str(provisioning.get("mode", manifest.get("platform", ""))))
+    return bool(manifest.get("lab_id")) and mode in {"docker", "podman", "container"} and bool(_text_tuple(scope.get("assets")))
