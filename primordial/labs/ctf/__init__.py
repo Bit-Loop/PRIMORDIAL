@@ -8,6 +8,7 @@ from primordial.labs.ctf.hardcode import HardcodeFinding, HardcodeScanResult, Ha
 from primordial.labs.ctf.integrity import CTFHarnessIntegrity, CTFIntegrityResult
 from primordial.labs.ctf.mutation import MutationPlan, MutationPlanner
 from primordial.labs.ctf.patches import PatchProposal
+from primordial.labs.ctf.phases import CTFLabPhase, CTFLabPhaseCatalog, load_ctf_lab_phase_catalog
 from primordial.labs.ctf.postmortem import PostmortemRecord
 from primordial.labs.ctf.scoring import compute_scoring_summary
 from primordial.labs.ctf.sessions import SolveSession
@@ -27,6 +28,8 @@ __all__ = [
     "CTFTarget",
     "CTFHarnessIntegrity",
     "CTFIntegrityResult",
+    "CTFLabPhase",
+    "CTFLabPhaseCatalog",
     "ClosedBookPackage",
     "ClosedBookPolicy",
     "EvidenceExpectations",
@@ -47,4 +50,5 @@ __all__ = [
     "compute_scoring_summary",
     "load_ctf_target_manifest",
     "load_ctf_target_manifest_file",
+    "load_ctf_lab_phase_catalog",
 ]
