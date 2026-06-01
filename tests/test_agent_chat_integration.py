@@ -93,75 +93,14 @@ class AgentChatPremiumReviewRunnerTests(unittest.TestCase):
             display_name="Helix",
             profile=ScopeProfile.HACK_THE_BOX,
         )
-        review = {
-            "recommended_next_actions": [
-                {
-                    "title": "Re-run bounded service discovery",
-                    "rationale": "Evidence e1 is stale for the active target generation.",
-                    "confidence": 0.76,
-                    "primitive_hint": "tcp-service-discovery",
-                    "evidence_refs": ["e1"],
-                }
-            ],
-            "missing_evidence": [],
-            "invalid_existing_tasks": [],
-            "primitive_gaps": [],
-            "confidence": 0.76,
-            "rationale_with_evidence_refs": [{"summary": "stale services", "evidence_refs": ["e1"]}],
-        }
-
-        class FakeClient:
-            settings = AgentChatSettings(provider="claude", timeout_seconds=5)
-
-            def chat(self, **kwargs: object) -> AgentChatResponse:
-                self.kwargs = kwargs
-                return AgentChatResponse(
-                    provider="claude",
-                    model="claude-sonnet-4",
-                    text=json.dumps(review),
-                    exit_code=0,
-                    elapsed_seconds=0.1,
-                    request_id="req-review",
-                    conversation_id=str(kwargs.get("conversation_id")),
-                    prompt_tokens=120,
-                    completion_tokens=40,
-                    estimated_cost_usd=0.12,
-                )
-
-        client = FakeClient()
+        client = self._fake_review_client(self._review_payload())
         cost_records: list[dict[str, object]] = []
         runner = AgentChatPremiumReviewRunner(
             client,
             target_loader=lambda target_id: target,
             remote_cost_recorder=lambda **kwargs: cost_records.append(kwargs),
         )
-        task = Task(
-            target_id=target.id,
-            phase=MethodologyPhase.ANALYSIS,
-            kind=TaskKind.REVIEW_PREMIUM_ESCALATION,
-            title="Premium planner review requested",
-            summary="Resolve planner uncertainty.",
-            role=AgentRole.CLAUDE_REVIEWER,
-            evidence_refs=["e1"],
-            provider_route=ProviderRoute.REMOTE_PREMIUM,
-            provider_model="claude-sonnet-4",
-            metadata={
-                "escalation_package": {
-                    "expected_output_type": "planner_remote_review_v1",
-                    "evidence_refs": ["e1"],
-                    "metadata": {
-                        "required_output": {
-                            "recommended_next_actions": "array<object>",
-                            "missing_evidence": "array<string>",
-                            "invalid_existing_tasks": "array<object>",
-                            "primitive_gaps": "array<string>",
-                            "confidence": "number",
-                            "rationale_with_evidence_refs": "array<object>",
-                        }
-                    },
-                }
-            },
-        )
+        task = self._premium_review_task(target.id)
         selection = RouteSelection(route=ProviderRoute.REMOTE_PREMIUM, model_name="claude-sonnet-4", rationale="test")
 
         offer = runner.create_offer(task, selection)
@@ -180,6 +119,74 @@ class AgentChatPremiumReviewRunnerTests(unittest.TestCase):
         self.assertEqual(cost_records[0]["prompt_tokens"], 120)
         self.assertEqual(client.kwargs["conversation_id"], f"primordial:{task.id}")
         self.assertIsNone(client.kwargs["model"])
+
+    def _review_payload(self) -> dict[str, object]:
+        return {
+            "recommended_next_actions": [
+                {
+                    "title": "Re-run bounded service discovery",
+                    "rationale": "Evidence e1 is stale for the active target generation.",
+                    "confidence": 0.76,
+                    "primitive_hint": "tcp-service-discovery",
+                    "evidence_refs": ["e1"],
+                }
+            ],
+            "missing_evidence": [],
+            "invalid_existing_tasks": [],
+            "primitive_gaps": [],
+            "confidence": 0.76,
+            "rationale_with_evidence_refs": [{"summary": "stale services", "evidence_refs": ["e1"]}],
+        }
+
+    def _fake_review_client(self, review: dict[str, object]):
+        class FakeClient:
+            settings = AgentChatSettings(provider="claude", timeout_seconds=5)
+
+            def chat(self, **kwargs: object) -> AgentChatResponse:
+                self.kwargs = kwargs
+                return AgentChatResponse(
+                    provider="claude",
+                    model="claude-sonnet-4",
+                    text=json.dumps(review),
+                    exit_code=0,
+                    elapsed_seconds=0.1,
+                    request_id="req-review",
+                    conversation_id=str(kwargs.get("conversation_id")),
+                    prompt_tokens=120,
+                    completion_tokens=40,
+                    estimated_cost_usd=0.12,
+                )
+
+        return FakeClient()
+
+    def _premium_review_task(self, target_id: str) -> Task:
+        return Task(
+            target_id=target_id,
+            phase=MethodologyPhase.ANALYSIS,
+            kind=TaskKind.REVIEW_PREMIUM_ESCALATION,
+            title="Premium planner review requested",
+            summary="Resolve planner uncertainty.",
+            role=AgentRole.CLAUDE_REVIEWER,
+            evidence_refs=["e1"],
+            provider_route=ProviderRoute.REMOTE_PREMIUM,
+            provider_model="claude-sonnet-4",
+            metadata={"escalation_package": self._premium_review_package()},
+        )
+
+    def _premium_review_package(self) -> dict[str, object]:
+        required_output = {
+            "recommended_next_actions": "array<object>",
+            "missing_evidence": "array<string>",
+            "invalid_existing_tasks": "array<object>",
+            "primitive_gaps": "array<string>",
+            "confidence": "number",
+            "rationale_with_evidence_refs": "array<object>",
+        }
+        return {
+            "expected_output_type": "planner_remote_review_v1",
+            "evidence_refs": ["e1"],
+            "metadata": {"required_output": required_output},
+        }
 
     def test_parse_review_json_accepts_markdown_wrapped_json(self) -> None:
         parsed = parse_review_json("```json\n{\"confidence\": 0.8}\n```")
