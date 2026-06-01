@@ -13,6 +13,8 @@ from primordial.core.quality.markdown import (
     quarantine_migrated_markdown,
 )
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
 
 class MarkdownQualityTests(unittest.TestCase):
     def test_tracked_markdown_requires_migration_or_quarantine(self) -> None:
@@ -77,6 +79,19 @@ class MarkdownQualityTests(unittest.TestCase):
         self.assertEqual(audit.summary["tracked_markdown_count"], 1)
         self.assertEqual(audit.summary["requires_action_count"], 0)
         self.assertEqual(audit.records[0].status, "quarantined")
+
+    def test_repository_markdown_audit_has_no_actionable_source_files(self) -> None:
+        audit = audit_markdown_sources(REPO_ROOT)
+        actionable_paths = [
+            record.path
+            for record in audit.records
+            if record.planned_action != "none" or record.status != "quarantined"
+        ]
+
+        self.assertEqual(actionable_paths, [])
+        self.assertGreater(audit.summary["markdown_file_count"], 0)
+        self.assertEqual(audit.summary["requires_action_count"], 0)
+        self.assertEqual(audit.summary["markdown_file_count"], audit.summary["quarantined_count"])
 
     def test_markdown_quality_cli_returns_failure_when_action_required(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
