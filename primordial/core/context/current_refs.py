@@ -18,6 +18,7 @@ from primordial.core.context.generated_exports import (
 from primordial.core.context.metadata_flags import metadata_value_is_false, raw_metadata_value
 from primordial.core.context.normalization import normalized_context_key, normalized_context_keys
 from primordial.core.context.operator_notes import RAW_CHAT_SOURCE_TYPES, operator_note_source_omission_reason
+from primordial.core.context.source_markdown import is_source_markdown_context
 from primordial.core.context.source_refs import (
     EVIDENCE_REF_PREFIX,
     NOTE_REF_PREFIX,
@@ -141,6 +142,8 @@ def prompt_context_omission_reason(envelope: ContextEnvelope, *, purpose: str, r
         or is_generated_export_path(raw_metadata_value(envelope, "source_url"))
     ):
         return "generated_export"
+    if is_source_markdown_context(envelope):
+        return "source_markdown"
     if metadata_value_is_false(envelope, "operational_retrieval_allowed"):
         return "operational_retrieval_disabled"
     if _is_raw_chat_context(envelope):
