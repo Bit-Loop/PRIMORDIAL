@@ -105,7 +105,7 @@ class CTFLabPhaseCatalogTests(unittest.TestCase):
     def test_remaining_lab_phases_require_verified_environment_proof_before_completion(self) -> None:
         catalog = load_ctf_lab_phase_catalog(CATALOG_PATH)
 
-        for phase in catalog.phases[5:]:
+        for phase in catalog.phases[6:]:
             self.assertTrue(phase.environment_proof_required)
             self.assertTrue(phase.deterministic_fixture_required)
             self.assertNotEqual(phase.status, "complete")
@@ -136,6 +136,20 @@ class CTFLabPhaseCatalogTests(unittest.TestCase):
         self.assertIn("tests.test_ctf_harness_cicd_goat", commands)
         self.assertIn("tests.test_ctf_lab_phases", commands)
         self.assertIn("tests.test_ctf_harness_integrity", commands)
+        self.assertIn("primordial.core.quality.hardcode", commands)
+
+    def test_phase_five_kubernetes_goat_tracks_control_contract_progress(self) -> None:
+        phase = load_ctf_lab_phase_catalog(CATALOG_PATH).phase(5)
+        commands = "\n".join(phase.validation_commands)
+
+        self.assertEqual(phase.status, "in_progress")
+        self.assertIn("local_cluster_environment_verified", phase.exit_gates)
+        self.assertIn("namespace_scope_enforced", phase.exit_gates)
+        self.assertIn("cluster_mutations_reset_between_runs", phase.exit_gates)
+        self.assertEqual(phase.verified_environment_refs, ())
+        self.assertEqual(phase.evidence_refs, ())
+        self.assertIn("tests.test_ctf_harness_kubernetes_goat", commands)
+        self.assertIn("tests.test_ctf_lab_phases", commands)
         self.assertIn("primordial.core.quality.hardcode", commands)
 
     def test_lab_phase_catalog_rejects_missing_required_phase(self) -> None:

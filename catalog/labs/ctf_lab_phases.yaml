@@ -131,7 +131,7 @@ phases:
   - number: 5
     id: phase_5_kubernetes_goat
     name: Phase 5 Kubernetes Goat
-    status: not_started
+    status: in_progress
     target_families:
       - kubernetes_goat
     allowed_profiles:
@@ -142,7 +142,9 @@ phases:
       - local_cluster_environment_verified
       - namespace_scope_enforced
       - cluster_mutations_reset_between_runs
-    validation_commands: []
+    validation_commands:
+      - python3 -m unittest tests.test_ctf_harness_kubernetes_goat tests.test_ctf_lab_phases -q
+      - python3 -m primordial.core.quality.hardcode
   - number: 6
     id: phase_6_goad_light_goad
     name: Phase 6 GOAD-Light/GOAD
