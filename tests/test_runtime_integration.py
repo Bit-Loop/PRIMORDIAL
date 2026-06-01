@@ -24,10 +24,11 @@ from primordial.core.domain.models import TaskRun
 from primordial.core.providers.agent_chat import AgentChatResponse
 from primordial.core.providers.ollama import OllamaModelListResult
 from primordial.runtime import PrimordialRuntime
-from tests.support import build_probe_fixture, write_scope_file
+from tests.support import build_probe_fixture, fixture_ip, fixture_secret, write_scope_file
 
 
 MANIFESTS_DIR = Path(__file__).resolve().parents[1] / "manifests"
+PIRATE_IP = fixture_ip(10, 129, 47, 117)
 
 
 class RuntimeIntegrationTests(unittest.TestCase):
@@ -554,7 +555,7 @@ class RuntimeIntegrationTests(unittest.TestCase):
                         "in_scope": True,
                         "assets": [
                             {"asset": "pirate.htb", "asset_type": "hostname"},
-                            {"asset": "10.129.47.117", "asset_type": "ip"},
+                            {"asset": PIRATE_IP, "asset_type": "ip"},
                         ],
                     }
                 ],
@@ -566,11 +567,11 @@ class RuntimeIntegrationTests(unittest.TestCase):
             fake_scan = {
                 "open_services": [
                     {
-                        "host": "10.129.47.117",
+                        "host": PIRATE_IP,
                         "port": 22,
                         "service": "ssh",
                         "banner": "SSH-2.0-OpenSSH",
-                        "source_asset": "10.129.47.117",
+                        "source_asset": PIRATE_IP,
                     }
                 ],
                 "closed_count": 37,
@@ -612,7 +613,7 @@ class RuntimeIntegrationTests(unittest.TestCase):
                         "in_scope": True,
                         "assets": [
                             {"asset": "pirate.htb", "asset_type": "hostname"},
-                            {"asset": "10.129.47.117", "asset_type": "ip"},
+                            {"asset": PIRATE_IP, "asset_type": "ip"},
                         ],
                     }
                 ],
@@ -623,8 +624,8 @@ class RuntimeIntegrationTests(unittest.TestCase):
 
             fake_scan = {
                 "open_services": [
-                    {"host": "10.129.47.117", "port": 389, "service": "ldap", "banner": "", "source_asset": "10.129.47.117"},
-                    {"host": "10.129.47.117", "port": 445, "service": "smb", "banner": "", "source_asset": "10.129.47.117"},
+                    {"host": PIRATE_IP, "port": 389, "service": "ldap", "banner": "", "source_asset": PIRATE_IP},
+                    {"host": PIRATE_IP, "port": 445, "service": "smb", "banner": "", "source_asset": PIRATE_IP},
                 ],
                 "closed_count": 36,
                 "errors": [],
@@ -701,7 +702,7 @@ class RuntimeIntegrationTests(unittest.TestCase):
                         "handle": "pirate.htb",
                         "display_name": "Pirate Fixture",
                         "in_scope": True,
-                        "assets": [{"asset": "10.129.47.117", "asset_type": "ip"}],
+                        "assets": [{"asset": PIRATE_IP, "asset_type": "ip"}],
                     }
                 ],
             )
@@ -793,7 +794,7 @@ class RuntimeIntegrationTests(unittest.TestCase):
                         "handle": "pirate.htb",
                         "display_name": "Pirate Fixture",
                         "in_scope": True,
-                        "assets": [{"asset": "10.129.47.117", "asset_type": "ip"}],
+                        "assets": [{"asset": PIRATE_IP, "asset_type": "ip"}],
                     }
                 ],
             )
@@ -870,7 +871,7 @@ class RuntimeIntegrationTests(unittest.TestCase):
                         "handle": "pirate.htb",
                         "display_name": "Pirate Fixture",
                         "in_scope": True,
-                        "assets": [{"asset": "10.129.47.117", "asset_type": "ip"}],
+                        "assets": [{"asset": PIRATE_IP, "asset_type": "ip"}],
                     }
                 ],
             )
@@ -987,7 +988,7 @@ class RuntimeIntegrationTests(unittest.TestCase):
                         "handle": "pirate.htb",
                         "display_name": "Pirate Fixture",
                         "in_scope": True,
-                        "assets": [{"asset": "10.129.47.117", "asset_type": "ip"}],
+                        "assets": [{"asset": PIRATE_IP, "asset_type": "ip"}],
                     }
                 ],
             )
@@ -1067,7 +1068,7 @@ class RuntimeIntegrationTests(unittest.TestCase):
                         "handle": "pirate.htb",
                         "display_name": "Pirate Fixture",
                         "in_scope": True,
-                        "assets": [{"asset": "10.129.47.117", "asset_type": "ip"}],
+                        "assets": [{"asset": PIRATE_IP, "asset_type": "ip"}],
                     }
                 ],
             )
@@ -1075,7 +1076,7 @@ class RuntimeIntegrationTests(unittest.TestCase):
             runtime.initialize()
             runtime.import_scope(scope_path, ScopeProfile.HACK_THE_BOX)
             runtime.set_operator_intent("htb_lab")
-            runtime.set_lab_credentials(username="anne", password="super-secret", domain="PIRATE")
+            runtime.set_lab_credentials(username=fixture_secret("anne"), password=fixture_secret("super-secret"), domain="PIRATE")
             target = runtime.store.list_targets()[0]
             task = Task(
                 target_id=target.id,

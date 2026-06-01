@@ -16,8 +16,77 @@ from urllib import parse as urlparse
 from primordial.adapters.caido import CaidoIntegrationService
 from primordial.adapters.discord import DiscordNotificationService, validate_discord_webhook_url
 from primordial.adapters.notion import NotionSyncService
+from primordial.app.active_ip import active_ip_asset, active_ip_event, active_ip_note, build_active_ip_update
+from primordial.app.caido_import import (
+    caido_capture_evidence,
+    caido_detail_error,
+    caido_import_event,
+    caido_import_response,
+    caido_import_row,
+    caido_request_payload,
+    caido_scope_error,
+    selected_caido_request_ids,
+)
+from primordial.app.deterministic_operator import (
+    AUTH_SURFACE_TERMS,
+    OPEN_PORT_TERMS,
+    PROBLEM_TASK_TERMS,
+    SCOPED_RECON_TERMS,
+    TARGET_STATE_TERMS,
+    deterministic_operator_facts,
+    evidence_kind_set,
+    flag_evidence_hits,
+    merge_methodology_next_actions,
+    operator_capability_sets,
+    operator_question_has_any,
+    render_deterministic_operator_answer,
+)
+from primordial.app.gpu_metrics import read_gpu_metrics
+from primordial.app.model_evaluation import (
+    model_eval_service,
+    normalize_model_eval_processor,
+    normalize_model_eval_providers,
+    record_model_eval_payload,
+)
+from primordial.app.operator_ai import (
+    OperatorAiDraft,
+    OperatorAiRoute,
+    assistant_message_from_draft,
+    deterministic_state_draft,
+    direct_state_draft,
+    draft_with_ai_review,
+    draft_with_escalation,
+    guardrail_fallback_draft,
+    model_success_draft,
+    operator_ai_response_payload,
+    operator_ai_route,
+    operator_chat_system_prompt,
+    operator_message_event,
+    operator_question_message,
+    operator_response_event,
+    provider_failure_draft,
+)
+from primordial.app.rag_synthesis import (
+    build_rag_synthesis_prompt,
+    disallowed_model_response,
+    final_rag_synthesis_response,
+    prepare_rag_synthesis_context,
+    provider_error_response,
+    rag_synthesis_system_prompt,
+    run_rag_synthesis_provider,
+)
+from primordial.app.scope_import import normalize_scope_assets
+from primordial.app.work_status import (
+    build_work_status_payload,
+    credentialed_access_blocker,
+    current_generation_evidence,
+    missing_verified_path_blocker,
+    poc_validation_blocker,
+    stale_recon_blocker,
+    work_status_capabilities,
+)
+from primordial.app.worker_runners import register_default_worker_runners
 from primordial.core.config import AppConfig
-from primordial.core.context import ContextEnvelope, ContextSinkValidator, is_operational_context_purpose
 from primordial.core.context.normalization import metadata_list_value, metadata_value
 from primordial.core.credentials import CredentialStore
 from primordial.core.domain.enums import (
@@ -65,14 +134,13 @@ from primordial.core.orchestration.verifier import BehaviorVerifier
 from primordial.core.orchestration.workflow import WorkflowOrchestrator
 from primordial.core.primitives.catalog import PrimitiveCatalog
 from primordial.core.providers.router import ProviderRouter
-from primordial.core.providers.agent_chat import AgentChatClient, AgentChatPremiumReviewRunner, AgentChatSettings
+from primordial.core.providers.agent_chat import AgentChatClient, AgentChatSettings
 from primordial.core.providers.lmstudio import LMStudioClient
 from primordial.core.providers.lmstudio_tuning import LMStudioPerformanceTuner
 from primordial.core.providers.ollama import OllamaClient, OllamaModelListResult
-from primordial.core.providers.model_eval import ModelEvaluationService
 from primordial.core.providers.wrapper_prompts import WRAPPER_ROLE_PERSONALITY_PROMPTS, build_wrapper_system_prompt
 from primordial.core.rag import DocumentIngestionService, RagContextBroker
-from primordial.core.rag.citations import disallowed_rag_synthesis_model, validate_rag_citations
+from primordial.core.rag.citations import validate_rag_citations
 from primordial.core.rag.embeddings import embedding_provider_from_config
 from primordial.core.rag.importer import RagChunkImporter, RagImportOptions
 from primordial.core.rag.vuln_sync import VulnFeedSyncer, VulnSyncOptions
@@ -83,7 +151,7 @@ from primordial.core.providers.scheduler import ModelScheduler
 from primordial.core.skills import RuntimeSkillRegistry
 from primordial.core.storage.runtime import RuntimeStore, _SCHEMA_VERSION
 from primordial.core.validation import build_default_validation_registry
-from primordial.core.workers import InProcessWorkerRunner, WorkerBroker, WorkerContract
+from primordial.core.workers import WorkerBroker
 from primordial.modes.security.module import SecurityModeServices, build_security_mode_services
 
 
@@ -466,29 +534,11 @@ class PrimordialRuntime:
             handle = str(target_payload.get("handle", "")).strip()
             if not handle:
                 raise ValueError("each scope target requires a handle")
-            raw_assets = target_payload.get("assets", [handle])
-            if not isinstance(raw_assets, list):
-                raise ValueError(f"assets for {handle} must be a list")
-            normalized_assets = []
-            for asset_payload in raw_assets or [handle]:
-                if isinstance(asset_payload, dict):
-                    raw_asset = str(asset_payload["asset"])
-                    normalized_assets.append(
-                        {
-                            "asset": raw_asset,
-                            "asset_type": str(asset_payload.get("asset_type", self._infer_asset_type(raw_asset))),
-                            "metadata": dict(asset_payload.get("metadata", {})),
-                        }
-                    )
-                else:
-                    raw_asset = str(asset_payload)
-                    normalized_assets.append(
-                        {
-                            "asset": raw_asset,
-                            "asset_type": self._infer_asset_type(raw_asset),
-                            "metadata": {},
-                        }
-                    )
+            normalized_assets = normalize_scope_assets(
+                target_payload.get("assets", [handle]),
+                handle,
+                self._infer_asset_type,
+            )
             self.register_target(
                 handle=handle,
                 display_name=str(target_payload.get("display_name", handle)),
@@ -908,81 +958,29 @@ class PrimordialRuntime:
         parsed_ip = self._validated_optional_ip(ip)
         if not parsed_ip:
             raise ValueError("active_ip must be a valid IPv4 or IPv6 address")
-        previous_ip = str(target_record.metadata.get("active_ip") or "").strip()
-        ip_changed = previous_ip != parsed_ip
-        generation = int(target_record.metadata.get("active_ip_generation", 0) or 0) + (1 if ip_changed else 0)
-        metadata = dict(target_record.metadata)
-        metadata.update(
-            {
-                "active_ip": parsed_ip,
-                "operator_confirmed_ip": parsed_ip,
-                "operator_confirmed_ip_at": utc_now().isoformat(),
-                "active_ip_generation": generation,
-                "stale_evidence_before": utc_now().isoformat()
-                if ip_changed
-                else metadata.get("stale_evidence_before", utc_now().isoformat()),
-                "active_ip_source": source,
-            }
-        )
+        active_ip_update = build_active_ip_update(target_record, parsed_ip, source)
         updated = self.register_target(
             handle=target_record.handle,
             profile=target_record.profile,
             display_name=target_record.display_name,
-            assets=[
-                {
-                    "asset": parsed_ip,
-                    "asset_type": "ip",
-                    "metadata": {
-                        "active": True,
-                        "operator_confirmed": True,
-                        "active_ip_generation": generation,
-                        "source": source,
-                    },
-                }
-            ],
+            assets=[active_ip_asset(parsed_ip, active_ip_update.generation, source)],
             in_scope=target_record.in_scope,
-            metadata=metadata,
+            metadata=active_ip_update.metadata,
             emit_event=False,
         )
-        if ip_changed:
-            self.store.insert_note(
-                Note(
-                    target_id=updated.id,
-                    title="Operator-confirmed active target IP",
-                    body=(
-                        f"Active IP for `{updated.handle}` is `{parsed_ip}`. "
-                        "Prior recon evidence may still reference older IPs and should be treated as historical "
-                        "until refreshed recon tasks complete."
-                    ),
-                    confidence=1.0,
-                    freshness=1.0,
-                    metadata={
-                        "class": "operator_correction",
-                        "active_ip": parsed_ip,
-                        "previous_ip": previous_ip,
-                        "active_ip_generation": generation,
-                        "source": source,
-                    },
-                )
-            )
+        if active_ip_update.ip_changed:
+            self.store.insert_note(active_ip_note(updated, parsed_ip, active_ip_update.previous_ip, active_ip_update.generation, source))
             # Supersede EPISODIC memory entries from the previous generation so stale
             # IP-specific facts don't contaminate current-generation reasoning.
-            self.memory.supersede_stale_generation_entries(updated.id, str(generation))
+            self.memory.supersede_stale_generation_entries(updated.id, str(active_ip_update.generation))
         self.store.insert_event(
-            EventRecord(
-                type=EventType.SCOPE_UPDATED,
-                summary=(
-                    f"Active IP set for {updated.handle}: {parsed_ip}"
-                    if ip_changed
-                    else f"Active IP confirmed for {updated.handle}: {parsed_ip}"
-                ),
-                target_id=updated.id,
-                metadata={
-                    "active_ip": parsed_ip,
-                    "previous_ip": previous_ip,
-                    "active_ip_generation": generation,
-                    "source": source,
-                },
+            active_ip_event(
+                updated,
+                parsed_ip,
+                active_ip_update.previous_ip,
+                active_ip_update.generation,
+                source,
+                ip_changed=active_ip_update.ip_changed,
             )
         )
         return updated
@@ -1192,232 +1190,60 @@ class PrimordialRuntime:
         tasks = self.store.list_tasks(limit=500)
         runs = self.store.list_task_runs(limit=200)
         targets = {target.id: target for target in self.store.list_targets()}
-        tasks_by_id = {task.id: task for task in tasks}
-
-        active_run_statuses = {TaskRunStatus.CLAIMED, TaskRunStatus.RUNNING}
-        active_runs = [
-            run
-            for run in runs
-            if run.status in active_run_statuses and run.finished_at is None
-        ][:limit]
-        active_run_task_ids = {run.task_id for run in active_runs}
-        running_tasks = [
-            task
-            for task in tasks
-            if task.status == TaskStatus.RUNNING and task.id not in active_run_task_ids
-        ][:limit]
-        queued_tasks = [task for task in tasks if task.status == TaskStatus.PENDING][:limit]
-        waiting_tasks = [
-            task
-            for task in tasks
-            if task.status in {TaskStatus.WAITING, TaskStatus.NEEDS_APPROVAL}
-        ][:limit]
-        recent_runs = [
-            run
-            for run in runs
-            if run.status not in active_run_statuses or run.finished_at is not None
-        ][:limit]
-
-        def target_label(target_id: str | None) -> str | None:
-            if not target_id:
-                return None
-            target = targets.get(target_id)
-            return target.handle if target else target_id
-
-        def task_payload(task) -> dict[str, object]:
-            return {
-                "kind": "task",
-                "task_id": task.id,
-                "task_kind": task.kind.value,
-                "title": task.title,
-                "summary": task.summary,
-                "status": task.status.value,
-                "agent": task.role.value,
-                "route": task.provider_route.value if task.provider_route else None,
-                "model": task.provider_model,
-                "worker_contract": task.metadata.get("worker_contract"),
-                "target": target_label(task.target_id),
-                "metadata": json_ready(task.metadata),
-                "active_ip_generation": task.metadata.get("active_ip_generation"),
-                "invalid_target": bool(task.metadata.get("invalid_target")),
-                "updated_at": task.updated_at.isoformat(),
-            }
-
-        def run_payload(run) -> dict[str, object]:
-            task = tasks_by_id.get(run.task_id)
-            return {
-                "kind": "run",
-                "run_id": run.id,
-                "task_id": run.task_id,
-                "task_kind": task.kind.value if task else None,
-                "title": task.title if task else run.trace_summary,
-                "summary": run.trace_summary,
-                "status": run.status.value,
-                "agent": run.role.value,
-                "route": run.provider_route.value,
-                "model": run.model_name,
-                "worker_contract": run.metadata.get("worker_contract"),
-                "suitability_score": run.metadata.get("suitability_score"),
-                "target": target_label(task.target_id if task else None),
-                "metadata": json_ready(task.metadata) if task else {},
-                "active_ip_generation": task.metadata.get("active_ip_generation") if task else None,
-                "invalid_target": bool(task.metadata.get("invalid_target")) if task else False,
-                "started_at": run.started_at.isoformat(),
-                "heartbeat_at": run.heartbeat_at.isoformat() if run.heartbeat_at else None,
-                "finished_at": run.finished_at.isoformat() if run.finished_at else None,
-                "error": run.error,
-            }
-
-        active_items = [run_payload(run) for run in active_runs] + [task_payload(task) for task in running_tasks]
-        queued_items = [task_payload(task) for task in queued_tasks]
-        waiting_items = [task_payload(task) for task in waiting_tasks]
-        recent_items = [run_payload(run) for run in recent_runs]
         mode = self.execution_mode_payload()
         blockers = self._work_status_blockers()
-        target_states = []
-        for target in targets.values():
-            state = self._live_methodology_state_payload(target)
-            if not state:
-                continue
-            target_states.append(
-                {
-                    "target": target.handle,
-                    "phase": state.get("phase"),
-                    "subphase": state.get("subphase"),
-                    "completion": state.get("completion"),
-                    "transition_reason": state.get("transition_reason"),
-                    "next_unblock_action": state.get("next_unblock_action"),
-                    "no_progress_reason": state.get("no_progress_reason"),
-                    "candidate_actions": state.get("candidate_actions", []),
-                }
-            )
-
-        if active_items:
-            summary = f"Working on {len(active_items)} active item(s)."
-        elif queued_items:
-            summary = f"Idle between executions; {len(queued_items)} task(s) are queued."
-        elif waiting_items:
-            summary = f"Blocked or waiting; {len(waiting_items)} task(s) need approval or resume."
-        elif target_states and target_states[0].get("no_progress_reason"):
-            summary = "Idle/stalled: " + str(target_states[0]["no_progress_reason"])
-        elif blockers:
-            summary = "Idle/stalled: " + blockers[0]["summary"]
-        elif mode["mode"] == "continuous":
-            summary = f"Continuous mode is enabled; waiting for the next {mode['interval_seconds']}s tick."
-        else:
-            summary = "Idle; no active, queued, or waiting work is currently visible."
-
-        return {
-            "summary": summary,
-            "is_busy": bool(active_items),
-            "updated_at": utc_now().isoformat(),
-            "execution_mode": mode,
-            "counts": {
-                "active": len(active_items),
-                "queued": len([task for task in tasks if task.status == TaskStatus.PENDING]),
-                "waiting": len(
-                    [
-                        task
-                        for task in tasks
-                        if task.status in {TaskStatus.WAITING, TaskStatus.NEEDS_APPROVAL}
-                    ]
-                ),
-            },
-            "active": active_items,
-            "queued": queued_items,
-            "waiting": waiting_items,
-            "recent": recent_items,
-            "blockers": blockers,
-            "target_states": target_states,
-        }
+        return build_work_status_payload(
+            tasks=tasks,
+            runs=runs,
+            targets=targets,
+            mode=mode,
+            blockers=blockers,
+            live_methodology_state=self._live_methodology_state_payload,
+            limit=limit,
+        )
 
     def _work_status_blockers(self) -> list[dict[str, object]]:
         blockers: list[dict[str, object]] = []
-        primitives = self.store.list_primitives()
-        capabilities = {
-            tag.lower()
-            for primitive in primitives
-            for tag in [primitive.name, *primitive.capability_tags]
-        }
+        capabilities = work_status_capabilities(self.store.list_primitives())
         lab_credentials_configured = self._lab_credentials_configured()
         for target in self.store.list_targets():
             evidence = self.store.list_evidence(target_id=target.id, limit=100)
             active_generation = self._target_active_generation(target)
-            current_evidence = [
-                item
-                for item in evidence
-                if self._record_matches_active_generation(item, active_generation)
-            ]
+            current_evidence = current_generation_evidence(
+                evidence,
+                active_generation,
+                self._record_matches_active_generation,
+            )
             interests = self.store.list_interests(target_id=target.id, limit=100)
             findings = self.store.list_findings(target_id=target.id, limit=20)
-            if target.metadata.get("active_ip"):
-                active_generation = str(target.metadata.get("active_ip_generation", ""))
-                has_current_recon = any(
-                    item.metadata.get("kind") == "tcp_service_discovery"
-                    and str(item.metadata.get("active_ip_generation", "")) == active_generation
-                    for item in evidence
-                )
-                if active_generation and not has_current_recon:
-                    blockers.append(
-                        {
-                            "target": target.handle,
-                            "kind": "stale_recon",
-                            "summary": (
-                                f"`{target.handle}` active IP changed to `{target.metadata['active_ip']}`; "
-                                "fresh service discovery has not completed yet."
-                            ),
-                        }
-                    )
-                    continue
-            has_poc_candidates = any(
-                item.metadata.get("kind") == "exploit_research" and int(item.metadata.get("match_count", 0) or 0) > 0
-                for item in evidence
-            ) or any(item.metadata.get("class") == "exploit_research" for item in interests)
-            has_poc_validation = any(item.metadata.get("kind") == "poc_applicability_validation" for item in evidence)
-            if has_poc_candidates and not has_poc_validation:
-                if self._poc_adaptation_available(capabilities):
-                    blockers.append(
-                        {
-                            "target": target.handle,
-                            "kind": "runnable_poc_validation",
-                            "summary": f"`{target.handle}` has public PoC candidates waiting for gated applicability validation.",
-                        }
-                    )
-                else:
-                    blockers.append(
-                        {
-                            "target": target.handle,
-                            "kind": "missing_poc_validation_primitive",
-                            "summary": f"`{target.handle}` has PoC candidates but no PoC applicability primitive is registered.",
-                        }
-                    )
+
+            blocker = stale_recon_blocker(target, evidence)
+            if blocker:
+                blockers.append(blocker)
                 continue
-            has_credentialed_capability = self._has_any_capability(
+            blocker = poc_validation_blocker(
+                target,
+                evidence,
+                interests,
                 capabilities,
-                "credentialed-access-check",
-                "smb-session",
-                "winrm",
+                self._poc_adaptation_available,
             )
-            credential_surface = classify_credentialed_access_surface(current_evidence)
-            if has_credentialed_capability and not lab_credentials_configured and credential_surface.eligible:
-                blockers.append(
-                    {
-                        "target": target.handle,
-                        "kind": "missing_known_credentials",
-                        "summary": (
-                            f"`{target.handle}` has evidence-supported Windows SMB/WinRM services, but known username/password are not configured."
-                        ),
-                    }
-                )
+            if blocker:
+                blockers.append(blocker)
                 continue
-            if not findings and evidence:
-                blockers.append(
-                    {
-                        "target": target.handle,
-                        "kind": "no_verified_path",
-                        "summary": f"`{target.handle}` has evidence, but no verified finding or runnable exploit path yet.",
-                    }
-                )
+            blocker = credentialed_access_blocker(
+                target,
+                current_evidence,
+                capabilities,
+                lab_credentials_configured,
+                self._has_any_capability,
+            )
+            if blocker:
+                blockers.append(blocker)
+                continue
+            blocker = missing_verified_path_blocker(target, findings, evidence)
+            if blocker:
+                blockers.append(blocker)
         return blockers[:8]
 
     def _target_has_remote_admin_surface(self, evidence: list[EvidenceRecord]) -> bool:
@@ -2005,177 +1831,52 @@ class PrimordialRuntime:
         retrieved_chunks: list[dict[str, object]] | None = None,
         safety_context: dict[str, object] | None = None,
     ) -> dict[str, object]:
-        if retrieved_chunks is None:
-            if is_operational_context_purpose(mode):
-                return {
-                    "ok": False,
-                    "status": "operational_context_required",
-                    "answer": "",
-                    "error": (
-                        "retrieved_chunks are required for operational RAG synthesis; "
-                        "unscoped fallback retrieval is not allowed"
-                    ),
-                    "retrieved_ids": [],
-                    "citation_map": [],
-                    "validation": validate_rag_citations("", [], mode=mode, require_citations=True).as_payload(),
-                }
-            chunks = self.rag_search(query, limit=5)["results"]
-        else:
-            chunks = retrieved_chunks
-        clean_chunks = [item for item in chunks if isinstance(item, dict) and not item.get("error")]
-        citation_map = self.rag_context_broker.citation_map_for_chunks(clean_chunks)
-        if is_operational_context_purpose(mode):
-            rag_context_validation = self._validate_operational_rag_synthesis_context(clean_chunks, mode=mode)
-            if not rag_context_validation.valid:
-                return {
-                    "ok": False,
-                    "status": "invalid_rag_context",
-                    "answer": "",
-                    "error": "; ".join(rag_context_validation.errors),
-                    "retrieved_ids": [self._rag_payload_citation_id(item) for item in clean_chunks],
-                    "citation_map": citation_map,
-                    "validation": validate_rag_citations("", clean_chunks, mode=mode, require_citations=True).as_payload(),
-                }
-        if not clean_chunks:
-            return {
-                "ok": False,
-                "status": "insufficient_context",
-                "answer": "",
-                "retrieved_ids": [],
-                "citation_map": [],
-                "validation": validate_rag_citations("", [], mode=mode, require_citations=True).as_payload(),
-            }
-        disallowed = disallowed_rag_synthesis_model(
-            self.config.rag.synthesis.model,
-            self.config.rag.synthesis.disallowed_models,
+        context = prepare_rag_synthesis_context(
+            query=query,
+            mode=mode,
+            retrieved_chunks=retrieved_chunks,
+            fallback_search=lambda text: self.rag_search(text, limit=5)["results"],
+            citation_map_for_chunks=lambda chunks: self.rag_context_broker.citation_map_for_chunks(chunks),
+            citation_id_for_chunk=self._rag_payload_citation_id,
         )
-        if disallowed:
-            return {
-                "ok": False,
-                "status": "disallowed_model",
-                "answer": "",
-                "error": f"RAG synthesis model {self.config.rag.synthesis.model!r} is disallowed by pattern {disallowed!r}",
-                "retrieved_ids": [self._rag_payload_citation_id(item) for item in clean_chunks],
-                "citation_map": citation_map,
-                "validation": validate_rag_citations("", clean_chunks, mode=mode, require_citations=True).as_payload(),
-            }
-        system = build_wrapper_system_prompt(
-            "rag_synthesis",
-            (
-                "Answer only from retrieved RAG context. Cite every factual sentence with rag:<chunk_id>. "
-                "If context is insufficient, say exactly what is missing. Do not use MITRE taxonomy chunks "
-                "to choose actions or expand scope."
-            ),
+        if context.response:
+            return context.response
+        model_response = disallowed_model_response(
+            synthesis_config=self.config.rag.synthesis,
+            chunks=context.chunks,
+            citation_map=context.citation_map,
+            citation_id_for_chunk=self._rag_payload_citation_id,
+            mode=mode,
         )
-        prompt = self._rag_synthesis_prompt(query, clean_chunks, mode=mode, safety_context=safety_context or {})
+        if model_response:
+            return model_response
+        prompt = build_rag_synthesis_prompt(
+            query,
+            context.chunks,
+            mode=mode,
+            safety_context=safety_context or {},
+            citation_id_for_chunk=self._rag_payload_citation_id,
+        )
         try:
-            if self.config.rag.synthesis.provider == "ollama":
-                response = self.ollama.generate(
-                    model=self.config.rag.synthesis.model,
-                    system=system,
-                    prompt=prompt,
-                    temperature=self.config.rag.synthesis.temperature,
-                    timeout_seconds=300,
-                )
-                answer = response.text
-                model = response.model
-                provider = "ollama"
-            else:
-                client = LMStudioClient(
-                    base_url=self._lmstudio_base_without_v1(self.config.rag.synthesis.base_url),
-                    timeout_seconds=300,
-                )
-                response = client.chat(
-                    model=self.config.rag.synthesis.model,
-                    system=system,
-                    prompt=prompt,
-                    temperature=self.config.rag.synthesis.temperature,
-                    max_tokens=self.config.rag.synthesis.max_tokens,
-                    timeout_seconds=300,
-                )
-                answer = response.text
-                model = response.model
-                provider = "lmstudio_openai_compatible"
-        except Exception as exc:  # noqa: BLE001 - surface model/provider failures as structured runtime output
-            return {
-                "ok": False,
-                "status": "provider_error",
-                "answer": "",
-                "error": str(exc),
-                "retrieved_ids": [self._rag_payload_citation_id(item) for item in clean_chunks],
-                "citation_map": citation_map,
-            }
-        validation = validate_rag_citations(answer, clean_chunks, mode=mode, require_citations=True)
-        return {
-            "ok": validation.valid,
-            "status": "ok" if validation.valid else "validation_failed",
-            "answer": answer,
-            "provider": provider,
-            "model": model,
-            "retrieved_ids": validation.retrieved_ids,
-            "citation_map": citation_map,
-            "validation": validation.as_payload(),
-        }
-
-    def _rag_synthesis_prompt(
-        self,
-        query: str,
-        chunks: list[dict[str, object]],
-        *,
-        mode: str,
-        safety_context: dict[str, object],
-    ) -> str:
-        lines = [
-            f"Mode: {mode}",
-            f"Question: {query.strip()}",
-            f"Safety context: {json.dumps(json_ready(safety_context), sort_keys=True)}",
-            "",
-            "Retrieved context:",
-        ]
-        for item in chunks:
-            citation_id = self._rag_payload_citation_id(item)
-            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
-            source_display = str(item.get("source_display") or metadata.get("source_display") or "")
-            text = str(item.get("text") or item.get("retrieval_text") or "").strip()
-            if len(text) > 1800:
-                text = text[:1800].rstrip() + "\n...TRUNCATED_RAG_CHUNK..."
-            lines.extend(
-                [
-                    f"[{citation_id}]",
-                    f"source={source_display}",
-                    f"source_file={metadata.get('source_file') or item.get('source_file') or ''}",
-                    f"domain={metadata.get('domain') or metadata.get('corpus_type') or ''}",
-                    f"planner_visibility={metadata.get('planner_visibility') or ''}",
-                    text,
-                    "",
-                ]
+            provider_result = run_rag_synthesis_provider(
+                synthesis_config=self.config.rag.synthesis,
+                ollama=self.ollama,
+                system=rag_synthesis_system_prompt(),
+                prompt=prompt,
             )
-        lines.append("Answer with citations using only rag:<chunk_id> IDs shown above.")
-        return "\n".join(lines)
-
-    def _validate_operational_rag_synthesis_context(
-        self,
-        chunks: list[dict[str, object]],
-        *,
-        mode: str,
-    ):
-        envelopes: list[ContextEnvelope] = []
-        errors: list[str] = []
-        for item in chunks:
-            try:
-                envelopes.append(ContextEnvelope.from_rag_chunk(item, purpose=mode, sink="prompt"))
-            except ValueError as exc:
-                errors.append(str(exc))
-        result = ContextSinkValidator().validate("prompt", envelopes)
-        if errors:
-            result.valid = False
-            result.errors.extend(errors)
-            result.rejected_refs.extend(f"rag_context:{index}" for index in range(len(errors)))
-        return result
-
-    def _lmstudio_base_without_v1(self, base_url: str) -> str:
-        clean = base_url.rstrip("/")
-        return clean[:-3] if clean.endswith("/v1") else clean
+        except Exception as exc:  # noqa: BLE001 - surface model/provider failures as structured runtime output
+            return provider_error_response(
+                exc=exc,
+                chunks=context.chunks,
+                citation_map=context.citation_map,
+                citation_id_for_chunk=self._rag_payload_citation_id,
+            )
+        return final_rag_synthesis_response(
+            provider_result=provider_result,
+            chunks=context.chunks,
+            citation_map=context.citation_map,
+            mode=mode,
+        )
 
     def rag_cve_search(self, query: str, *, target: str, limit: int = 5) -> dict[str, object]:
         target_record = self._resolve_target_reference(target)
@@ -2268,181 +1969,159 @@ class PrimordialRuntime:
         if not question:
             raise ValueError("message is required")
         target_record = self._resolve_operator_chat_target(target, question)
-        route_model = self._wrapper_model_label() if self._use_only_wrapper_mode() else self.config.topology.local_deep
-        route_num_gpu = self._role_num_gpu("local_deep")
-        model = route_model
-        operator_message = OperatorMessage(
-            role="operator",
-            body=question,
-            target_id=target_record.id if target_record else None,
-            metadata={"target_reference": target},
+        route = operator_ai_route(
+            wrapper_only=self._use_only_wrapper_mode(),
+            wrapper_model=self._wrapper_model_label(),
+            local_deep_model=self.config.topology.local_deep,
+            num_gpu=self._role_num_gpu("local_deep"),
         )
-        self.store.insert_operator_message(operator_message)
-        self._write_operator_chat_log(operator_message)
-        self.store.insert_event(
-            EventRecord(
-                type=EventType.OPERATOR_MESSAGE,
-                summary="Operator message recorded",
-                target_id=operator_message.target_id,
-                metadata={"message_id": operator_message.id},
-            )
+        operator_message = operator_question_message(question, target_record, target)
+        self._persist_operator_chat_message(operator_message, operator_message_event(operator_message))
+        draft = self._operator_ai_draft(question, target_record, route)
+        draft = self._operator_ai_draft_with_escalation(question, target_record, draft)
+        assistant_message = assistant_message_from_draft(draft, target_record)
+        self._persist_operator_chat_message(assistant_message, operator_response_event(assistant_message, draft))
+        return operator_ai_response_payload(
+            draft=draft,
+            route=route,
+            question=operator_message,
+            answer=assistant_message,
+            chat=self.operator_chat_payload(target=target),
         )
 
-        system = (
-            "You are Primordial's operator-facing runtime assistant. Answer only from the supplied "
-            "runtime snapshot and recent operator messages. Be concise, cite record IDs when useful, "
-            "do not invent findings, credentials, flags, or tool results, and distinguish facts from "
-            "next-step recommendations. If a requested action would require a task, approval, or a "
-            "new primitive, say so explicitly instead of pretending it has happened. Do not include "
-            "generic security disclaimers or generic pentest playbooks; this console is for an "
-            "authorized local runtime and needs concrete state-aware answers."
-        )
-        rag_context_for_answer = self._rag_context_payload(question, target_record.id if target_record else None)
-        prompt = self._build_operator_prompt(question, target_record.id if target_record else None)
-        direct_state_answer = self._operator_state_update_or_direct_answer(question, target_record)
+    def _persist_operator_chat_message(self, message: OperatorMessage, event: EventRecord) -> None:
+        self.store.insert_operator_message(message)
+        self._write_operator_chat_log(message)
+        self.store.insert_event(event)
+
+    def _operator_ai_draft(
+        self,
+        question: str,
+        target: Target | None,
+        route: OperatorAiRoute,
+    ) -> OperatorAiDraft:
+        direct_state_answer = self._operator_state_update_or_direct_answer(question, target)
         if direct_state_answer is not None:
-            assistant_body = direct_state_answer
-            model = "deterministic-state"
-            metadata = {"ok": True, "mode": "operator_state_reducer", "route_model": route_model}
-            ok = True
-            error = None
-        elif self._should_answer_from_state(question):
-            deterministic_body = self._deterministic_operator_answer(question, target_record.id if target_record else None)
-            assistant_body = deterministic_body
-            model = "deterministic-state"
-            deterministic_only = self._operator_question_requires_deterministic_only(question)
-            metadata = {
-                "ok": True,
-                "mode": "deterministic_state_answer",
-                "route_model": route_model,
-                "ai_review_attempted": not deterministic_only,
-            }
-            ai_review = None
-            if not deterministic_only:
-                ai_review = self._operator_state_ai_review(
-                    question=question,
-                    deterministic_body=deterministic_body,
-                    target_id=target_record.id if target_record else None,
-                    route_model=route_model,
-                    route_num_gpu=route_num_gpu,
-                )
-            if ai_review:
-                assistant_body = f"{deterministic_body}\n\n**AI Review**\n{ai_review['text']}"
-                model = str(ai_review["model"])
-                metadata.update(
-                    {
-                        "mode": "deterministic_state_with_local_review",
-                        "ai_review_model": ai_review["model"],
-                        "elapsed_seconds": ai_review["elapsed_seconds"],
-                        "route_num_gpu": route_num_gpu,
-                    }
-                )
-            ok = True
-            error = None
-        else:
-            try:
-                if self._use_only_wrapper_mode():
-                    response_payload = self._wrapper_ai_generate(
-                        role="operator_chat",
-                        system=system,
-                        prompt=prompt,
-                        persist=False,
-                    )
-                    assistant_body = str(response_payload["text"])
-                    model = str(response_payload["model"])
-                    elapsed_seconds = response_payload.get("elapsed_seconds")
-                else:
-                    response = self.ollama.generate(
-                        model=route_model,
-                        system=system,
-                        prompt=prompt,
-                        num_gpu=route_num_gpu,
-                    )
-                    assistant_body = response.text
-                    model = route_model
-                    elapsed_seconds = response.elapsed_seconds
-                metadata = {
-                    "elapsed_seconds": elapsed_seconds,
-                    "ok": True,
-                    "mode": "wrapper_only" if self._use_only_wrapper_mode() else "local_model",
-                    "route_num_gpu": route_num_gpu,
-                    "rag_context_ids": self._rag_context_ids(rag_context_for_answer),
-                }
-                if rag_context_for_answer and not self._operator_answer_cites_rag_context(
-                    assistant_body,
-                    rag_context_for_answer,
-                ):
-                    assistant_body = self._deterministic_operator_answer(
-                        question,
-                        target_record.id if target_record else None,
-                    )
-                    model = "deterministic-state"
-                    metadata["guardrail_discarded_uncited_rag_output"] = True
-                    metadata["mode"] = "deterministic_state_answer"
-                    metadata["route_model"] = route_model
-                elif self._operator_answer_violates_contract(assistant_body):
-                    assistant_body = self._deterministic_operator_answer(
-                        question,
-                        target_record.id if target_record else None,
-                    )
-                    model = "deterministic-state"
-                    metadata["guardrail_replaced_model_output"] = True
-                    metadata["mode"] = "deterministic_state_answer"
-                    metadata["route_model"] = route_model
-                ok = True
-                error = None
-            except Exception as exc:  # noqa: BLE001 - convert provider failures into durable operator-visible state
-                assistant_body = f"AI response failed: {exc}"
-                metadata = {"ok": False, "error": str(exc)}
-                ok = False
-                error = str(exc)
+            return direct_state_draft(direct_state_answer, route)
+        target_id = target.id if target else None
+        if self._should_answer_from_state(question):
+            return self._deterministic_operator_ai_draft(question, target_id, route)
+        return self._model_operator_ai_draft(question, target_id, route)
 
-        escalation_reason = self._operator_uncertainty_escalation_reason(question, assistant_body, metadata, target_record)
-        if escalation_reason and target_record is not None:
-            escalation_task = self.workflow.create_planner_uncertainty_escalation(
-                target_record,
-                reason_code=escalation_reason,
-                question=question,
-                blockers=[],
-                session_id=self.store.get_active_session().id if self.store.get_active_session() else None,
-            )
-            if escalation_task is not None:
-                metadata["planner_uncertainty_escalation_task_id"] = escalation_task.id
-                metadata["planner_uncertainty_escalation_reason"] = escalation_reason
-            assistant_body = self._append_operator_escalation_status(
-                assistant_body,
-                target_record,
-                escalation_task=escalation_task,
-                reason=escalation_reason,
-            )
+    def _deterministic_operator_ai_draft(
+        self,
+        question: str,
+        target_id: str | None,
+        route: OperatorAiRoute,
+    ) -> OperatorAiDraft:
+        deterministic_body = self._deterministic_operator_answer(question, target_id)
+        deterministic_only = self._operator_question_requires_deterministic_only(question)
+        draft = deterministic_state_draft(
+            deterministic_body,
+            route,
+            ai_review_attempted=not deterministic_only,
+        )
+        if deterministic_only:
+            return draft
+        ai_review = self._operator_state_ai_review(
+            question=question,
+            deterministic_body=deterministic_body,
+            target_id=target_id,
+            route_model=route.model,
+            route_num_gpu=route.num_gpu,
+        )
+        return draft_with_ai_review(draft, ai_review=ai_review, route=route) if ai_review else draft
 
-        assistant_message = OperatorMessage(
-            role="assistant",
-            body=assistant_body,
-            target_id=target_record.id if target_record else None,
-            model=model,
-            metadata=metadata,
-        )
-        self.store.insert_operator_message(assistant_message)
-        self._write_operator_chat_log(assistant_message)
-        self.store.insert_event(
-            EventRecord(
-                type=EventType.OPERATOR_AI_RESPONSE,
-                summary="Operator AI response recorded" if ok else "Operator AI response failed",
-                target_id=assistant_message.target_id,
-                metadata={"message_id": assistant_message.id, "model": model, "ok": ok},
+    def _model_operator_ai_draft(
+        self,
+        question: str,
+        target_id: str | None,
+        route: OperatorAiRoute,
+    ) -> OperatorAiDraft:
+        rag_context = self._rag_context_payload(question, target_id)
+        prompt = self._build_operator_prompt(question, target_id)
+        try:
+            if self._use_only_wrapper_mode():
+                response = self._wrapper_ai_generate(
+                    role="operator_chat",
+                    system=operator_chat_system_prompt(),
+                    prompt=prompt,
+                    persist=False,
+                )
+                body = str(response["text"])
+                model = str(response["model"])
+                elapsed_seconds = response.get("elapsed_seconds")
+            else:
+                response = self.ollama.generate(
+                    model=route.model,
+                    system=operator_chat_system_prompt(),
+                    prompt=prompt,
+                    num_gpu=route.num_gpu,
+                )
+                body = response.text
+                model = route.model
+                elapsed_seconds = response.elapsed_seconds
+            draft = model_success_draft(
+                body=body,
+                model=model,
+                elapsed_seconds=elapsed_seconds,
+                route=route,
+                wrapper_only=self._use_only_wrapper_mode(),
+                rag_context_ids=self._rag_context_ids(rag_context),
             )
+            return self._operator_ai_guardrailed_draft(question, target_id, rag_context, draft, route)
+        except Exception as exc:  # noqa: BLE001 - convert provider failures into durable operator-visible state
+            return provider_failure_draft(exc)
+
+    def _operator_ai_guardrailed_draft(
+        self,
+        question: str,
+        target_id: str | None,
+        rag_context: list[dict[str, object]],
+        draft: OperatorAiDraft,
+        route: OperatorAiRoute,
+    ) -> OperatorAiDraft:
+        if rag_context and not self._operator_answer_cites_rag_context(draft.body, rag_context):
+            body = self._deterministic_operator_answer(question, target_id)
+            return guardrail_fallback_draft(
+                draft,
+                body=body,
+                route=route,
+                reason_key="guardrail_discarded_uncited_rag_output",
+            )
+        if self._operator_answer_violates_contract(draft.body):
+            body = self._deterministic_operator_answer(question, target_id)
+            return guardrail_fallback_draft(
+                draft,
+                body=body,
+                route=route,
+                reason_key="guardrail_replaced_model_output",
+            )
+        return draft
+
+    def _operator_ai_draft_with_escalation(
+        self,
+        question: str,
+        target: Target | None,
+        draft: OperatorAiDraft,
+    ) -> OperatorAiDraft:
+        reason = self._operator_uncertainty_escalation_reason(question, draft.body, draft.metadata, target)
+        if not reason or target is None:
+            return draft
+        escalation_task = self.workflow.create_planner_uncertainty_escalation(
+            target,
+            reason_code=reason,
+            question=question,
+            blockers=[],
+            session_id=self.store.get_active_session().id if self.store.get_active_session() else None,
         )
-        return {
-            "ok": ok,
-            "error": error,
-            "model": model,
-            "route_model": route_model,
-            "route_num_gpu": route_num_gpu,
-            "question": operator_message.as_payload(),
-            "answer": assistant_message.as_payload(),
-            "chat": self.operator_chat_payload(target=target),
-        }
+        body = self._append_operator_escalation_status(
+            draft.body,
+            target,
+            escalation_task=escalation_task,
+            reason=reason,
+        )
+        return draft_with_escalation(draft, body=body, escalation_task=escalation_task, reason=reason)
 
     def ask_approval_inquiry(self, task_id: str, message: str) -> dict[str, object]:
         question = message.strip()
@@ -3264,82 +2943,38 @@ class PrimordialRuntime:
             raise ValueError("target not found")
         if not target_record.in_scope:
             raise ValueError("target is not in scope")
-        selected_ids = [str(item).strip() for item in request_ids if str(item).strip()]
-        if not selected_ids:
-            raise ValueError("request_ids is required")
+        selected_ids = selected_caido_request_ids(request_ids)
         imported = []
         errors = []
-        for request_id in selected_ids[:50]:
+        for request_id in selected_ids:
             detail = self.caido.request_detail(request_id)
             if not detail.get("ok"):
-                errors.append({"id": request_id, "error": str(detail.get("error") or "detail fetch failed")})
+                errors.append(caido_detail_error(request_id, detail))
                 continue
-            request_payload = detail.get("request") if isinstance(detail.get("request"), dict) else {}
+            request_payload = caido_request_payload(detail)
             host = str(request_payload.get("host") or "")
             if not self._caido_host_in_scope(target_record, host):
-                errors.append({"id": request_id, "error": f"host is not in target scope: {host}"})
+                errors.append(caido_scope_error(request_id, host))
                 continue
             artifact = self._write_caido_capture_artifact(target_record, request_payload, httpql=httpql)
             self.store.insert_artifact(artifact)
-            method = str(request_payload.get("method") or "HTTP").upper()
-            path = str(request_payload.get("path") or "/")
-            status = int(request_payload.get("status") or 0)
-            evidence_metadata = {
-                "kind": ArtifactKind.CAIDO_CAPTURE.value,
-                "caido_request_id": request_id,
-                "httpql": httpql,
-                "method": method,
-                "host": host,
-                "path": path,
-                "status_code": status,
-                "request_sha256": request_payload.get("request_sha256") or "",
-                "response_sha256": request_payload.get("response_sha256") or "",
-                "request_snippet": request_payload.get("request_snippet") or "",
-                "response_snippet": request_payload.get("response_snippet") or "",
-                "request_truncated": bool(request_payload.get("request_truncated")),
-                "response_truncated": bool(request_payload.get("response_truncated")),
-                "raw_bodies_stored": False,
-                "artifact_id": artifact.id,
-            }
-            if target_record.metadata.get("active_ip_generation") is not None:
-                evidence_metadata["active_ip_generation"] = target_record.metadata["active_ip_generation"]
-            if target_record.metadata.get("active_ip"):
-                evidence_metadata["active_ip"] = target_record.metadata["active_ip"]
-            evidence = EvidenceRecord(
-                target_id=target_record.id,
-                type=EvidenceType.HTTP_REPLAY,
-                title=f"Caido capture: {method} {path}",
-                summary=f"Imported Caido request {request_id}: {method} {host}{path} returned HTTP {status or 'unknown'}.",
-                source_ref=f"caido://request/{request_id}",
-                verification_status=VerificationStatus.PARTIAL,
-                confidence=0.75,
-                freshness=0.85,
-                artifact_path=artifact.path,
-                metadata=evidence_metadata,
+            evidence = caido_capture_evidence(
+                target=target_record,
+                request_id=request_id,
+                request_payload=request_payload,
+                artifact=artifact,
+                httpql=httpql,
             )
             self.store.insert_evidence(evidence)
-            imported.append({"request_id": request_id, "evidence": evidence.as_payload(), "artifact": artifact.as_payload()})
+            imported.append(caido_import_row(request_id, evidence, artifact))
         if imported:
-            self.store.insert_event(
-                EventRecord(
-                    type=EventType.CAIDO_IMPORT,
-                    summary=f"Imported {len(imported)} Caido capture(s)",
-                    target_id=target_record.id,
-                    metadata={
-                        "request_ids": [item["request_id"] for item in imported],
-                        "httpql": httpql,
-                        "artifact_ids": [item["artifact"]["id"] for item in imported],
-                        "evidence_ids": [item["evidence"]["id"] for item in imported],
-                        "raw_bodies_stored": False,
-                    },
-                )
-            )
-        return {
-            "target": target_record.as_payload(),
-            "imported": imported,
-            "errors": errors,
-            "records": self.records_payload(limit=50, target_id=target_record.id),
-        }
+            self.store.insert_event(caido_import_event(target_record, imported, httpql))
+        return caido_import_response(
+            target=target_record,
+            imported=imported,
+            errors=errors,
+            records=self.records_payload(limit=50, target_id=target_record.id),
+        )
 
     def caido_replay_draft(self, *, target: str, raw_request: str) -> dict[str, object]:
         target_record = self._resolve_target_reference(target)
@@ -3535,24 +3170,15 @@ class PrimordialRuntime:
         use_lmstudio_profile: bool = True,
         max_model_runtime_seconds: int = 1800,
     ) -> dict[str, object]:
-        selected_processor = str(processor).strip().lower()
-        if selected_processor not in {"cpu", "gpu"}:
-            raise ValueError("processor must be cpu or gpu")
-        provider_names = providers or ["ollama"]
-        normalized_providers = []
-        for item in provider_names:
-            for provider in str(item).split(","):
-                clean = provider.strip().lower()
-                if clean in {"ollama", "lmstudio"} and clean not in normalized_providers:
-                    normalized_providers.append(clean)
-        normalized_providers = normalized_providers or ["ollama"]
+        selected_processor = normalize_model_eval_processor(processor)
+        normalized_providers = normalize_model_eval_providers(providers)
         lmstudio = LMStudioClient() if "lmstudio" in normalized_providers else None
         lmstudio_profile = (
             self._load_lmstudio_profile(lmstudio_profile_path)
             if lmstudio is not None and use_lmstudio_profile
             else {}
         )
-        evaluator = ModelEvaluationService(
+        evaluator = model_eval_service(
             self.ollama,
             lmstudio=lmstudio,
             host_metrics_sampler=lambda: self.system_metrics_payload(force_refresh=True),
@@ -3578,41 +3204,21 @@ class PrimordialRuntime:
             json_path=Path(json_out) if json_out else None,
         )
         payload = summary.as_payload()
-        run_id = self.store.insert_model_eval_ledger(
-            summary=payload,
+        record_model_eval_payload(
+            self.store,
+            payload=payload,
             artifacts=artifacts,
-            metadata={
-                "processor": selected_processor,
-                "providers": normalized_providers,
-                "max_context": max_context,
-                "context_sizes": context_sizes or [],
-                "exhaustive": exhaustive,
-                "temperatures": temperatures or [0.0, 0.1],
-                "judge_model": judge_model or "",
-                "max_model_runtime_seconds": max_model_runtime_seconds,
-                "lmstudio_profile_path": str(lmstudio_profile_path or self._lmstudio_profile_path())
-                if lmstudio_profile
-                else "",
-                "lmstudio_profile_applied": bool(lmstudio_profile),
-            },
-        )
-        payload["ledger_run_id"] = run_id
-        self.store.insert_event(
-            EventRecord(
-                type=EventType.BOOTSTRAP,
-                summary="Model evaluation completed",
-                metadata={
-                    "models": payload["models"],
-                    "recommendations": payload["recommendations"],
-                    "role_suggestions": payload.get("role_suggestions", []),
-                    "model_identification": payload.get("model_identification", {}),
-                    "processor": selected_processor,
-                    "providers": normalized_providers,
-                    "artifacts": artifacts,
-                    "lmstudio_profile_applied": bool(lmstudio_profile),
-                    "max_model_runtime_seconds": max_model_runtime_seconds,
-                },
-            )
+            processor=selected_processor,
+            providers=normalized_providers,
+            max_context=max_context,
+            context_sizes=context_sizes,
+            exhaustive=exhaustive,
+            temperatures=temperatures,
+            judge_model=judge_model,
+            max_model_runtime_seconds=max_model_runtime_seconds,
+            lmstudio_profile_path=lmstudio_profile_path,
+            default_lmstudio_profile_path=self._lmstudio_profile_path(),
+            lmstudio_profile=lmstudio_profile,
         )
         return payload
 
@@ -5010,23 +4616,9 @@ class PrimordialRuntime:
         raw_findings = self.store.list_findings(target_id=target_id, limit=8)
         interests = [item for item in raw_interests if self._record_matches_active_generation(item, active_generation)]
         findings = [item for item in raw_findings if self._record_matches_active_generation(item, active_generation)]
-        primitives = self.store.list_primitives()
-        primitive_names = {primitive.name for primitive in primitives}
-        capabilities = {
-            tag
-            for primitive in primitives
-            for tag in [primitive.name, *primitive.capability_tags]
-        }
-        evidence_kinds = {
-            str(item.metadata.get("kind"))
-            for item in current_evidence
-            if item.metadata.get("kind")
-        }
-        flag_hits = [
-            item
-            for item in current_evidence
-            if any(token in json.dumps(item.as_payload()).lower() for token in ("user.txt", "root.txt", "flag{", "htb{"))
-        ]
+        primitive_names, capabilities = operator_capability_sets(self.store.list_primitives())
+        evidence_kinds = evidence_kind_set(current_evidence)
+        flag_hits = flag_evidence_hits(current_evidence)
         potential_paths = self._deterministic_potential_paths(current_evidence, interests, findings)
         lab_credentials_configured = self._lab_credentials_configured()
         credential_surface = classify_credentialed_access_surface(current_evidence)
@@ -5050,95 +4642,26 @@ class PrimordialRuntime:
             findings=findings,
             next_actions=next_actions,
         )
-        derived_next_actions = list(next_actions)
-        if isinstance(methodology_state, dict):
-            planned_actions = methodology_state.get("candidate_actions", [])
-            if isinstance(planned_actions, list) and planned_actions:
-                merged_actions: list[str] = []
-                seen_actions: set[str] = set()
-                for item in planned_actions[:5]:
-                    if not isinstance(item, dict):
-                        continue
-                    title = str(item.get("title") or "Untitled action")
-                    confidence = item.get("confidence")
-                    prerequisite = str(item.get("prerequisite") or "").strip()
-                    reason = str(item.get("transition_reason") or "").strip()
-                    line = title
-                    if prerequisite:
-                        line += f" Prerequisite: {prerequisite}."
-                    if confidence not in {None, ""}:
-                        line += f" Confidence: {float(confidence):.2f}."
-                    if reason:
-                        line += f" Reason: {reason}"
-                    normalized = line.strip()
-                    lowered = normalized.lower()
-                    if lowered not in seen_actions:
-                        merged_actions.append(normalized)
-                        seen_actions.add(lowered)
-                for action in derived_next_actions:
-                    lowered = action.lower()
-                    if lowered in seen_actions:
-                        continue
-                    merged_actions.append(action)
-                    seen_actions.add(lowered)
-                next_actions = merged_actions[:6]
-
-        facts = []
-        if target:
-            facts.append(f"Target `{target.handle}` is `{target.profile.value}` and in_scope={target.in_scope}.")
-            active_ip = str(target.metadata.get("active_ip") or "").strip()
-            if active_ip:
-                facts.append(f"Active operator-confirmed IP is `{active_ip}`.")
-            if isinstance(methodology_state, dict) and methodology_state:
-                facts.append(
-                    f"Methodology phase is `{methodology_state.get('phase')}` / `{methodology_state.get('subphase')}` "
-                    f"with completion state `{methodology_state.get('completion')}`."
-                )
-            if stale_evidence:
-                facts.append(
-                    f"{len(stale_evidence)} recent evidence record(s) are historical for an older active-IP generation."
-                )
+        next_actions = merge_methodology_next_actions(methodology_state, next_actions)
         freshness_line = self._operator_recent_change_line(question, target_id)
-        if freshness_line:
-            facts.append(freshness_line)
-        for item in current_evidence[:6]:
-            facts.append(f"`{item.title}`: {item.summary}")
-        if not facts:
-            facts.append("No target-specific evidence is currently stored.")
-
-        task_summary = ", ".join(f"{task.kind.value}:{task.status.value}" for task in tasks[:8]) or "none"
-        sections = []
-        if direct_answers:
-            sections.append("**Direct Answer**\n" + "\n".join(f"- {line}" for line in direct_answers))
-        sections.append(
-            "**Facts**\n"
-            + "\n".join(f"- {fact}" for fact in facts)
-            + f"\n- Recent task states: {task_summary}"
-            + f"\n- Registered primitives: {', '.join(sorted(primitive_names)) or 'none'}"
+        facts = deterministic_operator_facts(
+            target=target,
+            methodology_state=methodology_state,
+            stale_evidence_count=len(stale_evidence),
+            current_evidence=current_evidence,
+            freshness_line=freshness_line,
         )
-        if potential_paths:
-            sections.append("**Potential Paths**\n" + "\n".join(f"- {path}" for path in potential_paths))
-        sections.append(
-            "**Blockers**\n"
-            + "\n".join(f"- {blocker}" for blocker in (blockers or ["No current blockers derived from stored state."]))
+        return render_deterministic_operator_answer(
+            direct_answers=direct_answers,
+            facts=facts,
+            tasks=tasks,
+            primitive_names=primitive_names,
+            potential_paths=potential_paths,
+            blockers=blockers,
+            methodology_state=methodology_state,
+            next_actions=next_actions,
+            capability_gaps=capability_gaps,
         )
-        if isinstance(methodology_state, dict) and methodology_state.get("no_progress_reason"):
-            sections.append(
-                "**Planner State**\n"
-                + "\n".join(
-                    [
-                        f"- No progress reason: {methodology_state.get('no_progress_reason')}",
-                        f"- Next unblock action: {methodology_state.get('next_unblock_action') or 'none'}",
-                    ]
-                )
-            )
-        sections.append(
-            "**Next Actions**\n"
-            + "\n".join(f"- {action}" for action in (next_actions or ["No runnable next action is derivable from current evidence."]))
-        )
-        if capability_gaps:
-            sections.append("**Capability Gaps**\n" + "\n".join(f"- {gap}" for gap in capability_gaps))
-        return "\n\n".join(sections)
 
     def _deterministic_direct_answers(
         self,
@@ -5152,86 +4675,86 @@ class PrimordialRuntime:
         next_actions: list[str],
     ) -> list[str]:
         lowered = question.lower()
-        lines: list[str] = []
-        asks_target_state = any(
-            term in lowered
-            for term in (
-                "summarize",
-                "summary",
-                "next 3",
-                "next three",
-                "scoped recon",
-                "recon steps",
-                "latest task fail",
-                "last task fail",
-                "open port",
-                "login portal",
-                "port 80",
-                "escalate",
-                "gpt",
-            )
-        )
-        if asks_target_state and target is None:
+        if operator_question_has_any(lowered, TARGET_STATE_TERMS) and target is None:
             return ["No target is selected or named in the question, so I cannot give target-specific runtime state."]
 
-        if any(term in lowered for term in ("open port", "open ports", "only 2 open", "only two open")):
-            services = self._current_open_port_summary(evidence)
-            if services:
-                line = (
-                    f"Stored current evidence observes {len(services)} unique open TCP port(s): "
-                    + ", ".join(f"`{item}`" for item in services)
-                    + "."
-                )
-                lines.append(line)
-                if not self._has_full_port_scan_evidence(evidence):
-                    lines.append(
-                        "That is an observed-port answer, not proof that no other ports exist; no full-range port sweep evidence is stored."
-                    )
-            else:
-                lines.append("No current TCP service-discovery evidence is stored, so open ports cannot be answered from state.")
-
-        if any(term in lowered for term in ("login portal", "login portals", "port 80", "auth surface", "auth surfaces")):
-            auth_paths = self._current_auth_surface_summary(evidence, interests, findings)
-            if auth_paths:
-                lines.append(
-                    "Stored current evidence identifies auth/session candidate(s): "
-                    + ", ".join(f"`{item}`" for item in auth_paths[:10])
-                    + "."
-                )
-            elif any(self._evidence_has_http_surface(item) for item in evidence):
-                lines.append("No stored current evidence identifies a login portal on port 80.")
-            else:
-                lines.append("No current HTTP evidence is stored, so login portals cannot be answered from state.")
-
-        if any(term in lowered for term in ("latest task fail", "last task fail", "why did the latest task", "failed task", "blocked task")):
-            task = self._latest_problem_task(tasks)
-            if task is None:
-                lines.append("No failed, blocked, cancelled, or approval-waiting task is present in the recent target task set.")
-            else:
-                reason = self._task_problem_reason(task)
-                lines.append(
-                    f"Latest problem task is `{task.kind.value}` `{task.id}` with status `{task.status.value}`: {reason}"
-                )
-
-        if any(term in lowered for term in ("next 3", "next three", "scoped recon", "recon steps")):
-            scoped = next_actions[:3]
-            if scoped:
-                for index, action in enumerate(scoped, start=1):
-                    lines.append(f"Scoped recon step {index}: {action}")
-            else:
-                lines.append("No runnable scoped recon step is derivable from current evidence.")
-
-        if self._operator_requests_premium_escalation(question):
-            if target is None:
-                lines.append("Premium review was not created because no target is selected.")
-            elif not evidence:
-                lines.append(f"Premium review was not created for `{target.handle}` because no current evidence is stored.")
-            else:
-                lines.append(
-                    f"Premium review requested for `{target.handle}`; a structured evidence-linked review task will be created if no active duplicate exists."
-                )
-
+        lines: list[str] = []
+        lines.extend(self._direct_open_port_answers(lowered, evidence))
+        lines.extend(self._direct_auth_surface_answers(lowered, evidence, interests, findings))
+        lines.extend(self._direct_problem_task_answers(lowered, tasks))
+        lines.extend(self._direct_scoped_recon_answers(lowered, next_actions))
+        lines.extend(self._direct_premium_review_answers(question, target, evidence))
         return lines
+
+    def _direct_open_port_answers(self, lowered: str, evidence: list[EvidenceRecord]) -> list[str]:
+        if not operator_question_has_any(lowered, OPEN_PORT_TERMS):
+            return []
+        services = self._current_open_port_summary(evidence)
+        if not services:
+            return ["No current TCP service-discovery evidence is stored, so open ports cannot be answered from state."]
+        lines = [
+            f"Stored current evidence observes {len(services)} unique open TCP port(s): "
+            + ", ".join(f"`{item}`" for item in services)
+            + "."
+        ]
+        if not self._has_full_port_scan_evidence(evidence):
+            lines.append(
+                "That is an observed-port answer, not proof that no other ports exist; no full-range port sweep evidence is stored."
+            )
+        return lines
+
+    def _direct_auth_surface_answers(
+        self,
+        lowered: str,
+        evidence: list[EvidenceRecord],
+        interests: list[Interest],
+        findings: list[Finding],
+    ) -> list[str]:
+        if not operator_question_has_any(lowered, AUTH_SURFACE_TERMS):
+            return []
+        auth_paths = self._current_auth_surface_summary(evidence, interests, findings)
+        if auth_paths:
+            return [
+                "Stored current evidence identifies auth/session candidate(s): "
+                + ", ".join(f"`{item}`" for item in auth_paths[:10])
+                + "."
+            ]
+        if any(self._evidence_has_http_surface(item) for item in evidence):
+            return ["No stored current evidence identifies a login portal on port 80."]
+        return ["No current HTTP evidence is stored, so login portals cannot be answered from state."]
+
+    def _direct_problem_task_answers(self, lowered: str, tasks: list[Task]) -> list[str]:
+        if not operator_question_has_any(lowered, PROBLEM_TASK_TERMS):
+            return []
+        task = self._latest_problem_task(tasks)
+        if task is None:
+            return ["No failed, blocked, cancelled, or approval-waiting task is present in the recent target task set."]
+        reason = self._task_problem_reason(task)
+        return [f"Latest problem task is `{task.kind.value}` `{task.id}` with status `{task.status.value}`: {reason}"]
+
+    def _direct_scoped_recon_answers(self, lowered: str, next_actions: list[str]) -> list[str]:
+        if not operator_question_has_any(lowered, SCOPED_RECON_TERMS):
+            return []
+        scoped = next_actions[:3]
+        if not scoped:
+            return ["No runnable scoped recon step is derivable from current evidence."]
+        return [f"Scoped recon step {index}: {action}" for index, action in enumerate(scoped, start=1)]
+
+    def _direct_premium_review_answers(
+        self,
+        question: str,
+        target: Target | None,
+        evidence: list[EvidenceRecord],
+    ) -> list[str]:
+        if not self._operator_requests_premium_escalation(question):
+            return []
+        if target is None:
+            return ["Premium review was not created because no target is selected."]
+        if not evidence:
+            return [f"Premium review was not created for `{target.handle}` because no current evidence is stored."]
+        return [
+            f"Premium review requested for `{target.handle}`; a structured evidence-linked review task will be created if no active duplicate exists."
+        ]
 
     def _current_open_port_summary(self, evidence: list[EvidenceRecord]) -> list[str]:
         ports: dict[int, set[str]] = {}
@@ -6126,95 +5649,7 @@ class PrimordialRuntime:
         return f"{current:.1f} {unit}"
 
     def _read_gpu_metrics(self) -> dict[str, object]:
-        nvidia_smi = shutil.which("nvidia-smi")
-        if not nvidia_smi:
-            return {
-                "available": False,
-                "percent": 0.0,
-                "memory_percent": 0.0,
-                "memory_used_mb": None,
-                "memory_free_mb": None,
-                "memory_total_mb": None,
-                "temperature_c": None,
-                "error": "nvidia-smi not found",
-            }
-        try:
-            result = subprocess.run(
-                [
-                    nvidia_smi,
-                    "--query-gpu=utilization.gpu,utilization.memory,memory.used,memory.total,temperature.gpu",
-                    "--format=csv,noheader,nounits",
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=2,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            return {
-                "available": False,
-                "percent": 0.0,
-                "memory_percent": 0.0,
-                "memory_used_mb": None,
-                "memory_free_mb": None,
-                "memory_total_mb": None,
-                "temperature_c": None,
-                "error": str(exc),
-            }
-        if result.returncode != 0:
-            return {
-                "available": False,
-                "percent": 0.0,
-                "memory_percent": 0.0,
-                "memory_used_mb": None,
-                "memory_free_mb": None,
-                "memory_total_mb": None,
-                "temperature_c": None,
-                "error": result.stderr.strip() or result.stdout.strip() or "nvidia-smi failed",
-            }
-        line = next((item.strip() for item in result.stdout.splitlines() if item.strip()), "")
-        if not line:
-            return {
-                "available": False,
-                "percent": 0.0,
-                "memory_percent": 0.0,
-                "memory_used_mb": None,
-                "memory_free_mb": None,
-                "memory_total_mb": None,
-                "temperature_c": None,
-                "error": "nvidia-smi returned no GPU data",
-            }
-        parts = [segment.strip() for segment in line.split(",")]
-        try:
-            utilization = float(parts[0])
-            memory_utilization = float(parts[1])
-            memory_used = float(parts[2])
-            memory_total = float(parts[3])
-            temperature = float(parts[4])
-        except (IndexError, ValueError):
-            return {
-                "available": False,
-                "percent": 0.0,
-                "memory_percent": 0.0,
-                "memory_used_mb": None,
-                "memory_free_mb": None,
-                "memory_total_mb": None,
-                "temperature_c": None,
-                "error": f"unexpected nvidia-smi output: {line}",
-            }
-        memory_percent = max(0.0, min(100.0, memory_utilization))
-        if memory_total > 0:
-            memory_percent = max(0.0, min(100.0, (memory_used / memory_total) * 100.0))
-        return {
-            "available": True,
-            "percent": round(max(0.0, min(100.0, utilization)), 1),
-            "memory_percent": round(memory_percent, 1),
-            "memory_used_mb": round(memory_used, 1),
-            "memory_free_mb": round(max(0.0, memory_total - memory_used), 1),
-            "memory_total_mb": round(memory_total, 1),
-            "temperature_c": round(temperature, 1),
-            "error": None,
-        }
+        return read_gpu_metrics()
 
     def _cleanup_deleted_paths(self, raw_paths: list[str]) -> None:
         allowed_roots = (self.config.artifacts_dir.resolve(), self.config.checkpoints_dir.resolve())
@@ -6387,90 +5822,15 @@ class PrimordialRuntime:
         )
 
     def _register_worker_runners(self) -> None:
-        self.worker_broker.register_runner(
-            InProcessWorkerRunner(
-                runner_id="security-analysis-runner",
-                lane="hot-path",
-                supported_routes={
-                    ProviderRoute.LOCAL_FAST,
-                },
-                executor_loader=lambda: self.security.primitive_executor,
-                max_concurrency=self.config.autonomy.hot_path_concurrency,
-                contract=WorkerContract(
-                    name="analysis_hot_contract",
-                    supported_roles={AgentRole.ORCHESTRATOR, AgentRole.RECON_WORKER, AgentRole.ANALYSIS_WORKER},
-                    preferred_kinds={
-                        TaskKind.RECON_SCAN,
-                        TaskKind.SERVICE_DISCOVERY,
-                        TaskKind.DNS_ENUMERATION,
-                        TaskKind.WEB_CONTENT_DISCOVERY,
-                        TaskKind.AD_ENUMERATION,
-                        TaskKind.KERBEROS_USER_DISCOVERY,
-                        TaskKind.ANALYZE_EVIDENCE,
-                    },
-                    processor="gpu",
-                    quality_tier=82,
-                ),
-            )
-        )
-        self.worker_broker.register_runner(
-            InProcessWorkerRunner(
-                runner_id="security-deep-runner",
-                lane="hot-path",
-                supported_routes={ProviderRoute.LOCAL_DEEP},
-                executor_loader=lambda: self.security.primitive_executor,
-                max_concurrency=self.config.autonomy.high_risk_concurrency,
-                contract=WorkerContract(
-                    name="deep_reasoning_contract",
-                    supported_roles={AgentRole.EXPLOITATION_WORKER, AgentRole.CHAINING_WORKER},
-                    preferred_kinds={
-                        TaskKind.KERBEROS_ATTACK_CHECK,
-                        TaskKind.CREDENTIALED_ACCESS_CHECK,
-                        TaskKind.VERIFY_HYPOTHESIS,
-                        TaskKind.CHAIN_CANDIDATES,
-                    },
-                    processor="gpu",
-                    quality_tier=88,
-                ),
-            )
-        )
-        self.worker_broker.register_runner(
-            InProcessWorkerRunner(
-                runner_id="security-code-runner",
-                lane="cold-path",
-                supported_routes={ProviderRoute.LOCAL_CODE, ProviderRoute.COLD_REVIEW},
-                executor_loader=lambda: self.security.primitive_executor,
-                max_concurrency=self.config.autonomy.cold_path_concurrency,
-                contract=WorkerContract(
-                    name="code_cpu_contract",
-                    supported_roles={AgentRole.CODE_WORKER},
-                    preferred_kinds={TaskKind.EXPLOIT_RESEARCH, TaskKind.POC_APPLICABILITY_VALIDATION},
-                    processor="cpu",
-                    quality_tier=91,
-                ),
-            )
-        )
-        self.worker_broker.register_runner(
-            InProcessWorkerRunner(
-                runner_id="security-compact-runner",
-                lane="compact-path",
-                supported_routes={ProviderRoute.LOCAL_COMPACT},
-                executor_loader=lambda: self.security.primitive_executor,
-                max_concurrency=self.config.autonomy.compact_path_concurrency,
-                contract=WorkerContract(
-                    name="compact_verifier_contract",
-                    supported_roles={AgentRole.MEMORY_WORKER, AgentRole.BEHAVIOR_VERIFIER},
-                    preferred_kinds={TaskKind.VERIFY_AGENT_BEHAVIOR, TaskKind.COMPACT_MEMORY},
-                    processor="cpu",
-                    quality_tier=84,
-                ),
-            )
-        )
-        self.worker_broker.register_runner(
-            AgentChatPremiumReviewRunner(
-                self.agent_chat,
-                target_loader=lambda target_id: self.store.get_target(target_id) if target_id else None,
-                remote_cost_recorder=self.store.insert_remote_cost,
-                max_concurrency=self.config.autonomy.remote_premium_concurrency,
-            )
+        register_default_worker_runners(
+            worker_broker=self.worker_broker,
+            executor_loader=lambda: self.security.primitive_executor,
+            agent_chat=self.agent_chat,
+            target_loader=lambda target_id: self.store.get_target(target_id) if target_id else None,
+            remote_cost_recorder=self.store.insert_remote_cost,
+            hot_path_concurrency=self.config.autonomy.hot_path_concurrency,
+            high_risk_concurrency=self.config.autonomy.high_risk_concurrency,
+            cold_path_concurrency=self.config.autonomy.cold_path_concurrency,
+            compact_path_concurrency=self.config.autonomy.compact_path_concurrency,
+            remote_premium_concurrency=self.config.autonomy.remote_premium_concurrency,
         )
