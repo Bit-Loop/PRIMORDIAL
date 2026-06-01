@@ -151,76 +151,16 @@ class PrimitivePocToolMixin:
         lowered = title.lower()
         reasons: list[str] = []
         status = "blocked"
-        if any(term in lowered for term in EXPLOIT_RESEARCH_SUPPRESSED_TERMS):
-            reasons.append("suppressed because it appears DoS/crash-oriented")
-        elif any(term in lowered for term in EXPLOIT_RESEARCH_LOCAL_TERMS) and not has_foothold:
-            reasons.append("requires user shell or credentialed local access before LPE verification")
-        elif "exchange" in lowered and not service_facts.get("has_exchange"):
-            reasons.append("target evidence does not show Microsoft Exchange")
-        elif ("windows server 2000" in lowered or "server 2000" in lowered) and not service_facts.get("has_windows_2000"):
-            reasons.append("target evidence does not show Windows Server 2000")
-        elif "ldap" in lowered or "active directory" in lowered:
-            if service_facts.get("has_ad"):
-                status = "ready_for_review"
-                reasons.append("AD/LDAP surface exists, but exact version/configuration still needs bounded verification")
-            else:
-                reasons.append("target evidence does not show AD/LDAP services")
-        elif "iis" in lowered:
-            if service_facts.get("has_iis"):
-                status = "ready_for_review"
-                reasons.append("IIS surface exists, but exact version and exploit preconditions still need bounded verification")
-            else:
-                reasons.append("target evidence does not show IIS-specific service details")
-        elif any(term in lowered for term in ("smb", "samba", "netbios", "eternalblue", "ms17-010")):
-            if service_facts.get("has_smb"):
-                status = "ready_for_review"
-                reasons.append("SMB/Samba surface exists; exact OS version and patch level must be confirmed before use")
-            else:
-                reasons.append("target evidence does not show SMB/Samba services")
-        elif "ssh" in lowered:
-            if service_facts.get("has_ssh"):
-                status = "ready_for_review"
-                reasons.append("SSH surface exists; exact version and configuration must be verified before use")
-            else:
-                reasons.append("target evidence does not show SSH service")
-        elif any(term in lowered for term in ("tomcat", "apache tomcat")):
-            if service_facts.get("has_tomcat"):
-                status = "ready_for_review"
-                reasons.append("Tomcat surface exists; exact version and manager configuration must be verified")
-            else:
-                reasons.append("target evidence does not show Apache Tomcat")
-        elif any(term in lowered for term in ("struts", "apache struts")):
-            if service_facts.get("has_struts"):
-                status = "ready_for_review"
-                reasons.append("Struts surface exists; exact version needed before candidate is actionable")
-            else:
-                reasons.append("target evidence does not show Apache Struts")
-        elif "jenkins" in lowered:
-            if service_facts.get("has_jenkins"):
-                status = "ready_for_review"
-                reasons.append("Jenkins surface exists; authentication state and version must be confirmed")
-            else:
-                reasons.append("target evidence does not show Jenkins")
-        elif any(term in lowered for term in ("mssql", "sql server", "ms sql")):
-            if service_facts.get("has_mssql"):
-                status = "ready_for_review"
-                reasons.append("MSSQL surface exists; authentication mode and version must be confirmed")
-            else:
-                reasons.append("target evidence does not show MSSQL")
-        elif "rdp" in lowered or "remote desktop" in lowered:
-            if service_facts.get("has_rdp"):
-                status = "ready_for_review"
-                reasons.append("RDP surface exists; exact Windows build and patch level must be confirmed")
-            else:
-                reasons.append("target evidence does not show RDP service")
-        elif "wordpress" in lowered or "wp-" in lowered:
-            if service_facts.get("has_wordpress"):
-                status = "ready_for_review"
-                reasons.append("WordPress surface exists; exact version and plugin inventory must be confirmed")
-            else:
-                reasons.append("target evidence does not show WordPress")
+        blocked_reason = self._poc_guardrail_block_reason(lowered, service_facts, has_foothold)
+        if blocked_reason:
+            reasons.append(blocked_reason)
         else:
-            reasons.append("no exact target service/version or prerequisite match is available")
+            match = self._poc_service_match(lowered, service_facts)
+            if match is None:
+                reasons.append("no exact target service/version or prerequisite match is available")
+            else:
+                status, reason = match
+                reasons.append(reason)
         return {
             "title": title,
             "edb_id": candidate.get("edb_id"),
@@ -229,6 +169,46 @@ class PrimitivePocToolMixin:
             "reasons": reasons,
             "executes_poc": False,
         }
+
+    def _poc_guardrail_block_reason(
+        self,
+        lowered: str,
+        service_facts: dict[str, object],
+        has_foothold: bool,
+    ) -> str:
+        if any(term in lowered for term in EXPLOIT_RESEARCH_SUPPRESSED_TERMS):
+            return "suppressed because it appears DoS/crash-oriented"
+        if any(term in lowered for term in EXPLOIT_RESEARCH_LOCAL_TERMS) and not has_foothold:
+            return "requires user shell or credentialed local access before LPE verification"
+        if "exchange" in lowered and not service_facts.get("has_exchange"):
+            return "target evidence does not show Microsoft Exchange"
+        if ("windows server 2000" in lowered or "server 2000" in lowered) and not service_facts.get("has_windows_2000"):
+            return "target evidence does not show Windows Server 2000"
+        return ""
+
+    def _poc_service_match(
+        self,
+        lowered: str,
+        service_facts: dict[str, object],
+    ) -> tuple[str, str] | None:
+        checks = [
+            (("ldap", "active directory"), "has_ad", "AD/LDAP surface exists, but exact version/configuration still needs bounded verification", "target evidence does not show AD/LDAP services"),
+            (("iis",), "has_iis", "IIS surface exists, but exact version and exploit preconditions still need bounded verification", "target evidence does not show IIS-specific service details"),
+            (("smb", "samba", "netbios", "eternalblue", "ms17-010"), "has_smb", "SMB/Samba surface exists; exact OS version and patch level must be confirmed before use", "target evidence does not show SMB/Samba services"),
+            (("ssh",), "has_ssh", "SSH surface exists; exact version and configuration must be verified before use", "target evidence does not show SSH service"),
+            (("tomcat", "apache tomcat"), "has_tomcat", "Tomcat surface exists; exact version and manager configuration must be verified", "target evidence does not show Apache Tomcat"),
+            (("struts", "apache struts"), "has_struts", "Struts surface exists; exact version needed before candidate is actionable", "target evidence does not show Apache Struts"),
+            (("jenkins",), "has_jenkins", "Jenkins surface exists; authentication state and version must be confirmed", "target evidence does not show Jenkins"),
+            (("mssql", "sql server", "ms sql"), "has_mssql", "MSSQL surface exists; authentication mode and version must be confirmed", "target evidence does not show MSSQL"),
+            (("rdp", "remote desktop"), "has_rdp", "RDP surface exists; exact Windows build and patch level must be confirmed", "target evidence does not show RDP service"),
+            (("wordpress", "wp-"), "has_wordpress", "WordPress surface exists; exact version and plugin inventory must be confirmed", "target evidence does not show WordPress"),
+        ]
+        for terms, fact_key, ready_reason, blocked_reason in checks:
+            if any(term in lowered for term in terms):
+                if service_facts.get(fact_key):
+                    return "ready_for_review", ready_reason
+                return "blocked", blocked_reason
+        return None
 
     def _build_poc_applicability_note(self, classified: list[dict[str, object]], service_facts: dict[str, object]) -> str:
         lines = [

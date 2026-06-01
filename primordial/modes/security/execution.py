@@ -11,6 +11,7 @@ from primordial.modes.security.execution_credential_handler import PrimitiveCred
 from primordial.modes.security.execution_exploit_handler import PrimitiveExploitHandlerMixin
 from primordial.modes.security.execution_poc_handler import PrimitivePocHandlerMixin
 from primordial.modes.security.execution_analysis_handlers import PrimitiveAnalysisHandlerMixin
+from primordial.modes.security.execution_verification_handlers import PrimitiveVerificationHandlerMixin
 from primordial.modes.security.execution_misc_handlers import PrimitiveMiscHandlerMixin
 from primordial.modes.security.execution_ai_review import PrimitiveAiReviewMixin
 from primordial.modes.security.execution_generation_records import PrimitiveGenerationRecordMixin
@@ -30,7 +31,7 @@ from primordial.modes.security.execution_probe_tools import PrimitiveProbeToolMi
 __all__ = ["AiGenerateCallable", "PrimitiveExecutor"]
 
 
-class PrimitiveExecutor(PrimitiveReconHandlerMixin, PrimitiveServiceHandlerMixin, PrimitiveContentHandlerMixin, PrimitiveDnsHandlerMixin, PrimitiveAdHandlerMixin, PrimitiveKerberosHandlerMixin, PrimitiveCredentialHandlerMixin, PrimitiveExploitHandlerMixin, PrimitivePocHandlerMixin, PrimitiveAnalysisHandlerMixin, PrimitiveMiscHandlerMixin, PrimitiveAiReviewMixin, PrimitiveGenerationRecordMixin, PrimitiveServiceToolMixin, PrimitiveWebToolMixin, PrimitiveDnsToolMixin, PrimitiveCommandToolMixin, PrimitiveSearchsploitQueryMixin, PrimitiveSearchsploitRuntimeMixin, PrimitivePocToolMixin, PrimitiveAdParsingMixin, PrimitiveKerberosUserToolMixin, PrimitiveKerberosAttackToolMixin, PrimitiveCredentialToolMixin, PrimitiveProbeToolMixin):
+class PrimitiveExecutor(PrimitiveReconHandlerMixin, PrimitiveServiceHandlerMixin, PrimitiveContentHandlerMixin, PrimitiveDnsHandlerMixin, PrimitiveAdHandlerMixin, PrimitiveKerberosHandlerMixin, PrimitiveCredentialHandlerMixin, PrimitiveExploitHandlerMixin, PrimitivePocHandlerMixin, PrimitiveAnalysisHandlerMixin, PrimitiveVerificationHandlerMixin, PrimitiveMiscHandlerMixin, PrimitiveAiReviewMixin, PrimitiveGenerationRecordMixin, PrimitiveServiceToolMixin, PrimitiveWebToolMixin, PrimitiveDnsToolMixin, PrimitiveCommandToolMixin, PrimitiveSearchsploitQueryMixin, PrimitiveSearchsploitRuntimeMixin, PrimitivePocToolMixin, PrimitiveAdParsingMixin, PrimitiveKerberosUserToolMixin, PrimitiveKerberosAttackToolMixin, PrimitiveCredentialToolMixin, PrimitiveProbeToolMixin):
     def __init__(
         self,
         store: RuntimeStore,

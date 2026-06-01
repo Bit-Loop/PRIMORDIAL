@@ -23,72 +23,109 @@ class PrimitiveCredentialToolMixin:
         flag_collection_allowed = bool(policy and policy.lab_policy.lab_flag_collection_allowed)
         protocols = protocols or {"smb", "winrm"}
         if "smb" in protocols:
-            smb_result = self._run_secret_host_command(
-                tool="smbclient",
-                argv=["smbclient", "-A", auth_file, "-L", f"//{host}/", "-g", "-m", "SMB3"],
-                redacted_argv=["smbclient", "-A", "<credential-file>", "-L", f"//{host}/", "-g", "-m", "SMB3"],
-                timeout_seconds=25,
+            self._run_smb_credentialed_access(
+                task,
+                target_id,
+                host,
+                auth_file,
+                username,
+                command_results,
+                auth_results,
+                flag_hits,
+                flag_collection_allowed=flag_collection_allowed,
             )
-            command_results.append(smb_result)
-            smb_returncode = smb_result.get("returncode")
-            smb_valid = bool(smb_result.get("executed")) and smb_returncode is not None and int(smb_returncode) == 0
-            auth_results.append({"protocol": "smb", "valid": smb_valid, "tool": "smbclient"})
-            if smb_valid and flag_collection_allowed:
-                flag_hits.extend(self._collect_smb_flags(task, target_id, host, auth_file, username))
-            elif smb_valid:
-                command_results.append(
-                    {
-                        "tool": "smbclient",
-                        "argv": ["smbclient", "-A", "<credential-file>", f"//{host}/C$", "-c", "<flag-collection>"],
-                        "executed": False,
-                        "returncode": None,
-                        "stdout": "",
-                        "stderr": "disabled: active operator intent does not allow lab flag collection",
-                        "timeout": False,
-                    }
-                )
         else:
-            command_results.append(
-                {
-                    "tool": "smbclient",
-                    "argv": ["smbclient", "-A", "<credential-file>", "-L", f"//{host}/"],
-                    "executed": False,
-                    "returncode": None,
-                    "stdout": "",
-                    "stderr": "disabled: current credentialed-access surface did not admit SMB",
-                    "timeout": False,
-                }
-            )
+            command_results.append(self._disabled_smb_result(host))
 
         if "winrm" in protocols and os.getenv("PRIMORDIAL_ALLOW_PASSWORD_ARG_TOOLS", "").strip() == "1":
-            winrm_result = self._run_secret_host_command(
-                tool="netexec",
-                argv=["netexec", "winrm", host, "-u", username, "-p", password, *self._domain_args(domain)],
-                redacted_argv=["netexec", "winrm", host, "-u", username, "-p", "<redacted>", *self._domain_args(domain)],
-                timeout_seconds=35,
-            )
-            command_results.append(winrm_result)
-            stdout = str(winrm_result.get("stdout", ""))
-            winrm_rc = winrm_result.get("returncode")
-            valid = (
-                bool(winrm_result.get("executed"))
-                and winrm_rc is not None
-                and (int(winrm_rc) == 0 or "[+]" in stdout or "pwn3d" in stdout.lower())
-            )
-            auth_results.append({"protocol": "winrm", "valid": valid, "tool": "netexec"})
+            self._run_winrm_credentialed_access(host, username, password, domain, command_results, auth_results)
         elif "winrm" in protocols:
-            command_results.append(
-                {
-                    "tool": "netexec",
-                    "argv": ["netexec", "winrm", host, "-u", username, "-p", "<redacted>"],
-                    "executed": False,
-                    "returncode": None,
-                    "stdout": "",
-                    "stderr": "disabled: set PRIMORDIAL_ALLOW_PASSWORD_ARG_TOOLS=1 to allow password-in-argv WinRM tooling",
-                    "timeout": False,
-                }
-            )
+            command_results.append(self._disabled_winrm_result(host, username))
         return command_results, auth_results, flag_hits
+
+    def _run_smb_credentialed_access(
+        self,
+        task: Task,
+        target_id: str,
+        host: str,
+        auth_file: str,
+        username: str,
+        command_results: list[dict[str, object]],
+        auth_results: list[dict[str, object]],
+        flag_hits: list[dict[str, object]],
+        *,
+        flag_collection_allowed: bool,
+    ) -> None:
+        smb_result = self._run_secret_host_command(
+            tool="smbclient",
+            argv=["smbclient", "-A", auth_file, "-L", f"//{host}/", "-g", "-m", "SMB3"],
+            redacted_argv=["smbclient", "-A", "<credential-file>", "-L", f"//{host}/", "-g", "-m", "SMB3"],
+            timeout_seconds=25,
+        )
+        command_results.append(smb_result)
+        smb_returncode = smb_result.get("returncode")
+        smb_valid = bool(smb_result.get("executed")) and smb_returncode is not None and int(smb_returncode) == 0
+        auth_results.append({"protocol": "smb", "valid": smb_valid, "tool": "smbclient"})
+        if smb_valid and flag_collection_allowed:
+            flag_hits.extend(self._collect_smb_flags(task, target_id, host, auth_file, username))
+        elif smb_valid:
+            command_results.append(self._disabled_smb_flag_collection_result(host))
+
+    def _run_winrm_credentialed_access(
+        self,
+        host: str,
+        username: str,
+        password: str,
+        domain: str,
+        command_results: list[dict[str, object]],
+        auth_results: list[dict[str, object]],
+    ) -> None:
+        winrm_result = self._run_secret_host_command(
+            tool="netexec",
+            argv=["netexec", "winrm", host, "-u", username, "-p", password, *self._domain_args(domain)],
+            redacted_argv=["netexec", "winrm", host, "-u", username, "-p", "<redacted>", *self._domain_args(domain)],
+            timeout_seconds=35,
+        )
+        command_results.append(winrm_result)
+        stdout = str(winrm_result.get("stdout", ""))
+        winrm_rc = winrm_result.get("returncode")
+        valid = bool(winrm_result.get("executed")) and winrm_rc is not None and (
+            int(winrm_rc) == 0 or "[+]" in stdout or "pwn3d" in stdout.lower()
+        )
+        auth_results.append({"protocol": "winrm", "valid": valid, "tool": "netexec"})
+
+    def _disabled_smb_result(self, host: str) -> dict[str, object]:
+        return {
+            "tool": "smbclient",
+            "argv": ["smbclient", "-A", "<credential-file>", "-L", f"//{host}/"],
+            "executed": False,
+            "returncode": None,
+            "stdout": "",
+            "stderr": "disabled: current credentialed-access surface did not admit SMB",
+            "timeout": False,
+        }
+
+    def _disabled_smb_flag_collection_result(self, host: str) -> dict[str, object]:
+        return {
+            "tool": "smbclient",
+            "argv": ["smbclient", "-A", "<credential-file>", f"//{host}/C$", "-c", "<flag-collection>"],
+            "executed": False,
+            "returncode": None,
+            "stdout": "",
+            "stderr": "disabled: active operator intent does not allow lab flag collection",
+            "timeout": False,
+        }
+
+    def _disabled_winrm_result(self, host: str, username: str) -> dict[str, object]:
+        return {
+            "tool": "netexec",
+            "argv": ["netexec", "winrm", host, "-u", username, "-p", "<redacted>"],
+            "executed": False,
+            "returncode": None,
+            "stdout": "",
+            "stderr": "disabled: set PRIMORDIAL_ALLOW_PASSWORD_ARG_TOOLS=1 to allow password-in-argv WinRM tooling",
+            "timeout": False,
+        }
 
     def _credentialed_access_protocols(self, task: Task) -> set[str]:
         raw = task.metadata.get("protocols")

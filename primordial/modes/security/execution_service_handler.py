@@ -12,8 +12,7 @@ class PrimitiveServiceHandlerMixin:
             result.error = "target not found"
             return result
 
-        assets = self._target_scope_assets(target)
-        hosts = self._service_discovery_hosts(assets)
+        hosts = self._service_discovery_hosts(self._target_scope_assets(target))
         if not hosts:
             result.success = False
             result.error = "no host or IP assets are available for TCP service discovery"
@@ -21,6 +20,19 @@ class PrimitiveServiceHandlerMixin:
 
         ports = self._service_discovery_ports(target.metadata)
         scan = self._scan_tcp_services(hosts, ports, timeout_seconds=self._manifest_timeout(task, 90))
+        evidence = self._append_service_discovery_evidence(task, target, result, hosts, ports, scan)
+        self._append_service_discovery_outputs(task, target, result, evidence, hosts, scan)
+        return result
+
+    def _append_service_discovery_evidence(
+        self,
+        task: Task,
+        target,
+        result: TaskExecutionResult,
+        hosts: list[str],
+        ports: list[int],
+        scan: dict[str, object],
+    ) -> EvidenceRecord:
         open_services = scan["open_services"]
         artifact = self._write_artifact(
             task,
@@ -38,7 +50,6 @@ class PrimitiveServiceHandlerMixin:
             },
         )
         result.artifacts.append(artifact)
-
         evidence = EvidenceRecord(
             target_id=target.id,
             task_id=task.id,
@@ -50,18 +61,33 @@ class PrimitiveServiceHandlerMixin:
             confidence=0.86 if open_services else 0.72,
             freshness=0.98,
             artifact_path=artifact.path,
-            metadata={
-                "kind": "tcp_service_discovery",
-                "hosts": hosts,
-                "ports": ports,
-                "open_services": open_services,
-                "closed_count": scan["closed_count"],
-                "errors": scan["errors"],
-                "scanner": scan.get("scanner", "unknown"),
-                "command_results": scan.get("command_results", []),
-            },
+            metadata=self._service_discovery_metadata(hosts, ports, scan),
         )
         result.evidence.append(evidence)
+        return evidence
+
+    def _service_discovery_metadata(self, hosts: list[str], ports: list[int], scan: dict[str, object]) -> dict[str, object]:
+        return {
+            "kind": "tcp_service_discovery",
+            "hosts": hosts,
+            "ports": ports,
+            "open_services": scan["open_services"],
+            "closed_count": scan["closed_count"],
+            "errors": scan["errors"],
+            "scanner": scan.get("scanner", "unknown"),
+            "command_results": scan.get("command_results", []),
+        }
+
+    def _append_service_discovery_outputs(
+        self,
+        task: Task,
+        target,
+        result: TaskExecutionResult,
+        evidence: EvidenceRecord,
+        hosts: list[str],
+        scan: dict[str, object],
+    ) -> None:
+        open_services = scan["open_services"]
         result.notes.append(
             Note(
                 target_id=target.id,
@@ -73,50 +99,11 @@ class PrimitiveServiceHandlerMixin:
                 metadata={"phase": task.phase.value, "open_service_count": len(open_services)},
             )
         )
-
-        high_signal_services = [
-            service for service in open_services if int(service.get("port", 0)) in REMOTE_ADMIN_PORTS
-        ]
-        if high_signal_services:
-            result.interests.append(
-                Interest(
-                    target_id=target.id,
-                    title="High-signal exposed service review",
-                    summary=(
-                        "Remote access, file-sharing, or database services were observed. "
-                        "This is service inventory only; exploitation requires explicit bounded verification tasks."
-                    ),
-                    evidence_refs=[evidence.id],
-                    status=InterestStatus.OPEN,
-                    confidence=0.78,
-                    metadata={"origin_task": task.id, "class": "service_inventory", "services": high_signal_services},
-                )
-            )
+        high_signal = [service for service in open_services if int(service.get("port", 0)) in REMOTE_ADMIN_PORTS]
+        if high_signal:
+            result.interests.append(self._service_inventory_interest(task, target, evidence, high_signal))
         if open_services:
-            ports = sorted({int(service.get("port", 0)) for service in open_services if service.get("port")})
-            severity = FindingSeverity.LOW if high_signal_services else FindingSeverity.INFO
-            result.findings.append(
-                Finding(
-                    target_id=target.id,
-                    title="Open TCP services observed",
-                    summary=(
-                        f"Service discovery observed {len(open_services)} open TCP service(s) "
-                        f"across {len(hosts)} host candidate(s)."
-                    ),
-                    severity=severity,
-                    evidence_refs=[evidence.id],
-                    confidence=0.82,
-                    verification_status=VerificationStatus.VERIFIED,
-                    metadata={
-                        "source": task.kind.value,
-                        "auto_generated": True,
-                        "ports": ports,
-                        "open_service_count": len(open_services),
-                        "high_signal_services": high_signal_services,
-                    },
-                )
-            )
-
+            result.findings.append(self._open_services_finding(task, target, evidence, hosts, open_services, high_signal))
         result.events.append(
             EventRecord(
                 type=EventType.TASK_SUCCEEDED,
@@ -126,4 +113,51 @@ class PrimitiveServiceHandlerMixin:
                 metadata={"open_service_count": len(open_services)},
             )
         )
-        return result
+
+    def _service_inventory_interest(
+        self,
+        task: Task,
+        target,
+        evidence: EvidenceRecord,
+        high_signal_services: list[dict[str, object]],
+    ) -> Interest:
+        return Interest(
+            target_id=target.id,
+            title="High-signal exposed service review",
+            summary=(
+                "Remote access, file-sharing, or database services were observed. "
+                "This is service inventory only; exploitation requires explicit bounded verification tasks."
+            ),
+            evidence_refs=[evidence.id],
+            status=InterestStatus.OPEN,
+            confidence=0.78,
+            metadata={"origin_task": task.id, "class": "service_inventory", "services": high_signal_services},
+        )
+
+    def _open_services_finding(
+        self,
+        task: Task,
+        target,
+        evidence: EvidenceRecord,
+        hosts: list[str],
+        open_services: list[dict[str, object]],
+        high_signal_services: list[dict[str, object]],
+    ) -> Finding:
+        ports = sorted({int(service.get("port", 0)) for service in open_services if service.get("port")})
+        severity = FindingSeverity.LOW if high_signal_services else FindingSeverity.INFO
+        return Finding(
+            target_id=target.id,
+            title="Open TCP services observed",
+            summary=f"Service discovery observed {len(open_services)} open TCP service(s) across {len(hosts)} host candidate(s).",
+            severity=severity,
+            evidence_refs=[evidence.id],
+            confidence=0.82,
+            verification_status=VerificationStatus.VERIFIED,
+            metadata={
+                "source": task.kind.value,
+                "auto_generated": True,
+                "ports": ports,
+                "open_service_count": len(open_services),
+                "high_signal_services": high_signal_services,
+            },
+        )

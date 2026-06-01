@@ -15,6 +15,25 @@ class PrimitivePocHandlerMixin:
             result.error = "target not found"
             return result
 
+        validation = self._poc_validation_inputs(task, target, result)
+        if validation is None:
+            return result
+        classified, service_facts, ready_count, blocked_count = validation
+        evidence = self._append_poc_validation_evidence(
+            task, target, result, classified, service_facts, ready_count, blocked_count
+        )
+        self._apply_poc_validation_ai_review(task, target, result, evidence, classified, service_facts)
+        if ready_count:
+            result.interests.append(self._poc_ready_interest(task, target, evidence, ready_count))
+        result.events.append(self._poc_validation_event(task, target, classified, ready_count, blocked_count))
+        return result
+
+    def _poc_validation_inputs(
+        self,
+        task: Task,
+        target,
+        result: TaskExecutionResult,
+    ) -> tuple[list[dict[str, object]], dict[str, object], int, int] | None:
         evidence = self._task_generation_records(task, target, self.store.list_evidence(target_id=target.id, limit=100))
         research_items = [item for item in evidence if item.metadata.get("kind") == "exploit_research"]
         service_items = [
@@ -26,31 +45,33 @@ class PrimitivePocHandlerMixin:
         if not candidates:
             result.success = False
             result.error = "no retained public PoC candidates are available for applicability validation"
-            return result
-
+            return None
         service_facts = self._poc_service_facts(service_items)
-        has_foothold = self._poc_has_foothold(evidence)
-        classified = [self._classify_poc_candidate(candidate, service_facts, has_foothold) for candidate in candidates]
+        classified = [
+            self._classify_poc_candidate(candidate, service_facts, self._poc_has_foothold(evidence))
+            for candidate in candidates
+        ]
         ready_count = sum(1 for item in classified if item["status"] == "ready_for_review")
-        blocked_count = len(classified) - ready_count
+        return classified, service_facts, ready_count, len(classified) - ready_count
+
+    def _append_poc_validation_evidence(
+        self,
+        task: Task,
+        target,
+        result: TaskExecutionResult,
+        classified: list[dict[str, object]],
+        service_facts: dict[str, object],
+        ready_count: int,
+        blocked_count: int,
+    ) -> EvidenceRecord:
         artifact = self._write_artifact(
             task,
             target.id,
             f"poc-applicability-{self._safe_artifact_fragment(target.handle)}",
-            {
-                "target": target.as_payload(),
-                "service_facts": service_facts,
-                "classified_candidates": classified,
-                "guardrails": {
-                    "executes_pocs": False,
-                    "writes_exploit_code": False,
-                    "requires_policy_approval_before_execution": True,
-                    "requires_exact_version_or_prerequisite_match": True,
-                },
-            },
+            self._poc_validation_artifact_payload(target, classified, service_facts),
         )
         result.artifacts.append(artifact)
-        evidence_record = EvidenceRecord(
+        evidence = EvidenceRecord(
             target_id=target.id,
             task_id=task.id,
             type=EvidenceType.MODEL_REVIEW,
@@ -74,61 +95,103 @@ class PrimitivePocHandlerMixin:
                 "writes_exploit_code": False,
             },
         )
-        result.evidence.append(evidence_record)
-        result.notes.append(
-            Note(
-                target_id=target.id,
-                task_id=task.id,
-                title="PoC applicability validation summary",
-                body=self._build_poc_applicability_note(classified, service_facts),
-                confidence=0.74,
-                freshness=0.9,
-                metadata={"phase": task.phase.value, "candidate_count": len(classified), "ready_count": ready_count},
-            )
+        result.evidence.append(evidence)
+        result.notes.append(self._poc_validation_note(task, target, classified, service_facts, ready_count))
+        return evidence
+
+    def _poc_validation_artifact_payload(
+        self,
+        target,
+        classified: list[dict[str, object]],
+        service_facts: dict[str, object],
+    ) -> dict[str, object]:
+        return {
+            "target": target.as_payload(),
+            "service_facts": service_facts,
+            "classified_candidates": classified,
+            "guardrails": {
+                "executes_pocs": False,
+                "writes_exploit_code": False,
+                "requires_policy_approval_before_execution": True,
+                "requires_exact_version_or_prerequisite_match": True,
+            },
+        }
+
+    def _poc_validation_note(
+        self,
+        task: Task,
+        target,
+        classified: list[dict[str, object]],
+        service_facts: dict[str, object],
+        ready_count: int,
+    ) -> Note:
+        return Note(
+            target_id=target.id,
+            task_id=task.id,
+            title="PoC applicability validation summary",
+            body=self._build_poc_applicability_note(classified, service_facts),
+            confidence=0.74,
+            freshness=0.9,
+            metadata={"phase": task.phase.value, "candidate_count": len(classified), "ready_count": ready_count},
         )
-        if self._ai_review_requested(task):
-            ai_review = self._run_ai_review(
-                task,
-                target_id=target.id,
-                title="AI PoC applicability review",
-                snapshot=(
-                    f"{self._build_ai_target_snapshot(target.id)}\n\n"
-                    f"Service facts: {json.dumps(service_facts, sort_keys=True)}\n"
-                    f"Classified candidates: {json.dumps(classified[:10], sort_keys=True)}"
-                ),
-                instruction=(
-                    "Review the deterministic PoC applicability classifications. Call out false positives, missing "
-                    "version evidence, foothold prerequisites, safer alternate validations, and exact stop conditions. "
-                    "This is a read-only review: do not execute PoCs, do not generate exploit code, and do not mark a "
-                    "finding verified."
-                ),
-            )
-            self._apply_ai_review(result, task, ai_review)
-        else:
-            evidence_record.metadata["ai_review_skipped"] = True
-            evidence_record.metadata["ai_review_skip_reason"] = "operator-triggered AI review was not requested"
-        if ready_count:
-            result.interests.append(
-                Interest(
-                    target_id=target.id,
-                    title="PoC applicability candidates ready for gated review",
-                    summary=(
-                        f"{ready_count} retained public PoC candidate(s) have enough evidence for a deeper gated "
-                        "review. Execution still requires explicit policy approval and bounded stop conditions."
-                    ),
-                    evidence_refs=[evidence_record.id],
-                    status=InterestStatus.OPEN,
-                    confidence=0.72,
-                    metadata={"origin_task": task.id, "class": "poc_applicability", "ready_count": ready_count},
-                )
-            )
-        result.events.append(
-            EventRecord(
-                type=EventType.TASK_SUCCEEDED,
-                summary=f"PoC applicability validation classified {len(classified)} candidate(s)",
-                target_id=target.id,
-                task_id=task.id,
-                metadata={"ready_count": ready_count, "blocked_count": blocked_count},
-            )
+
+    def _apply_poc_validation_ai_review(
+        self,
+        task: Task,
+        target,
+        result: TaskExecutionResult,
+        evidence: EvidenceRecord,
+        classified: list[dict[str, object]],
+        service_facts: dict[str, object],
+    ) -> None:
+        if not self._ai_review_requested(task):
+            evidence.metadata["ai_review_skipped"] = True
+            evidence.metadata["ai_review_skip_reason"] = "operator-triggered AI review was not requested"
+            return
+        ai_review = self._run_ai_review(
+            task,
+            target_id=target.id,
+            title="AI PoC applicability review",
+            snapshot=(
+                f"{self._build_ai_target_snapshot(target.id)}\n\n"
+                f"Service facts: {json.dumps(service_facts, sort_keys=True)}\n"
+                f"Classified candidates: {json.dumps(classified[:10], sort_keys=True)}"
+            ),
+            instruction=(
+                "Review the deterministic PoC applicability classifications. Call out false positives, missing "
+                "version evidence, foothold prerequisites, safer alternate validations, and exact stop conditions. "
+                "This is a read-only review: do not execute PoCs, do not generate exploit code, and do not mark a "
+                "finding verified."
+            ),
         )
-        return result
+        self._apply_ai_review(result, task, ai_review)
+
+    def _poc_ready_interest(self, task: Task, target, evidence: EvidenceRecord, ready_count: int) -> Interest:
+        return Interest(
+            target_id=target.id,
+            title="PoC applicability candidates ready for gated review",
+            summary=(
+                f"{ready_count} retained public PoC candidate(s) have enough evidence for a deeper gated "
+                "review. Execution still requires explicit policy approval and bounded stop conditions."
+            ),
+            evidence_refs=[evidence.id],
+            status=InterestStatus.OPEN,
+            confidence=0.72,
+            metadata={"origin_task": task.id, "class": "poc_applicability", "ready_count": ready_count},
+        )
+
+    def _poc_validation_event(
+        self,
+        task: Task,
+        target,
+        classified: list[dict[str, object]],
+        ready_count: int,
+        blocked_count: int,
+    ) -> EventRecord:
+        return EventRecord(
+            type=EventType.TASK_SUCCEEDED,
+            summary=f"PoC applicability validation classified {len(classified)} candidate(s)",
+            target_id=target.id,
+            task_id=task.id,
+            metadata={"ready_count": ready_count, "blocked_count": blocked_count},
+        )

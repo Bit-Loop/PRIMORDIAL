@@ -64,6 +64,17 @@ class PrimitiveContentHandlerMixin:
                 metadata={"phase": task.phase.value, "path_count": len(discovered)},
             )
         )
+        self._append_web_content_followups(task, target, result, evidence, discovered)
+        return result
+
+    def _append_web_content_followups(
+        self,
+        task: Task,
+        target,
+        result: TaskExecutionResult,
+        evidence: EvidenceRecord,
+        discovered: list[dict[str, object]],
+    ) -> None:
         if discovered:
             result.interests.append(
                 Interest(
@@ -85,4 +96,3 @@ class PrimitiveContentHandlerMixin:
                 metadata={"path_count": len(discovered)},
             )
         )
-        return result

@@ -72,6 +72,20 @@ class PrimitiveDnsHandlerMixin:
                 metadata={"phase": task.phase.value, "domain": domain, "dns_server": dns_server},
             )
         )
+        self._append_dns_followups(task, target, result, evidence, domain, dns_records, parsed, dc_hostnames)
+        return result
+
+    def _append_dns_followups(
+        self,
+        task: Task,
+        target,
+        result: TaskExecutionResult,
+        evidence: EvidenceRecord,
+        domain: str,
+        dns_records: list[dict[str, str]],
+        parsed: dict[str, object],
+        dc_hostnames: list[str],
+    ) -> None:
         if dns_records:
             result.interests.append(
                 Interest(
@@ -99,4 +113,3 @@ class PrimitiveDnsHandlerMixin:
                 metadata={"record_count": len(dns_records)},
             )
         )
-        return result

@@ -12,8 +12,7 @@ class PrimitiveAdHandlerMixin:
             result.error = "target not found"
             return result
 
-        assets = self._target_scope_assets(target)
-        host = self._preferred_network_host(assets)
+        host = self._preferred_network_host(self._target_scope_assets(target))
         if not host:
             result.success = False
             result.error = "no host or IP asset is available for AD enumeration"
@@ -26,16 +25,24 @@ class PrimitiveAdHandlerMixin:
             return result
 
         parsed = self._parse_ad_enumeration(command_results)
+        evidence = self._append_ad_enumeration_evidence(task, target, result, host, command_results, parsed)
+        self._append_ad_enumeration_followups(task, target, result, evidence, host, parsed)
+        return result
+
+    def _append_ad_enumeration_evidence(
+        self,
+        task: Task,
+        target,
+        result: TaskExecutionResult,
+        host: str,
+        command_results: list[dict[str, object]],
+        parsed: dict[str, object],
+    ) -> EvidenceRecord:
         artifact = self._write_artifact(
             task,
             target.id,
             f"ad-enumeration-{self._safe_artifact_fragment(host)}",
-            {
-                "target": target.as_payload(),
-                "host": host,
-                "command_results": command_results,
-                "parsed": parsed,
-            },
+            {"target": target.as_payload(), "host": host, "command_results": command_results, "parsed": parsed},
         )
         result.artifacts.append(artifact)
         evidence = EvidenceRecord(
@@ -71,6 +78,17 @@ class PrimitiveAdHandlerMixin:
                 metadata={"phase": task.phase.value, "host": host},
             )
         )
+        return evidence
+
+    def _append_ad_enumeration_followups(
+        self,
+        task: Task,
+        target,
+        result: TaskExecutionResult,
+        evidence: EvidenceRecord,
+        host: str,
+        parsed: dict[str, object],
+    ) -> None:
         if parsed["smb_shares"] or parsed["rpc_users"] or parsed["ldap_rootdse"]:
             result.interests.append(
                 Interest(
@@ -98,11 +116,6 @@ class PrimitiveAdHandlerMixin:
                 summary=f"AD enumeration completed for {target.handle}",
                 target_id=target.id,
                 task_id=task.id,
-                metadata={
-                    "host": host,
-                    "share_count": len(parsed["smb_shares"]),
-                    "rpc_user_count": len(parsed["rpc_users"]),
-                },
+                metadata={"host": host, "share_count": len(parsed["smb_shares"]), "rpc_user_count": len(parsed["rpc_users"])},
             )
         )
-        return result
