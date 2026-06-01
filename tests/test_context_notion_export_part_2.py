@@ -241,6 +241,32 @@ class ContextNotionExportTestsPart2(ContextNotionExportTestsBase):
         )
         self.assertTrue(any("generated export" in error for error in result.errors))
 
+    def test_quarantines_quarantined_markdown_source_path(self) -> None:
+        envelope = ContextEnvelope(
+            ref="rag:quarantined-source-markdown",
+            kind="rag",
+            authority="advisory",
+            source_type="methodology_doc",
+            purpose="export",
+            sink="notion_export",
+            content="Quarantined Markdown must not feed a generated Notion export.",
+            citations=["rag:quarantined-source-markdown"],
+            metadata={
+                "source_file": "runtime/quarantine/markdown/docs/RAG_SRC/0x11-t10.md",
+            },
+        )
+
+        result = ContextSinkValidator().validate(
+            "notion_export",
+            [envelope],
+            known_rag_refs={"rag:quarantined-source-markdown"},
+        )
+
+        self.assertFalse(result.valid)
+        self.assertEqual(result.accepted_refs, [])
+        self.assertEqual(result.quarantined_refs, ["rag:quarantined-source-markdown"])
+        self.assertTrue(any("source_markdown" in error for error in result.errors))
+
     def test_quarantines_human_readable_generated_export_origin(self) -> None:
         envelope = ContextEnvelope(
             ref="model:display-origin-export-summary",
