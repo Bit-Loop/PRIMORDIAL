@@ -304,7 +304,18 @@ class FindingsContextService:
     def _generated_export_markers(self, path: Path) -> dict[str, str]:
         body = self._bounded_read(path, max_chars=4096)
         markers: dict[str, str] = {}
+        in_marker_block = False
         for line in body.splitlines():
+            stripped = line.strip()
+            if not in_marker_block:
+                if not stripped:
+                    continue
+                if stripped == "<!-- primordial-generated-export":
+                    in_marker_block = True
+                    continue
+                break
+            if stripped == "-->":
+                break
             if ":" not in line:
                 continue
             key, value = line.split(":", 1)

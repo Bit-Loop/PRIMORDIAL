@@ -166,6 +166,41 @@ class FindingsContextTests(unittest.TestCase):
             )
             runtime.shutdown()
 
+    def test_audit_findings_context_requires_generated_export_marker_block(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = AppConfig.from_env(project_root=root)
+            config.ensure_directories()
+            runtime = PrimordialRuntime(config)
+            runtime.initialize()
+            runtime.register_target(
+                handle="pirate.htb",
+                display_name="HTB Pirate",
+                profile=ScopeProfile.HACK_THE_BOX,
+                assets=["pirate.htb"],
+            )
+            payload = runtime.findings_context_payload(target="pirate.htb", include_guidance=False)
+            export_path = Path(payload["workspace"]["notion_export_path"])
+            export_path.write_text(
+                "# Legacy Notion Export\n\n"
+                "These body lines must not satisfy export metadata requirements.\n"
+                "origin: generated_export\n"
+                "ingest_allowed: false\n"
+                "operational_retrieval_allowed: false\n",
+                encoding="utf-8",
+            )
+
+            audit = runtime.audit_findings_context_exports()
+
+            self.assertEqual(audit["summary"]["files_seen"], 1)
+            self.assertEqual(audit["summary"]["quarantine_required"], 1)
+            self.assertEqual(audit["generated_exports"][0]["status"], "requires_quarantine")
+            self.assertEqual(
+                audit["generated_exports"][0]["missing_metadata"],
+                ["origin", "ingest_allowed", "operational_retrieval_allowed"],
+            )
+            runtime.shutdown()
+
     def test_audit_findings_context_exports_includes_quarantine_plan(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
