@@ -3,6 +3,7 @@
 from primordial.labs.ctf.benchmark import BenchmarkRun
 from primordial.labs.ctf.closed_book import ClosedBookPackage
 from primordial.labs.ctf.ctfd import FakeCTFdClient
+from primordial.labs.ctf.environment import EnvironmentProof, verify_local_container_environment
 from primordial.labs.ctf.failures import FailureAnalysis
 from primordial.labs.ctf.hardcode import HardcodeFinding, HardcodeScanResult, HardcodeScanner
 from primordial.labs.ctf.integrity import CTFHarnessIntegrity, CTFIntegrityResult
@@ -33,6 +34,7 @@ __all__ = [
     "ClosedBookPackage",
     "ClosedBookPolicy",
     "EvidenceExpectations",
+    "EnvironmentProof",
     "FailureAnalysis",
     "FakeCTFdClient",
     "HardcodeFinding",
@@ -51,4 +53,5 @@ __all__ = [
     "load_ctf_target_manifest",
     "load_ctf_target_manifest_file",
     "load_ctf_lab_phase_catalog",
+    "verify_local_container_environment",
 ]
