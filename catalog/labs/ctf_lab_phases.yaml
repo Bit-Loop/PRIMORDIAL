@@ -24,7 +24,7 @@ phases:
   - number: 1
     id: phase_1_juice_shop
     name: Phase 1 Juice Shop
-    status: not_started
+    status: ready_for_review
     target_families:
       - owasp_juice_shop
     allowed_profiles:
@@ -35,7 +35,19 @@ phases:
       - local_container_environment_verified
       - closed_book_ctfd_export_loaded_without_flags
       - solve_attempts_scored_without_writeup_access
-    validation_commands: []
+    validation_commands:
+      - python3 -m unittest tests.test_ctf_harness_environment tests.test_ctf_harness_targets tests.test_ctf_harness_closed_book tests.test_ctf_harness_ctfd_client tests.test_ctf_harness_sessions tests.test_ctf_harness_hardcode_scan tests.test_ctf_harness_solve_verification tests.test_ctf_harness_benchmark tests.test_ctf_harness_integrity tests.test_ctf_harness_failure_analysis tests.test_ctf_harness_mutation tests.test_ctf_harness_postmortem tests.test_ctf_harness_patch_proposal tests.test_ctf_lab_phases -q
+      - python3 -m primordial.core.quality.hardcode
+    verified_environment_refs:
+      - evidence:local-container:14fdf1d29253565a
+      - evidence:docker-run-reset-teardown
+    evidence_refs:
+      - github_pr:29
+      - github_pr:30
+      - github_pr:31
+      - github_pr:32
+      - evidence:local-container:14fdf1d29253565a
+      - evidence:docker-run-reset-teardown
   - number: 2
     id: phase_2_vulhub_cve_labs
     name: Phase 2 Vulhub CVE Labs
