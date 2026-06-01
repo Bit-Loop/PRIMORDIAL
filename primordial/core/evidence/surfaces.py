@@ -76,124 +76,155 @@ class CredentialedAccessSurface:
         }
 
 
+@dataclass(slots=True)
+class _CredentialedAccessScan:
+    protocols: set[str] = field(default_factory=set)
+    supporting_refs: set[str] = field(default_factory=set)
+    windows_refs: set[str] = field(default_factory=set)
+    linux_refs: set[str] = field(default_factory=set)
+    samba_refs: set[str] = field(default_factory=set)
+    smb_refs: set[str] = field(default_factory=set)
+    winrm_refs: set[str] = field(default_factory=set)
+    ad_refs: set[str] = field(default_factory=set)
+    ssh_http_refs: set[str] = field(default_factory=set)
+    service_facts: list[dict[str, Any]] = field(default_factory=list)
+    ad_service_refs: dict[str, set[str]] = field(default_factory=dict)
+
+
 def classify_credentialed_access_surface(evidence: Iterable[object]) -> CredentialedAccessSurface:
     """Classify whether stored evidence supports Windows SMB/WinRM credential validation.
 
     This intentionally separates Windows SMB/WinRM from generic remote admin
     surfaces such as SSH, HTTP admin panels, NFS, RDP, databases, or Linux Samba.
     """
-
     evidence_list = list(evidence)
-    protocols: set[str] = set()
-    supporting_refs: set[str] = set()
-    windows_refs: set[str] = set()
-    linux_refs: set[str] = set()
-    samba_refs: set[str] = set()
-    smb_refs: set[str] = set()
-    winrm_refs: set[str] = set()
-    ad_refs: set[str] = set()
-    ssh_http_refs: set[str] = set()
-    service_facts: list[dict[str, Any]] = []
-    ad_service_refs: dict[str, set[str]] = {}
-
-    for item in evidence_list:
-        evidence_id = str(getattr(item, "id", "") or "")
-        metadata = getattr(item, "metadata", {})
-        if not isinstance(metadata, dict):
-            metadata = {}
-        item_text = _record_text(item, metadata)
-        item_kind = str(metadata.get("kind") or "").lower()
-        if _has_any(item_text, WINDOWS_TERMS):
-            windows_refs.add(evidence_id)
-        if _has_any(item_text, LINUX_TERMS):
-            linux_refs.add(evidence_id)
-        if "samba" in item_text:
-            samba_refs.add(evidence_id)
-        if item_kind == "ad_enumeration" or _looks_like_ad_text(item_text):
-            ad_refs.add(evidence_id)
-            windows_refs.add(evidence_id)
-
-        for service in _iter_services(metadata):
-            port = _service_port(service)
-            service_text = _service_text(service)
-            service_name = _service_name(service)
-            fact = _service_fact(evidence_id, service)
-            if fact:
-                service_facts.append(fact)
-
-            if _has_any(service_text, WINDOWS_TERMS):
-                windows_refs.add(evidence_id)
-            if _has_any(service_text, LINUX_TERMS):
-                linux_refs.add(evidence_id)
-            if "samba" in service_text:
-                samba_refs.add(evidence_id)
-
-            if service_name in SSH_HTTP_SERVICES:
-                ssh_http_refs.add(evidence_id)
-            if port in SMB_PORTS or service_name in SMB_SERVICES:
-                smb_refs.add(evidence_id)
-            if port in WINRM_PORTS or service_name in WINRM_SERVICES or "winrm" in service_text or "wsman" in service_text:
-                if _service_supports_winrm(port, service_name, service_text):
-                    protocols.add("winrm")
-                    winrm_refs.add(evidence_id)
-                    supporting_refs.add(evidence_id)
-                    windows_refs.add(evidence_id)
-            if _service_supports_ad(port, service_name, service_text):
-                ad_refs.add(evidence_id)
-                ad_service_refs.setdefault(evidence_id, set()).add(service_name or str(port))
-            if _service_supports_windows_smb(port, service_name, service_text):
-                protocols.add("smb")
-                supporting_refs.add(evidence_id)
-                windows_refs.add(evidence_id)
-
-    # AD/DC evidence plus SMB means the SMB path is Windows-domain-adjacent even
-    # when the SMB banner itself is sparse.
-    if ad_refs:
-        supporting_refs.update(ad_refs)
-        windows_refs.update(ad_refs)
-        if smb_refs:
-            protocols.add("smb")
-            supporting_refs.update(smb_refs.intersection(ad_refs) or smb_refs)
-
-    # A lone Samba service is SMB, but it is not a Windows SMB/WinRM credentialed
-    # surface and must not trigger Windows flag-path assumptions.
-    if samba_refs and not (windows_refs or ad_refs or winrm_refs):
-        protocols.discard("smb")
-
-    normalized_protocols = tuple(sorted(protocol for protocol in protocols if protocol in {"smb", "winrm"}))
-    refs = tuple(sorted(ref for ref in supporting_refs if ref))
-    os_family = _os_family(windows_refs, linux_refs, normalized_protocols)
+    scan = _scan_credentialed_access(evidence_list)
+    _apply_domain_smb_rules(scan)
+    normalized_protocols = tuple(sorted(protocol for protocol in scan.protocols if protocol in {"smb", "winrm"}))
+    refs = tuple(sorted(ref for ref in scan.supporting_refs if ref))
+    os_family = _os_family(scan.windows_refs, scan.linux_refs, normalized_protocols)
     eligible = bool(normalized_protocols) and os_family == "windows"
     blocked_reason = "" if eligible else _blocked_reason(
         evidence_list=evidence_list,
-        linux_refs=linux_refs,
-        samba_refs=samba_refs,
-        smb_refs=smb_refs,
-        windows_refs=windows_refs,
-        ad_refs=ad_refs,
-        winrm_refs=winrm_refs,
-        ssh_http_refs=ssh_http_refs,
+        linux_refs=scan.linux_refs,
+        samba_refs=scan.samba_refs,
+        smb_refs=scan.smb_refs,
+        windows_refs=scan.windows_refs,
+        ad_refs=scan.ad_refs,
+        winrm_refs=scan.winrm_refs,
+        ssh_http_refs=scan.ssh_http_refs,
     )
     if not refs and not eligible:
-        refs = tuple(sorted(ref for ref in linux_refs.union(samba_refs, smb_refs, ssh_http_refs) if ref))
+        refs = _blocked_surface_refs(scan)
     return CredentialedAccessSurface(
         eligible=eligible,
         protocols=normalized_protocols,
         os_family=os_family,
         evidence_refs=refs,
         blocked_reason=blocked_reason,
-        service_facts=tuple(service_facts[:40]),
-        signals={
-            "windows_evidence_ids": sorted(ref for ref in windows_refs if ref),
-            "linux_evidence_ids": sorted(ref for ref in linux_refs if ref),
-            "samba_evidence_ids": sorted(ref for ref in samba_refs if ref),
-            "smb_evidence_ids": sorted(ref for ref in smb_refs if ref),
-            "winrm_evidence_ids": sorted(ref for ref in winrm_refs if ref),
-            "ad_evidence_ids": sorted(ref for ref in ad_refs if ref),
-            "ssh_http_evidence_ids": sorted(ref for ref in ssh_http_refs if ref),
-            "ad_service_refs": {key: sorted(values) for key, values in ad_service_refs.items()},
-        },
+        service_facts=tuple(scan.service_facts[:40]),
+        signals=_surface_signals(scan),
     )
+
+
+def _scan_credentialed_access(evidence_list: list[object]) -> _CredentialedAccessScan:
+    scan = _CredentialedAccessScan()
+    for item in evidence_list:
+        _scan_evidence_item(scan, item)
+    return scan
+
+
+def _scan_evidence_item(scan: _CredentialedAccessScan, item: object) -> None:
+    evidence_id = str(getattr(item, "id", "") or "")
+    metadata = getattr(item, "metadata", {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+
+    item_text = _record_text(item, metadata)
+    item_kind = str(metadata.get("kind") or "").lower()
+    _scan_record_text(scan, evidence_id, item_text, item_kind)
+    for service in _iter_services(metadata):
+        _scan_service(scan, evidence_id, service)
+
+
+def _scan_record_text(scan: _CredentialedAccessScan, evidence_id: str, text: str, item_kind: str) -> None:
+    if _has_any(text, WINDOWS_TERMS):
+        scan.windows_refs.add(evidence_id)
+    if _has_any(text, LINUX_TERMS):
+        scan.linux_refs.add(evidence_id)
+    if "samba" in text:
+        scan.samba_refs.add(evidence_id)
+    if item_kind == "ad_enumeration" or _looks_like_ad_text(text):
+        scan.ad_refs.add(evidence_id)
+        scan.windows_refs.add(evidence_id)
+
+
+def _scan_service(scan: _CredentialedAccessScan, evidence_id: str, service: dict[str, Any]) -> None:
+    port = _service_port(service)
+    service_text = _service_text(service)
+    service_name = _service_name(service)
+    fact = _service_fact(evidence_id, service)
+    if fact:
+        scan.service_facts.append(fact)
+
+    _scan_service_text_refs(scan, evidence_id, service_text)
+    if service_name in SSH_HTTP_SERVICES:
+        scan.ssh_http_refs.add(evidence_id)
+    if port in SMB_PORTS or service_name in SMB_SERVICES:
+        scan.smb_refs.add(evidence_id)
+    if _service_supports_winrm(port, service_name, service_text):
+        _add_supported_protocol(scan, "winrm", evidence_id)
+    if _service_supports_ad(port, service_name, service_text):
+        scan.ad_refs.add(evidence_id)
+        scan.ad_service_refs.setdefault(evidence_id, set()).add(service_name or str(port))
+    if _service_supports_windows_smb(port, service_name, service_text):
+        _add_supported_protocol(scan, "smb", evidence_id)
+
+
+def _scan_service_text_refs(scan: _CredentialedAccessScan, evidence_id: str, service_text: str) -> None:
+    if _has_any(service_text, WINDOWS_TERMS):
+        scan.windows_refs.add(evidence_id)
+    if _has_any(service_text, LINUX_TERMS):
+        scan.linux_refs.add(evidence_id)
+    if "samba" in service_text:
+        scan.samba_refs.add(evidence_id)
+
+
+def _add_supported_protocol(scan: _CredentialedAccessScan, protocol: str, evidence_id: str) -> None:
+    scan.protocols.add(protocol)
+    scan.supporting_refs.add(evidence_id)
+    scan.windows_refs.add(evidence_id)
+    if protocol == "winrm":
+        scan.winrm_refs.add(evidence_id)
+
+
+def _apply_domain_smb_rules(scan: _CredentialedAccessScan) -> None:
+    if scan.ad_refs:
+        scan.supporting_refs.update(scan.ad_refs)
+        scan.windows_refs.update(scan.ad_refs)
+        if scan.smb_refs:
+            scan.protocols.add("smb")
+            scan.supporting_refs.update(scan.smb_refs.intersection(scan.ad_refs) or scan.smb_refs)
+
+    if scan.samba_refs and not (scan.windows_refs or scan.ad_refs or scan.winrm_refs):
+        scan.protocols.discard("smb")
+
+
+def _blocked_surface_refs(scan: _CredentialedAccessScan) -> tuple[str, ...]:
+    return tuple(sorted(ref for ref in scan.linux_refs.union(scan.samba_refs, scan.smb_refs, scan.ssh_http_refs) if ref))
+
+
+def _surface_signals(scan: _CredentialedAccessScan) -> dict[str, Any]:
+    return {
+        "windows_evidence_ids": sorted(ref for ref in scan.windows_refs if ref),
+        "linux_evidence_ids": sorted(ref for ref in scan.linux_refs if ref),
+        "samba_evidence_ids": sorted(ref for ref in scan.samba_refs if ref),
+        "smb_evidence_ids": sorted(ref for ref in scan.smb_refs if ref),
+        "winrm_evidence_ids": sorted(ref for ref in scan.winrm_refs if ref),
+        "ad_evidence_ids": sorted(ref for ref in scan.ad_refs if ref),
+        "ssh_http_evidence_ids": sorted(ref for ref in scan.ssh_http_refs if ref),
+        "ad_service_refs": {key: sorted(values) for key, values in scan.ad_service_refs.items()},
+    }
 
 
 def _blocked_reason(

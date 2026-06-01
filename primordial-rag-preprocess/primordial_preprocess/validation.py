@@ -115,7 +115,20 @@ def validate_outputs(output_dir: Path, policy: CorpusPolicy) -> dict[str, Any]:
             if len(ids) > 1:
                 errors.append(f"duplicate exact-hash source extracted more than once: {sha256} -> {ids}")
 
-    report = {
+    report = _validation_report(classified, extracted, chunks, errors=errors, warnings=warnings)
+    (output_dir / "validation_report.json").write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+    return report
+
+
+def _validation_report(
+    classified: list[dict[str, Any]],
+    extracted: list[dict[str, Any]],
+    chunks: list[dict[str, Any]],
+    *,
+    errors: list[str],
+    warnings: list[str],
+) -> dict[str, Any]:
+    return {
         "valid": not errors,
         "errors": errors,
         "warnings": warnings,
@@ -126,5 +139,3 @@ def validate_outputs(output_dir: Path, policy: CorpusPolicy) -> dict[str, Any]:
         "restricted_chunks": sum(1 for chunk in chunks if chunk.get("planner_visibility") == "restricted"),
         "taxonomy_only_chunks": sum(1 for chunk in chunks if chunk.get("planner_visibility") == "taxonomy_only"),
     }
-    (output_dir / "validation_report.json").write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
-    return report

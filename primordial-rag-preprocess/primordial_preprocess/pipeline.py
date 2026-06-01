@@ -56,13 +56,9 @@ def run_pipeline(
     output_dir.mkdir(parents=True, exist_ok=True)
     policy = load_policy(policy_path)
     overrides = load_overrides(overrides_path)
-
-    if only:
-        inventory_only = only == "inventory"
-        classify_only = only == "classify" or only == "dedupe"
-        extract_only = only in {"convert", "epub", "profiles", "mitre"}
-        chunk_only = only in {"chunk", "merge", "eval"}
-        validate_only = only == "validate"
+    inventory_only, classify_only, extract_only, chunk_only, validate_only = _stage_flags(
+        only, inventory_only, classify_only, extract_only, chunk_only, validate_only
+    )
 
     if validate_only:
         validation = validate_outputs(output_dir, policy)
@@ -117,4 +113,23 @@ def run_pipeline(
         extracted_count=sum(1 for record in extracted if record.get("extracted")),
         chunk_count=len(chunks),
         validation_valid=bool(validation.get("valid")),
+    )
+
+
+def _stage_flags(
+    only: str | None,
+    inventory_only: bool,
+    classify_only: bool,
+    extract_only: bool,
+    chunk_only: bool,
+    validate_only: bool,
+) -> tuple[bool, bool, bool, bool, bool]:
+    if not only:
+        return inventory_only, classify_only, extract_only, chunk_only, validate_only
+    return (
+        only == "inventory",
+        only == "classify" or only == "dedupe",
+        only in {"convert", "epub", "profiles", "mitre"},
+        only in {"chunk", "merge", "eval"},
+        only == "validate",
     )

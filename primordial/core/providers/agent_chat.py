@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import json
-from pathlib import Path
 from datetime import timedelta
 from typing import Any, Callable
-from urllib import error, request
 
 from primordial.core.domain.enums import (
     AgentRole,
@@ -28,164 +25,13 @@ from primordial.core.domain.models import (
     json_ready,
     utc_now,
 )
+from primordial.core.providers.agent_chat_client import (
+    AgentChatClient,
+    AgentChatError,
+    AgentChatResponse,
+    AgentChatSettings,
+)
 from primordial.core.workers import WorkerContract, WorkerOffer
-
-
-class AgentChatError(RuntimeError):
-    pass
-
-
-@dataclass(slots=True, frozen=True)
-class AgentChatSettings:
-    base_url: str = "http://127.0.0.1:8787"
-    api_key: str | None = None
-    provider: str = "claude"
-    model: str | None = None
-    timeout_seconds: int = 300
-    cwd: Path | None = None
-    safe_guard: bool = True
-    codex_sandbox: str = "read-only"
-    claude_permission_mode: str = "dontAsk"
-
-
-@dataclass(slots=True, frozen=True)
-class AgentChatResponse:
-    provider: str
-    model: str | None
-    text: str
-    exit_code: int
-    elapsed_seconds: float
-    request_id: str | None = None
-    conversation_id: str | None = None
-    session_resumed: bool = False
-    prompt_tokens: int | None = None
-    completion_tokens: int | None = None
-    estimated_cost_usd: float = 0.0
-    warnings: list[str] = field(default_factory=list)
-    raw: dict[str, Any] = field(default_factory=dict)
-
-
-class AgentChatClient:
-    def __init__(self, settings: AgentChatSettings) -> None:
-        self.settings = settings
-
-    def health(self, timeout_seconds: int | float = 5) -> dict[str, Any]:
-        payload = self._json_request("GET", "/health", timeout_seconds=timeout_seconds)
-        if not isinstance(payload, dict):
-            raise AgentChatError("agent chat health response was not an object")
-        return payload
-
-    def chat(
-        self,
-        *,
-        prompt: str,
-        system_prompt: str | None = None,
-        provider: str | None = None,
-        model: str | None = None,
-        effort: str | None = None,
-        conversation_id: str | None = None,
-        persist: bool = True,
-    ) -> AgentChatResponse:
-        selected_provider = (provider or self.settings.provider or "claude").strip().lower()
-        payload: dict[str, Any] = {
-            "provider": selected_provider,
-            "prompt": prompt,
-            "include_raw": False,
-            "stream": False,
-            "dry_run": False,
-            "persist": persist,
-            "safe_guard": self.settings.safe_guard,
-            "allow_tools": False,
-            "codex_sandbox": self.settings.codex_sandbox,
-            "claude_permission_mode": self.settings.claude_permission_mode,
-            "timeout_seconds": self.settings.timeout_seconds,
-        }
-        if system_prompt:
-            payload["system_prompt"] = system_prompt
-        selected_model = model or self.settings.model
-        if selected_model:
-            payload["model"] = selected_model
-        if effort:
-            payload["effort"] = effort
-        if conversation_id:
-            payload["conversation_id"] = conversation_id
-        if self.settings.cwd is not None:
-            payload["cwd"] = str(self.settings.cwd)
-
-        response = self._json_request(
-            "POST",
-            "/api/chat",
-            payload,
-            timeout_seconds=self.settings.timeout_seconds + 10,
-        )
-        if not isinstance(response, dict):
-            raise AgentChatError("agent chat response was not an object")
-        usage = response.get("usage")
-        usage_payload = usage if isinstance(usage, dict) else {}
-        provider_meta = response.get("provider_meta")
-        provider_meta_payload = provider_meta if isinstance(provider_meta, dict) else {}
-        return AgentChatResponse(
-            provider=str(response.get("provider") or selected_provider),
-            model=str(response.get("model")) if response.get("model") else selected_model,
-            text=str(response.get("text") or ""),
-            exit_code=int(response.get("exit_code") or 0),
-            elapsed_seconds=float(response.get("elapsed_seconds") or 0.0),
-            request_id=str(response.get("request_id")) if response.get("request_id") else None,
-            conversation_id=str(response.get("conversation_id")) if response.get("conversation_id") else None,
-            session_resumed=bool(response.get("session_resumed")),
-            prompt_tokens=_optional_int(usage_payload.get("prompt_tokens")),
-            completion_tokens=_optional_int(usage_payload.get("completion_tokens")),
-            estimated_cost_usd=_optional_float(
-                response.get("estimated_cost_usd") or provider_meta_payload.get("estimated_cost_usd") or 0.0
-            ),
-            warnings=[str(item) for item in response.get("warnings", []) if str(item).strip()]
-            if isinstance(response.get("warnings"), list)
-            else [],
-            raw=response,
-        )
-
-    def _json_request(
-        self,
-        method: str,
-        path: str,
-        payload: dict[str, Any] | None = None,
-        timeout_seconds: int | None = None,
-    ) -> Any:
-        url = self.settings.base_url.rstrip("/") + path
-        body = json.dumps(payload).encode("utf-8") if payload is not None else None
-        headers = {"Accept": "application/json"}
-        if payload is not None:
-            headers["Content-Type"] = "application/json"
-        if self.settings.api_key:
-            headers["Authorization"] = f"Bearer {self.settings.api_key}"
-        req = request.Request(url, data=body, headers=headers, method=method)
-        try:
-            timeout = max(0.1, float(timeout_seconds if timeout_seconds is not None else self.settings.timeout_seconds))
-            with request.urlopen(req, timeout=timeout) as resp:
-                raw = resp.read().decode("utf-8", errors="replace")
-        except error.HTTPError as exc:
-            raw = exc.read().decode("utf-8", errors="replace")
-            message = self._error_message(raw) or f"HTTP {exc.code}"
-            raise AgentChatError(f"agent chat API request failed: {message}") from exc
-        except OSError as exc:
-            raise AgentChatError(f"agent chat API is unreachable at {self.settings.base_url}: {exc}") from exc
-        try:
-            return json.loads(raw) if raw else {}
-        except json.JSONDecodeError as exc:
-            raise AgentChatError("agent chat API returned invalid JSON") from exc
-
-    def _error_message(self, raw: str) -> str:
-        try:
-            payload = json.loads(raw) if raw else {}
-        except json.JSONDecodeError:
-            return raw.strip()[:300]
-        if isinstance(payload, dict):
-            error_payload = payload.get("error")
-            if isinstance(error_payload, dict):
-                return str(error_payload.get("message") or error_payload)
-            if error_payload:
-                return str(error_payload)
-        return raw.strip()[:300]
 
 
 class AgentChatPremiumReviewRunner:
@@ -269,9 +115,9 @@ class AgentChatPremiumReviewRunner:
             self._recent_target_id = task.target_id
 
     def _execute(self, task: Task, context: ContextSlice | None) -> TaskExecutionResult:
-        result = TaskExecutionResult(summary="remote premium review completed")
         target = self._target_loader(task.target_id)
         if target is None:
+            result = TaskExecutionResult(summary="remote premium review completed")
             result.success = False
             result.summary = "remote premium review failed"
             result.error = "target not found"
@@ -288,116 +134,9 @@ class AgentChatPremiumReviewRunner:
                 persist=True,
             )
         except AgentChatError as exc:
-            result.success = False
-            result.summary = "remote premium review failed"
-            result.error = str(exc)
-            result.traces.append(
-                self._trace(
-                    task,
-                    status="failed",
-                    summary="Agent chat API call failed",
-                    model=model,
-                    provider=self.client.settings.provider,
-                    metadata={"error": str(exc)},
-                )
-            )
-            result.events.append(
-                EventRecord(
-                    type=EventType.TASK_FAILED,
-                    summary="Remote premium review failed",
-                    target_id=target.id,
-                    task_id=task.id,
-                    metadata={"error": str(exc), "adapter": "agent_chat_api"},
-                )
-            )
-            return result
+            return _remote_review_failure_result(self, task, target, model, exc)
 
-        review = parse_review_json(response.text)
-        structured = isinstance(review, dict)
-        cost_payload = self._record_remote_cost(task, response)
-        status = "completed" if structured else "parse_failed"
-        summary = (
-            "Remote premium review returned structured planner output."
-            if structured
-            else "Remote premium review returned unstructured output; deterministic admission will reject it."
-        )
-        result.summary = summary
-        result.traces.append(
-            self._trace(
-                task,
-                status=status,
-                summary=summary,
-                model=response.model or model,
-                provider=response.provider,
-                metadata={
-                    "request_id": response.request_id,
-                    "conversation_id": response.conversation_id,
-                    "elapsed_seconds": response.elapsed_seconds,
-                    "session_resumed": response.session_resumed,
-                    "warnings": response.warnings,
-                    "structured_output": structured,
-                    "remote_cost": cost_payload,
-                },
-            )
-        )
-        result.evidence.append(
-            EvidenceRecord(
-                target_id=target.id,
-                task_id=task.id,
-                type=EvidenceType.MODEL_REVIEW,
-                title=f"Remote premium review: {target.handle}",
-                summary=summary,
-                source_ref=f"agent-chat-api:{response.request_id or task.id}",
-                verification_status=VerificationStatus.PARTIAL if structured else VerificationStatus.UNVERIFIED,
-                confidence=float(review.get("confidence", 0.65)) if structured else 0.45,
-                freshness=0.95,
-                metadata={
-                    "kind": "premium_review_result",
-                    "review": review if structured else {},
-                    "response_text": response.text,
-                    "structured_output": structured,
-                    "provider": response.provider,
-                    "model": response.model or model or "provider-default",
-                    "request_id": response.request_id,
-                    "conversation_id": response.conversation_id,
-                    "adapter": "agent_chat_api",
-                    "expected_output_type": self._expected_output_type(task),
-                    "remote_cost": cost_payload,
-                },
-            )
-        )
-        result.notes.append(
-            Note(
-                target_id=target.id,
-                task_id=task.id,
-                title="Remote premium review status",
-                body=self._render_note(response, structured=structured),
-                confidence=0.75 if structured else 0.55,
-                freshness=0.95,
-                metadata={
-                    "kind": "remote_premium_review_note",
-                    "structured_output": structured,
-                    "request_id": response.request_id,
-                    "adapter": "agent_chat_api",
-                },
-            )
-        )
-        result.events.append(
-            EventRecord(
-                type=EventType.ESCALATION_REVIEWED,
-                summary=summary,
-                target_id=target.id,
-                task_id=task.id,
-                metadata={
-                    "adapter": "agent_chat_api",
-                    "provider": response.provider,
-                    "model": response.model or model or "provider-default",
-                    "structured_output": structured,
-                    "remote_cost": cost_payload,
-                },
-            )
-        )
-        return result
+        return _remote_review_success_result(self, task, target, response, model)
 
     def _record_remote_cost(self, task: Task, response: AgentChatResponse) -> dict[str, object]:
         estimated_cost = self._estimated_remote_cost(task, response)
@@ -553,6 +292,176 @@ class AgentChatPremiumReviewRunner:
             self._offers.pop(offer_id, None)
 
 
+def _remote_review_failure_result(
+    runner: AgentChatPremiumReviewRunner,
+    task: Task,
+    target: Target,
+    model: str | None,
+    exc: AgentChatError,
+) -> TaskExecutionResult:
+    result = TaskExecutionResult(summary="remote premium review failed")
+    result.success = False
+    result.error = str(exc)
+    result.traces.append(
+        runner._trace(
+            task,
+            status="failed",
+            summary="Agent chat API call failed",
+            model=model,
+            provider=runner.client.settings.provider,
+            metadata={"error": str(exc)},
+        )
+    )
+    result.events.append(
+        EventRecord(
+            type=EventType.TASK_FAILED,
+            summary="Remote premium review failed",
+            target_id=target.id,
+            task_id=task.id,
+            metadata={"error": str(exc), "adapter": "agent_chat_api"},
+        )
+    )
+    return result
+
+
+def _remote_review_success_result(
+    runner: AgentChatPremiumReviewRunner,
+    task: Task,
+    target: Target,
+    response: AgentChatResponse,
+    model: str | None,
+) -> TaskExecutionResult:
+    review = parse_review_json(response.text)
+    structured = isinstance(review, dict)
+    cost_payload = runner._record_remote_cost(task, response)
+    summary = _remote_review_summary(structured)
+    result = TaskExecutionResult(summary=summary)
+    result.traces.append(_remote_review_trace(runner, task, response, model, structured, summary, cost_payload))
+    result.evidence.append(
+        _remote_review_evidence(runner, task, target, response, model, structured, review, summary, cost_payload)
+    )
+    result.notes.append(_remote_review_note(runner, task, target, response, structured))
+    result.events.append(_remote_review_event(task, target, response, model, structured, summary, cost_payload))
+    return result
+
+
+def _remote_review_summary(structured: bool) -> str:
+    if structured:
+        return "Remote premium review returned structured planner output."
+    return "Remote premium review returned unstructured output; deterministic admission will reject it."
+
+
+def _remote_review_trace(
+    runner: AgentChatPremiumReviewRunner,
+    task: Task,
+    response: AgentChatResponse,
+    model: str | None,
+    structured: bool,
+    summary: str,
+    cost_payload: dict[str, object],
+) -> AgentTrace:
+    return runner._trace(
+        task,
+        status="completed" if structured else "parse_failed",
+        summary=summary,
+        model=response.model or model,
+        provider=response.provider,
+        metadata={
+            "request_id": response.request_id,
+            "conversation_id": response.conversation_id,
+            "elapsed_seconds": response.elapsed_seconds,
+            "session_resumed": response.session_resumed,
+            "warnings": response.warnings,
+            "structured_output": structured,
+            "remote_cost": cost_payload,
+        },
+    )
+
+
+def _remote_review_evidence(
+    runner: AgentChatPremiumReviewRunner,
+    task: Task,
+    target: Target,
+    response: AgentChatResponse,
+    model: str | None,
+    structured: bool,
+    review: dict[str, Any] | None,
+    summary: str,
+    cost_payload: dict[str, object],
+) -> EvidenceRecord:
+    return EvidenceRecord(
+        target_id=target.id,
+        task_id=task.id,
+        type=EvidenceType.MODEL_REVIEW,
+        title=f"Remote premium review: {target.handle}",
+        summary=summary,
+        source_ref=f"agent-chat-api:{response.request_id or task.id}",
+        verification_status=VerificationStatus.PARTIAL if structured else VerificationStatus.UNVERIFIED,
+        confidence=float(review.get("confidence", 0.65)) if structured and review is not None else 0.45,
+        freshness=0.95,
+        metadata={
+            "kind": "premium_review_result",
+            "review": review if structured else {},
+            "response_text": response.text,
+            "structured_output": structured,
+            "provider": response.provider,
+            "model": response.model or model or "provider-default",
+            "request_id": response.request_id,
+            "conversation_id": response.conversation_id,
+            "adapter": "agent_chat_api",
+            "expected_output_type": runner._expected_output_type(task),
+            "remote_cost": cost_payload,
+        },
+    )
+
+
+def _remote_review_note(
+    runner: AgentChatPremiumReviewRunner,
+    task: Task,
+    target: Target,
+    response: AgentChatResponse,
+    structured: bool,
+) -> Note:
+    return Note(
+        target_id=target.id,
+        task_id=task.id,
+        title="Remote premium review status",
+        body=runner._render_note(response, structured=structured),
+        confidence=0.75 if structured else 0.55,
+        freshness=0.95,
+        metadata={
+            "kind": "remote_premium_review_note",
+            "structured_output": structured,
+            "request_id": response.request_id,
+            "adapter": "agent_chat_api",
+        },
+    )
+
+
+def _remote_review_event(
+    task: Task,
+    target: Target,
+    response: AgentChatResponse,
+    model: str | None,
+    structured: bool,
+    summary: str,
+    cost_payload: dict[str, object],
+) -> EventRecord:
+    return EventRecord(
+        type=EventType.ESCALATION_REVIEWED,
+        summary=summary,
+        target_id=target.id,
+        task_id=task.id,
+        metadata={
+            "adapter": "agent_chat_api",
+            "provider": response.provider,
+            "model": response.model or model or "provider-default",
+            "structured_output": structured,
+            "remote_cost": cost_payload,
+        },
+    )
+
+
 def parse_review_json(text: str) -> dict[str, Any] | None:
     stripped = text.strip()
     if not stripped:
@@ -577,17 +486,3 @@ def parse_review_json(text: str) -> dict[str, Any] | None:
         if isinstance(parsed, dict):
             return parsed
     return None
-
-
-def _optional_int(value: object) -> int | None:
-    try:
-        return int(value) if value is not None else None
-    except (TypeError, ValueError):
-        return None
-
-
-def _optional_float(value: object) -> float:
-    try:
-        return float(value) if value is not None else 0.0
-    except (TypeError, ValueError):
-        return 0.0

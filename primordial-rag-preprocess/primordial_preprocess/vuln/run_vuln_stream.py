@@ -67,15 +67,9 @@ def run_vuln_stream(
                 records.extend(source_records)
 
     if only in {None, "structured", "epss"}:
-        epss_dir = raw / "structured" / "epss"
-        if epss_dir.exists():
-            import csv
-
-            for path in sorted(epss_dir.rglob("*.csv")):
-                rows = list(csv.DictReader(line for line in path.read_text(encoding="utf-8").splitlines() if not line.startswith("#")))
-                for row in rows:
-                    events.append(event_for_epss_row(row, raw_ref=str(path)))
-                    records.append(parse_epss_row(row, raw_ref=str(path)))
+        source_events, source_records = _load_epss_records(raw / "structured" / "epss")
+        events.extend(source_events)
+        records.extend(source_records)
 
     if only in {None, "advisories"}:
         for base in [raw / "advisories" / "markdown", raw / "advisories" / "html", raw / "advisories" / "pdf", raw / "advisories" / "vendor_bulletins"]:
@@ -106,3 +100,18 @@ def _json(path: Path) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError(f"JSON payload is not an object: {path}")
     return payload
+
+
+def _load_epss_records(epss_dir: Path) -> tuple[list[Any], list[Any]]:
+    if not epss_dir.exists():
+        return [], []
+    import csv
+
+    events = []
+    records = []
+    for path in sorted(epss_dir.rglob("*.csv")):
+        rows = list(csv.DictReader(line for line in path.read_text(encoding="utf-8").splitlines() if not line.startswith("#")))
+        for row in rows:
+            events.append(event_for_epss_row(row, raw_ref=str(path)))
+            records.append(parse_epss_row(row, raw_ref=str(path)))
+    return events, records
