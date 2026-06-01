@@ -56,20 +56,25 @@ class CTFLabPhaseCatalogTests(unittest.TestCase):
         self.assertIn("tests.test_ctf_harness_benchmark", commands)
         self.assertIn("primordial.core.quality.hardcode", commands)
 
-    def test_phase_two_vulhub_tracks_in_progress_proof_work_without_completion(self) -> None:
+    def test_phase_two_vulhub_tracks_ready_for_review_live_lab_evidence(self) -> None:
         phase = load_ctf_lab_phase_catalog(CATALOG_PATH).phase(2)
         commands = "\n".join(phase.validation_commands)
 
-        self.assertEqual(phase.status, "in_progress")
+        self.assertEqual(phase.status, "ready_for_review")
         self.assertTrue(phase.environment_proof_required)
         self.assertTrue(phase.deterministic_fixture_required)
         self.assertIn("local_container_environment_verified", phase.exit_gates)
         self.assertIn("cve_target_manifests_include_versions_and_scope", phase.exit_gates)
         self.assertIn("exploit_applicability_checked_against_observed_evidence", phase.exit_gates)
-        self.assertEqual(phase.verified_environment_refs, ())
+        self.assertEqual(
+            phase.verified_environment_refs,
+            ("evidence:local-container:a7baaf34f20aba58", "evidence:docker-run-reset-teardown"),
+        )
         self.assertIn("github_pr:33", phase.evidence_refs)
         self.assertIn("github_pr:34", phase.evidence_refs)
         self.assertIn("github_pr:35", phase.evidence_refs)
+        self.assertIn("evidence:local-container:a7baaf34f20aba58", phase.evidence_refs)
+        self.assertIn("evidence:docker-run-reset-teardown", phase.evidence_refs)
         self.assertIn("tests.test_ctf_harness_environment", commands)
         self.assertIn("tests.test_ctf_harness_applicability", commands)
         self.assertIn("tests.test_ctf_harness_targets", commands)
