@@ -6,6 +6,14 @@ import ast
 class ScriptSafetyValidator:
     FORBIDDEN_IMPORTS = {"subprocess", "socket"}
     FORBIDDEN_CALLS = {("os", "system"), ("builtins", "eval"), ("builtins", "exec"), ("importlib", "import_module")}
+    FORBIDDEN_IMPORT_ALIASES = {
+        ("importlib", "import_module"),
+        ("os", "system"),
+        ("subprocess", "Popen"),
+        ("subprocess", "run"),
+        ("socket", "socket"),
+    }
+    STAR_IMPORT_ALIAS_MODULES = {"importlib", "os", "subprocess", "socket"}
 
     def validate(self, source: str) -> tuple[bool, list[str]]:
         issues: list[str] = []
@@ -22,6 +30,11 @@ class ScriptSafetyValidator:
                 module = (node.module or "").split(".")[0]
                 if module in self.FORBIDDEN_IMPORTS:
                     issues.append(f"forbidden import: {node.module}")
+                for alias in node.names:
+                    if (module, alias.name) in self.FORBIDDEN_IMPORT_ALIASES or (
+                        alias.name == "*" and module in self.STAR_IMPORT_ALIAS_MODULES
+                    ):
+                        issues.append(f"forbidden import alias: {node.module}.{alias.name}")
             elif isinstance(node, ast.Call):
                 name = self._call_name(node.func)
                 if name in {"eval", "exec", "__import__"}:
