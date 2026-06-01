@@ -112,6 +112,17 @@ class CTFLabPhaseCatalogTests(unittest.TestCase):
             self.assertEqual(phase.verified_environment_refs, ())
             self.assertEqual(phase.evidence_refs, ())
 
+    def test_phase_four_cicd_goat_tracks_control_contract_progress(self) -> None:
+        phase = load_ctf_lab_phase_catalog(CATALOG_PATH).phase(4)
+        commands = "\n".join(phase.validation_commands)
+
+        self.assertEqual(phase.status, "in_progress")
+        self.assertIn("local_container_environment_verified", phase.exit_gates)
+        self.assertIn("ci_cd_attack_paths_bound_to_lab_scope", phase.exit_gates)
+        self.assertIn("no_external_pipeline_mutation_without_verified_lab", phase.exit_gates)
+        self.assertIn("tests.test_ctf_harness_cicd_goat", commands)
+        self.assertIn("tests.test_ctf_lab_phases", commands)
+
     def test_lab_phase_catalog_rejects_missing_required_phase(self) -> None:
         payload = load_yaml_file(CATALOG_PATH)
         payload["phases"] = payload["phases"][:-1]
