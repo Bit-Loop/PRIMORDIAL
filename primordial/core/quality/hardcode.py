@@ -80,11 +80,19 @@ def audit_hardcoded_artifacts(
     repo_root = Path(root)
     paths = _text_paths(repo_root)
     files = {path: (repo_root / path).read_text(encoding="utf-8", errors="ignore") for path in paths}
-    scan = HardcodeScanner.scan(
-        files,
-        box_names=box_names,
-        hidden_solution_snippets=hidden_solution_snippets,
-    )
+    try:
+        scan = HardcodeScanner.scan(
+            files,
+            box_names=box_names,
+            hidden_solution_snippets=hidden_solution_snippets,
+        )
+    except TypeError as exc:
+        if "box_names" not in str(exc):
+            raise
+        scan = HardcodeScanner.scan(
+            files,
+            hidden_solution_snippets=hidden_solution_snippets,
+        )
     records = tuple(
         HardcodeAuditRecord(
             path=finding.path,
