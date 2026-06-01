@@ -13,6 +13,10 @@ from primordial.config import AppConfig
 from primordial.core.credentials import CredentialStore
 from primordial.core.domain.enums import ScopeProfile
 from primordial.runtime import PrimordialRuntime
+from tests.support import fixture_ip
+
+
+ACTIVE_IP = fixture_ip(10, 129, 244, 95)
 
 
 class CaidoAndSkillTests(unittest.TestCase):
@@ -597,6 +601,36 @@ class CaidoAndSkillTests(unittest.TestCase):
             self.assertIn("caido-httpql", runtime.skills.context_digest())
             runtime.shutdown()
 
+    def test_yaml_skills_are_loaded_into_runtime_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            skill_dir = root / "skills" / "caido-httpql"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "skill.yaml").write_text(
+                "id: caido-httpql\n"
+                "title: Caido HTTPQL Traffic Review\n"
+                "summary: Use Caido HTTPQL for scoped traffic review.\n"
+                "tags:\n"
+                "  - caido\n"
+                "  - httpql\n"
+                "body: |\n"
+                "  Prefer host-scoped HTTPQL filters before broader body searches.\n",
+                encoding="utf-8",
+            )
+            config = AppConfig.from_env(project_root=root)
+            config.ensure_directories()
+            runtime = PrimordialRuntime(config)
+            runtime.initialize()
+
+            payload = runtime.skills_payload(include_body=True)
+
+            self.assertEqual(payload["skills"][0]["id"], "caido-httpql")
+            self.assertEqual(payload["skills"][0]["title"], "Caido HTTPQL Traffic Review")
+            self.assertIn("Caido HTTPQL", payload["skills"][0]["summary"])
+            self.assertIn("host-scoped HTTPQL", payload["skills"][0]["body"])
+            self.assertEqual(payload["skills"][0]["tags"], ["caido", "httpql"])
+            runtime.shutdown()
+
     def test_caido_import_adds_active_generation_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -608,7 +642,7 @@ class CaidoAndSkillTests(unittest.TestCase):
                 handle="pirate.htb",
                 profile=ScopeProfile.HACK_THE_BOX,
                 assets=["pirate.htb"],
-                metadata={"active_ip": "10.129.244.95", "active_ip_generation": 3},
+                metadata={"active_ip": ACTIVE_IP, "active_ip_generation": 3},
                 emit_event=False,
             )
 
@@ -633,7 +667,7 @@ class CaidoAndSkillTests(unittest.TestCase):
             evidence = runtime.store.list_evidence(target_id=target.id, limit=10)[0]
 
             self.assertEqual(len(result["imported"]), 1)
-            self.assertEqual(evidence.metadata["active_ip"], "10.129.244.95")
+            self.assertEqual(evidence.metadata["active_ip"], ACTIVE_IP)
             self.assertEqual(evidence.metadata["active_ip_generation"], 3)
             runtime.shutdown()
 
