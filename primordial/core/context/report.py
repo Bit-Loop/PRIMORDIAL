@@ -25,6 +25,7 @@ from primordial.core.context.source_refs import (
     unsupported_ai_derived_source_refs,
     unresolved_ai_derived_source_ref_errors,
 )
+from primordial.core.context.source_markdown import is_source_markdown_context
 from primordial.core.context.source_types import EVIDENCE_PROOF_KINDS, NON_EVIDENCE_SOURCE_TYPES, TRUTH_LIKE_AUTHORITIES
 from primordial.core.context.writeup_policy import prompt_writeup_omission_reason
 
@@ -81,6 +82,8 @@ def _report_context_material_decision(envelope: ContextEnvelope) -> ReportSinkDe
             "reject",
             f"report sink rejects generated export recursion ref={envelope.ref}",
         )
+    if is_source_markdown_context(envelope):
+        return ReportSinkDecision("reject", f"report sink rejects source_markdown ref={envelope.ref}")
     if _forbidden_report_source_type(envelope):
         return ReportSinkDecision("reject", f"report sink rejects raw chat context ref={envelope.ref}")
     if has_context_flag(envelope, FORBIDDEN_REPORT_FLAGS):
