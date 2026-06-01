@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 from typing import Any, Mapping
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from primordial.labs.ctf.hidden_material import normalized_hidden_material_key, reject_hidden_flag_material
 from primordial.labs.ctf.targets import CTFTarget
@@ -78,6 +81,33 @@ def verify_local_container_environment(
     )
 
 
+def probe_local_container_environment(
+    target: CTFTarget,
+    *,
+    reset_evidence_ref: str,
+    profile: str,
+    timeout_seconds: float = 5.0,
+    body_limit_bytes: int = 4096,
+) -> EnvironmentProof:
+    _validate_local_container_target(target)
+    checked_reset_ref = _evidence_ref(reset_evidence_ref, "reset_evidence_ref")
+    observations = tuple(
+        _probe_http_asset(asset, timeout_seconds=timeout_seconds, body_limit_bytes=body_limit_bytes)
+        for asset in target.scope.assets
+    )
+    evidence_refs = tuple(_observation_evidence_ref(observation) for observation in observations) + (
+        checked_reset_ref,
+    )
+    return verify_local_container_environment(
+        target,
+        observed_assets=tuple(observation["asset"] for observation in observations),
+        evidence_refs=evidence_refs,
+        reset_evidence_ref=checked_reset_ref,
+        profile=profile,
+        observations={"http": observations},
+    )
+
+
 def _validate_local_container_target(target: CTFTarget) -> None:
     mode = _token(target.reset.mode or target.platform)
     if mode not in LOCAL_CONTAINER_MODES:
@@ -135,6 +165,45 @@ def _provisioning_payload(target: CTFTarget) -> dict[str, Any]:
         "compose_project": target.reset.compose_project,
         "published_ports": [dict(item) for item in target.reset.published_ports],
     }
+
+
+def _probe_http_asset(asset: str, *, timeout_seconds: float, body_limit_bytes: int) -> dict[str, Any]:
+    request = Request(asset, headers={"User-Agent": "PRIMORDIAL-ctf-environment-probe/1"})
+    try:
+        with urlopen(request, timeout=timeout_seconds) as response:
+            status_code = int(getattr(response, "status", response.getcode()))
+            body = response.read(max(body_limit_bytes, 0) + 1)
+            content_type = response.headers.get("Content-Type", "")
+    except HTTPError as exc:
+        exc.close()
+        raise ValueError(f"EnvironmentProof asset did not return healthy HTTP response: {asset}") from exc
+    except URLError as exc:
+        raise ValueError(f"EnvironmentProof asset did not return healthy HTTP response: {asset}") from exc
+    if status_code < 200 or status_code >= 400:
+        raise ValueError(f"EnvironmentProof asset did not return healthy HTTP response: {asset}")
+    body = body[: max(body_limit_bytes, 0)]
+    observation = {
+        "asset": asset,
+        "status_code": status_code,
+        "content_type": str(content_type).strip(),
+        "body_sha256": hashlib.sha256(body).hexdigest(),
+        "body_bytes_sampled": len(body),
+    }
+    reject_hidden_flag_material(observation, path="ctf_environment_probe", label="EnvironmentProof")
+    return observation
+
+
+def _observation_evidence_ref(observation: Mapping[str, Any]) -> str:
+    digest = hashlib.sha256(
+        (
+            str(observation.get("asset", ""))
+            + "|"
+            + str(observation.get("status_code", ""))
+            + "|"
+            + str(observation.get("body_sha256", ""))
+        ).encode("utf-8")
+    ).hexdigest()[:16]
+    return f"evidence:local-container:{digest}"
 
 
 def _plain_mapping(value: Mapping[str, Any]) -> dict[str, Any]:

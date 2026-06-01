@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import threading
 import unittest
 
-from primordial.labs.ctf import load_ctf_target_manifest, verify_local_container_environment
+from primordial.labs.ctf import (
+    load_ctf_target_manifest,
+    probe_local_container_environment,
+    verify_local_container_environment,
+)
 from tests.support import fixture_flag
 
 
@@ -108,8 +114,51 @@ class CTFHarnessEnvironmentProofTests(unittest.TestCase):
                 observations={"banner": fixture_flag()},
             )
 
+    def test_local_container_probe_captures_redacted_http_evidence(self) -> None:
+        with _local_http_server(body=b"OWASP Juice Shop ready") as base_url:
+            target = _juice_shop_target(asset=base_url)
 
-def _juice_shop_target():
+            proof = probe_local_container_environment(
+                target,
+                reset_evidence_ref="evidence:reset-ready",
+                profile="co_internal_lab",
+            )
+
+        self.assertEqual(proof.status, "verified")
+        self.assertEqual(proof.observed_assets, (base_url,))
+        self.assertEqual(proof.reset_evidence_ref, "evidence:reset-ready")
+        self.assertEqual(proof.evidence_refs[-1], "evidence:reset-ready")
+        self.assertTrue(proof.evidence_refs[0].startswith("evidence:local-container:"))
+        observation = proof.observations["http"][0]
+        self.assertEqual(observation["asset"], base_url)
+        self.assertEqual(observation["status_code"], 200)
+        self.assertIn("body_sha256", observation)
+        self.assertNotIn("body", observation)
+
+    def test_local_container_probe_rejects_unhealthy_http_status(self) -> None:
+        with _local_http_server(status=503, body=b"not ready") as base_url:
+            target = _juice_shop_target(asset=base_url)
+
+            with self.assertRaisesRegex(ValueError, "healthy HTTP"):
+                probe_local_container_environment(
+                    target,
+                    reset_evidence_ref="evidence:reset-ready",
+                    profile="co_internal_lab",
+                )
+
+    def test_local_container_probe_rejects_non_evidence_reset_ref(self) -> None:
+        with _local_http_server(body=b"OWASP Juice Shop ready") as base_url:
+            target = _juice_shop_target(asset=base_url)
+
+            with self.assertRaisesRegex(ValueError, "reset_evidence_ref"):
+                probe_local_container_environment(
+                    target,
+                    reset_evidence_ref="note:reset-ready",
+                    profile="co_internal_lab",
+                )
+
+
+def _juice_shop_target(*, asset: str = "http://127.0.0.1:3100"):
     return load_ctf_target_manifest(
         {
             "lab_id": "juice-shop-foundation",
@@ -123,7 +172,7 @@ def _juice_shop_target():
             },
             "scope": {
                 "network": "lab_js_foundation",
-                "assets": ["http://127.0.0.1:3100"],
+                "assets": [asset],
             },
             "provisioning": {
                 "mode": "docker",
@@ -144,6 +193,43 @@ def _juice_shop_target():
             "policy": {"default_intent": "recon_only"},
         }
     )
+
+
+class _HealthHandler(BaseHTTPRequestHandler):
+    status = 200
+    body = b"ready"
+
+    def do_GET(self) -> None:
+        self.send_response(self.status)
+        self.send_header("Content-Type", "text/plain")
+        self.end_headers()
+        self.wfile.write(self.body)
+
+    def log_message(self, format: str, *args: object) -> None:
+        return None
+
+
+class _local_http_server:
+    def __init__(self, *, status: int = 200, body: bytes = b"ready") -> None:
+        self.status = status
+        self.body = body
+        self.server: ThreadingHTTPServer | None = None
+        self.thread: threading.Thread | None = None
+
+    def __enter__(self) -> str:
+        handler = type("HealthHandler", (_HealthHandler,), {"status": self.status, "body": self.body})
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        host, port = self.server.server_address
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        return f"http://{host}:{port}"
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        if self.server is not None:
+            self.server.shutdown()
+            self.server.server_close()
+        if self.thread is not None:
+            self.thread.join(timeout=2)
 
 
 if __name__ == "__main__":
