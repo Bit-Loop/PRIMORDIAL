@@ -7,6 +7,18 @@ from primordial.core.quality.structure import audit_structure
 
 
 class StorageRuntimeStructureQualityTests(unittest.TestCase):
+    def test_runtime_store_module_has_no_structure_violations(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+
+        audit = audit_structure(root)
+
+        records = [
+            record
+            for record in audit.records
+            if record.path == "primordial/core/storage/runtime.py"
+        ]
+        self.assertEqual(records, [])
+
     def test_insert_model_eval_ledger_is_not_oversized(self) -> None:
         root = Path(__file__).resolve().parents[1]
 
