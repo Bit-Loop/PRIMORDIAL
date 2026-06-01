@@ -105,7 +105,7 @@ class CTFLabPhaseCatalogTests(unittest.TestCase):
     def test_remaining_lab_phases_require_verified_environment_proof_before_completion(self) -> None:
         catalog = load_ctf_lab_phase_catalog(CATALOG_PATH)
 
-        for phase in catalog.phases[6:]:
+        for phase in catalog.phases[7:]:
             self.assertTrue(phase.environment_proof_required)
             self.assertTrue(phase.deterministic_fixture_required)
             self.assertNotEqual(phase.status, "complete")
@@ -149,6 +149,20 @@ class CTFLabPhaseCatalogTests(unittest.TestCase):
         self.assertEqual(phase.verified_environment_refs, ())
         self.assertEqual(phase.evidence_refs, ())
         self.assertIn("tests.test_ctf_harness_kubernetes_goat", commands)
+        self.assertIn("tests.test_ctf_lab_phases", commands)
+        self.assertIn("primordial.core.quality.hardcode", commands)
+
+    def test_phase_six_goad_tracks_control_contract_progress(self) -> None:
+        phase = load_ctf_lab_phase_catalog(CATALOG_PATH).phase(6)
+        commands = "\n".join(phase.validation_commands)
+
+        self.assertEqual(phase.status, "in_progress")
+        self.assertIn("local_ad_lab_environment_verified", phase.exit_gates)
+        self.assertIn("kerberos_and_smb_actions_policy_gated", phase.exit_gates)
+        self.assertIn("credential_use_requires_operator_supplied_material", phase.exit_gates)
+        self.assertEqual(phase.verified_environment_refs, ())
+        self.assertEqual(phase.evidence_refs, ())
+        self.assertIn("tests.test_ctf_harness_goad", commands)
         self.assertIn("tests.test_ctf_lab_phases", commands)
         self.assertIn("primordial.core.quality.hardcode", commands)
 
