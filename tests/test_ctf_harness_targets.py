@@ -76,6 +76,90 @@ class CTFTargetManifestTests(unittest.TestCase):
 
         self.assertEqual(target.default_intent, "local_ctf_container")
 
+    def test_vulhub_cve_target_manifest_preserves_versions_and_scope(self) -> None:
+        manifest = {
+            "lab_id": "vulhub-cve-2021-41773",
+            "title": "Vulhub Apache CVE-2021-41773",
+            "platform": "docker",
+            "category": "web",
+            "difficulty": "intermediate",
+            "target_family": "vulhub_cve_labs",
+            "source": {
+                "repo_url": "https://github.com/vulhub/vulhub",
+                "path": "httpd/CVE-2021-41773",
+            },
+            "scope": {
+                "network": "lab_vulhub_apache_2021_41773",
+                "assets": ["http://127.0.0.1:3180"],
+            },
+            "provisioning": {
+                "mode": "docker",
+                "compose_project": "vulhub_apache_2021_41773",
+                "network": "lab_vulhub_apache_2021_41773",
+                "published_ports": [{"host": 3180, "container": 80}],
+            },
+            "vulnerability": {
+                "cve_id": "CVE-2021-41773",
+                "product": "Apache HTTP Server",
+                "affected_versions": ["2.4.49"],
+                "fixed_versions": ["2.4.50", "2.4.51"],
+                "observed_version_evidence_required": True,
+            },
+            "policy": {"default_intent": "recon_only"},
+        }
+
+        target = load_ctf_target_manifest(manifest)
+
+        self.assertEqual(target.target_family, "vulhub_cve_labs")
+        self.assertEqual(target.vulnerability.cve_id, "CVE-2021-41773")
+        self.assertEqual(target.vulnerability.product, "Apache HTTP Server")
+        self.assertEqual(target.vulnerability.affected_versions, ("2.4.49",))
+        self.assertEqual(target.vulnerability.fixed_versions, ("2.4.50", "2.4.51"))
+        self.assertTrue(target.vulnerability.observed_version_evidence_required)
+        self.assertEqual(target.scope.assets, ("http://127.0.0.1:3180",))
+
+    def test_vulhub_cve_target_manifest_requires_versions(self) -> None:
+        manifest = {
+            "lab_id": "vulhub-cve-missing-versions",
+            "title": "Vulhub Missing Versions",
+            "platform": "docker",
+            "category": "web",
+            "difficulty": "intermediate",
+            "target_family": "vulhub_cve_labs",
+            "scope": {"network": "lab_vulhub_missing_versions", "assets": ["http://127.0.0.1:3181"]},
+            "provisioning": {"mode": "docker", "network": "lab_vulhub_missing_versions"},
+            "vulnerability": {
+                "cve_id": "CVE-2021-41773",
+                "product": "Apache HTTP Server",
+                "fixed_versions": ["2.4.50"],
+            },
+            "policy": {"default_intent": "recon_only"},
+        }
+
+        with self.assertRaisesRegex(ValueError, "affected_versions"):
+            load_ctf_target_manifest(manifest)
+
+    def test_vulhub_cve_target_manifest_requires_cve_id(self) -> None:
+        manifest = {
+            "lab_id": "vulhub-cve-missing-id",
+            "title": "Vulhub Missing CVE",
+            "platform": "docker",
+            "category": "web",
+            "difficulty": "intermediate",
+            "target_family": "vulhub_cve_labs",
+            "scope": {"network": "lab_vulhub_missing_cve", "assets": ["http://127.0.0.1:3182"]},
+            "provisioning": {"mode": "docker", "network": "lab_vulhub_missing_cve"},
+            "vulnerability": {
+                "product": "Apache HTTP Server",
+                "affected_versions": ["2.4.49"],
+                "fixed_versions": ["2.4.50"],
+            },
+            "policy": {"default_intent": "recon_only"},
+        }
+
+        with self.assertRaisesRegex(ValueError, "cve_id"):
+            load_ctf_target_manifest(manifest)
+
     def test_ctf_target_manifest_rejects_hidden_expected_flags(self) -> None:
         manifest = {
             "lab_id": "unsafe-target",

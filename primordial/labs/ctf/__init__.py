@@ -23,6 +23,7 @@ from primordial.labs.ctf.targets import (
     EvidenceExpectations,
     ResetMetadata,
     TargetScope,
+    VulnerabilityMetadata,
     load_ctf_target_manifest,
     load_ctf_target_manifest_file,
 )
@@ -53,6 +54,7 @@ __all__ = [
     "SolveVerificationResult",
     "SolveVerifier",
     "TargetScope",
+    "VulnerabilityMetadata",
     "compute_scoring_summary",
     "load_ctf_target_manifest",
     "load_ctf_target_manifest_file",
