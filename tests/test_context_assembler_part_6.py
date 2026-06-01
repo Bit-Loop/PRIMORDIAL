@@ -104,6 +104,56 @@ class ContextAssemblerTestsPart6(ContextAssemblerTestsBase):
         self.assertEqual(omitted_refs["rag:legacy-rag-src-api-top-10"], "source_markdown")
         self.assertNotIn("Raw docs/RAG_SRC Markdown", packet["rendered"])
 
+    def test_context_assembler_omits_rag_chunk_from_quarantined_markdown_drop(self) -> None:
+        envelopes = [
+            ContextEnvelope.from_rag_chunk(
+                {
+                    "chunk_id": "methodology",
+                    "citation_id": "rag:methodology",
+                    "text": "Methodology advisory material may enter operational prompts.",
+                    "metadata": {
+                        "source_type": "methodology_doc",
+                        "corpus_type": "methodology_standards",
+                        "domain": "methodology_standards",
+                    },
+                },
+                purpose="planner",
+                sink="prompt",
+                target_id="target-a",
+                active_generation_id="generation:2",
+            ),
+            ContextEnvelope.from_rag_chunk(
+                {
+                    "chunk_id": "quarantined-rag-src-api-top-10",
+                    "citation_id": "rag:quarantined-rag-src-api-top-10",
+                    "text": "Quarantined Markdown must not enter operational prompts.",
+                    "metadata": {
+                        "source_type": "validated_external",
+                        "source_file": "runtime/quarantine/markdown/docs/RAG_SRC/0x11-t10.md",
+                        "corpus_type": "api_security_standards",
+                        "domain": "api_security",
+                    },
+                },
+                purpose="planner",
+                sink="prompt",
+                target_id="target-a",
+                active_generation_id="generation:2",
+            ),
+        ]
+
+        packet = ContextAssembler().assemble(
+            envelopes,
+            purpose="planner",
+            role="methodology_advisor",
+            target_id="target-a",
+            active_generation_id="generation:2",
+        )
+
+        self.assertEqual([item["ref"] for item in packet["sections"]["RAG_ADVISORY"]], ["rag:methodology"])
+        omitted_refs = {item["ref"]: item["reason"] for item in packet["omitted"]}
+        self.assertEqual(omitted_refs["rag:quarantined-rag-src-api-top-10"], "source_markdown")
+        self.assertNotIn("Quarantined Markdown must not enter", packet["rendered"])
+
     def test_context_assembler_omits_nested_operational_retrieval_disabled_rag(self) -> None:
         envelope = ContextEnvelope.from_rag_chunk(
             {

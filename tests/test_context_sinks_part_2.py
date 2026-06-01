@@ -239,4 +239,34 @@ class ContextSinkValidatorTestsPart2(ContextSinkValidatorTestsBase):
         self.assertEqual(result.rejected_refs, ["rag:generated-export-source-url"])
         self.assertTrue(any("generated_export" in error for error in result.errors))
 
+    def test_prompt_sink_rejects_rag_chunk_from_quarantined_markdown_path(self) -> None:
+        envelope = ContextEnvelope.from_rag_chunk(
+            {
+                "chunk_id": "quarantined-rag-src",
+                "citation_id": "rag:quarantined-rag-src",
+                "text": "Quarantined Markdown must not re-enter prompts.",
+                "metadata": {
+                    "source_type": "methodology_doc",
+                    "source_file": "runtime/quarantine/markdown/docs/RAG_SRC/0x11-t10.md",
+                    "corpus_type": "methodology_standards",
+                    "domain": "methodology_standards",
+                },
+            },
+            purpose="planner",
+            sink="prompt",
+            target_id="target-a",
+            active_generation_id="generation:2",
+        )
+
+        result = ContextSinkValidator().validate(
+            "prompt",
+            [envelope],
+            known_rag_refs={"rag:quarantined-rag-src"},
+        )
+
+        self.assertFalse(result.valid)
+        self.assertEqual(result.accepted_refs, [])
+        self.assertEqual(result.rejected_refs, ["rag:quarantined-rag-src"])
+        self.assertTrue(any("source_markdown" in error for error in result.errors))
+
 __all__ = ["ContextSinkValidatorTestsPart2"]

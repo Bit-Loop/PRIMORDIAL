@@ -245,4 +245,26 @@ class ContextSinkValidatorTestsPart22(ContextSinkValidatorTestsBase):
         self.assertEqual(result.rejected_refs, ["rag:nested-export-url-advisory"])
         self.assertTrue(any("generated export" in error for error in result.errors))
 
+    def test_rag_index_rejects_quarantined_markdown_source_url(self) -> None:
+        envelope = ContextEnvelope(
+            ref="rag:quarantined-markdown-url",
+            kind="rag",
+            authority="advisory",
+            source_type="methodology_doc",
+            purpose="cleanup",
+            sink="rag_index",
+            content="Quarantined Markdown must not become active operational RAG.",
+            citations=["rag:quarantined-markdown-url"],
+            metadata={
+                "source_url": "https://example.invalid/runtime/quarantine/markdown/docs/RAG_SRC/0x11-t10.md"
+            },
+        )
+
+        result = ContextSinkValidator().validate("rag_index", [envelope])
+
+        self.assertFalse(result.valid)
+        self.assertEqual(result.accepted_refs, [])
+        self.assertEqual(result.rejected_refs, ["rag:quarantined-markdown-url"])
+        self.assertTrue(any("source Markdown" in error for error in result.errors))
+
 __all__ = ["ContextSinkValidatorTestsPart22"]
