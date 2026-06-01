@@ -85,6 +85,14 @@ class PlannedTargetAction:
     metadata: dict[str, object] = field(default_factory=dict)
 
 
+@dataclass(slots=True, frozen=True)
+class RemoteReviewAdmissionContext:
+    current_evidence_ids: set[str]
+    available_primitives: set[str]
+    active_generation: str | None
+    surface: CredentialedAccessSurface
+
+
 class WorkflowOrchestrator:
     STALE_RUN_MAX_AGE_SECONDS = 3600
     REMOTE_REVIEW_KIND_BY_PRIMITIVE = {
@@ -416,11 +424,63 @@ class WorkflowOrchestrator:
         active_generation = self._target_active_generation(target)
         evidence = self._current_generation_evidence(target)
         tasks = self._current_generation_tasks(target)
-        waiting_or_active = [
-            task
-            for task in tasks
-            if task.status in {TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.WAITING, TaskStatus.NEEDS_APPROVAL}
-        ]
+        waiting_or_active = self._waiting_or_active_methodology_tasks(tasks)
+        admissions = self._methodology_candidate_actions_with_admissions(target, tasks)
+        candidate_actions, ai_admission, ai_materialized_actions, remote_review_admission, rag_hint_admission = admissions
+        failed_planner_escalation = self._latest_failed_planner_escalation(target)
+        blockers = self._methodology_state_blockers(
+            target,
+            evidence,
+            ai_admission,
+            remote_review_admission,
+            rag_hint_admission,
+            failed_planner_escalation,
+        )
+        verified_interests = self._verified_interest_count_current_generation(target)
+        phase, subphase, completion, transition_reason = self._methodology_transition_state(
+            target,
+            evidence,
+            candidate_actions,
+            waiting_or_active,
+            verified_interests,
+        )
+
+        next_unblock_action = blockers[0] if blockers else None
+        no_progress_reason = self._methodology_no_progress_reason(
+            candidate_actions,
+            waiting_or_active,
+            blockers,
+            transition_reason,
+        )
+
+        return TargetMethodologyState(
+            phase=phase,
+            subphase=subphase,
+            completion=completion,
+            transition_reason=transition_reason,
+            candidate_actions=self._methodology_candidate_action_payloads(candidate_actions),
+            blockers=blockers,
+            next_unblock_action=next_unblock_action,
+            no_progress_reason=no_progress_reason,
+            retry_budget=self._methodology_retry_budget(tasks),
+            metadata=self._methodology_state_metadata(
+                active_generation=active_generation,
+                evidence=evidence,
+                waiting_or_active=waiting_or_active,
+                verified_interests=verified_interests,
+                ai_admission=ai_admission,
+                ai_materialized_actions=ai_materialized_actions,
+                failed_planner_escalation=failed_planner_escalation,
+                remote_review_admission=remote_review_admission,
+                rag_hint_admission=rag_hint_admission,
+            ),
+        )
+
+    def _waiting_or_active_methodology_tasks(self, tasks: list[Task]) -> list[Task]:
+        waiting_statuses = {TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.WAITING, TaskStatus.NEEDS_APPROVAL}
+        return [task for task in tasks if task.status in waiting_statuses]
+
+    def _methodology_candidate_actions_with_admissions(self, target: Target, tasks: list[Task]):
         candidate_actions = self._methodology_candidate_actions(target)
         ai_admission = self._evaluate_ai_proposal_admission(tasks)
         ai_materialized_actions = self._ai_admitted_candidate_actions(
@@ -433,321 +493,418 @@ class WorkflowOrchestrator:
         candidate_actions.extend(remote_review_admission["actions"])
         rag_hint_admission = self._evaluate_rag_hint_admission(target)
         candidate_actions.extend(rag_hint_admission["actions"])
+        return candidate_actions, ai_admission, ai_materialized_actions, remote_review_admission, rag_hint_admission
+
+    def _methodology_state_blockers(
+        self,
+        target: Target,
+        evidence: list[object],
+        ai_admission: dict[str, object],
+        remote_review_admission: dict[str, object],
+        rag_hint_admission: dict[str, object],
+        failed_planner_escalation: dict[str, object] | None,
+    ) -> list[str]:
         blockers = self._methodology_blockers(target, evidence)
-        if ai_admission["rejected"]:
-            blockers.extend(
-                f"AI proposal rejected: {item['title']} ({item['reason']})"
-                for item in ai_admission["rejected"][:3]
-            )
-        if remote_review_admission["rejected"]:
-            blockers.extend(
-                f"Remote premium recommendation rejected: {item['title']} ({item['reason']})"
-                for item in remote_review_admission["rejected"][:3]
-            )
-        if rag_hint_admission["rejected"]:
-            blockers.extend(
-                f"RAG hint rejected: {item['title']} ({item['reason']})"
-                for item in rag_hint_admission["rejected"][:3]
-            )
-        failed_planner_escalation = self._latest_failed_planner_escalation(target)
+        self._extend_admission_rejection_blockers(blockers, "AI proposal", ai_admission)
+        self._extend_admission_rejection_blockers(blockers, "Remote premium recommendation", remote_review_admission)
+        self._extend_admission_rejection_blockers(blockers, "RAG hint", rag_hint_admission)
         if failed_planner_escalation is not None:
             blockers.append(f"Planner uncertainty escalation failed: {failed_planner_escalation['error']}")
-        verified_interests = self._verified_interest_count_current_generation(target)
-        retry_budget = {
-            task.kind.value: max(0, task.max_attempts - task.attempts)
-            for task in tasks
-            if task.status in {TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.WAITING, TaskStatus.NEEDS_APPROVAL, TaskStatus.FAILED}
-        }
+        return blockers
 
+    def _extend_admission_rejection_blockers(
+        self,
+        blockers: list[str],
+        label: str,
+        admission: dict[str, object],
+    ) -> None:
+        rejected = admission.get("rejected", [])
+        if isinstance(rejected, list):
+            blockers.extend(f"{label} rejected: {item['title']} ({item['reason']})" for item in rejected[:3])
+
+    def _methodology_transition_state(
+        self,
+        target: Target,
+        evidence: list[object],
+        candidate_actions: list[PlannedTargetAction],
+        waiting_or_active: list[Task],
+        verified_interests: int,
+    ) -> tuple[MethodologyPhase, str, str, str]:
         if candidate_actions:
             lead = candidate_actions[0]
-            phase = blueprint_for(lead.kind).phase
-            completion = "candidate_actions_ready"
-            transition_reason = lead.transition_reason
-            subphase = lead.subphase
-        elif waiting_or_active:
+            return blueprint_for(lead.kind).phase, lead.subphase, "candidate_actions_ready", lead.transition_reason
+        if waiting_or_active:
             lead_task = waiting_or_active[0]
-            phase = lead_task.phase
-            subphase = lead_task.kind.value
-            completion = "waiting_on_existing_tasks"
-            transition_reason = f"Existing {lead_task.status.value} task is already covering the next methodology step."
-        elif not evidence:
-            phase = blueprint_for(TaskKind.RECON_SCAN).phase
-            subphase = "bootstrap"
-            completion = "blocked"
-            transition_reason = "No current-generation target evidence is available yet."
-        elif self._memory_service().needs_compaction(target.id):
-            phase = blueprint_for(TaskKind.COMPACT_MEMORY).phase
-            subphase = TaskKind.COMPACT_MEMORY.value
-            completion = "memory_maintenance_due"
-            transition_reason = "Memory maintenance is due, but an equivalent task is already satisfied or waiting."
-        elif verified_interests >= 2:
-            phase = blueprint_for(TaskKind.CHAIN_CANDIDATES).phase
-            subphase = "chain_backlog"
-            completion = "steady_state"
-            transition_reason = "Verified exploit-chain inputs exist, but no new chain action is currently admissible."
-        elif verified_interests >= 1:
-            phase = blueprint_for(TaskKind.VERIFY_HYPOTHESIS).phase
-            subphase = "verification_backlog"
-            completion = "steady_state"
-            transition_reason = "A verified hypothesis exists, but no new bounded verification action is currently admissible."
-        else:
-            phase = blueprint_for(TaskKind.ANALYZE_EVIDENCE).phase
-            subphase = "analysis_backlog"
-            completion = "steady_state"
-            transition_reason = "No new methodology transition is currently admissible from the current evidence."
+            reason = f"Existing {lead_task.status.value} task is already covering the next methodology step."
+            return lead_task.phase, lead_task.kind.value, "waiting_on_existing_tasks", reason
+        if not evidence:
+            return blueprint_for(TaskKind.RECON_SCAN).phase, "bootstrap", "blocked", "No current-generation target evidence is available yet."
+        if self._memory_service().needs_compaction(target.id):
+            reason = "Memory maintenance is due, but an equivalent task is already satisfied or waiting."
+            return blueprint_for(TaskKind.COMPACT_MEMORY).phase, TaskKind.COMPACT_MEMORY.value, "memory_maintenance_due", reason
+        if verified_interests >= 2:
+            reason = "Verified exploit-chain inputs exist, but no new chain action is currently admissible."
+            return blueprint_for(TaskKind.CHAIN_CANDIDATES).phase, "chain_backlog", "steady_state", reason
+        if verified_interests >= 1:
+            reason = "A verified hypothesis exists, but no new bounded verification action is currently admissible."
+            return blueprint_for(TaskKind.VERIFY_HYPOTHESIS).phase, "verification_backlog", "steady_state", reason
+        reason = "No new methodology transition is currently admissible from the current evidence."
+        return blueprint_for(TaskKind.ANALYZE_EVIDENCE).phase, "analysis_backlog", "steady_state", reason
 
-        next_unblock_action = blockers[0] if blockers else None
-        no_progress_reason = None
-        if not candidate_actions and not waiting_or_active:
-            no_progress_reason = blockers[0] if blockers else transition_reason
+    def _methodology_no_progress_reason(
+        self,
+        candidate_actions: list[PlannedTargetAction],
+        waiting_or_active: list[Task],
+        blockers: list[str],
+        transition_reason: str,
+    ) -> str | None:
+        if candidate_actions or waiting_or_active:
+            return None
+        return blockers[0] if blockers else transition_reason
 
-        return TargetMethodologyState(
-            phase=phase,
-            subphase=subphase,
-            completion=completion,
-            transition_reason=transition_reason,
-            candidate_actions=[
-                {
-                    "kind": item.kind.value,
-                    "title": item.title,
-                    "summary": item.summary,
-                    "confidence": item.confidence,
-                    "phase": item.phase_label,
-                    "subphase": item.subphase,
-                    "transition_reason": item.transition_reason,
-                    "prerequisite": item.prerequisite,
-                    "metadata": dict(item.metadata),
-                }
-                for item in candidate_actions
-            ],
-            blockers=blockers,
-            next_unblock_action=next_unblock_action,
-            no_progress_reason=no_progress_reason,
-            retry_budget=retry_budget,
-            metadata={
-                "active_ip_generation": active_generation,
-                "current_generation_evidence_count": len(evidence),
-                "waiting_task_count": len(waiting_or_active),
-                "verified_interest_count": verified_interests,
-                "ai_proposal_admission": ai_admission,
-                "ai_materialized_actions": [
-                    {
-                        "kind": item.kind.value,
-                        "title": item.title,
-                        "primitive_hint": item.metadata.get("primitive_hint"),
-                        "source_ai_task_id": item.metadata.get("source_ai_task_id"),
-                    }
-                    for item in ai_materialized_actions
-                ],
-                "planner_escalation_status": {
-                    "latest_failed": failed_planner_escalation,
-                },
-                "remote_review_admission": {
-                    "accepted": remote_review_admission["accepted"],
-                    "rejected": remote_review_admission["rejected"],
-                },
-                "rag_hint_admission": {
-                    "accepted": rag_hint_admission["accepted"],
-                    "rejected": rag_hint_admission["rejected"],
-                },
+    def _methodology_retry_budget(self, tasks: list[Task]) -> dict[str, int]:
+        retry_statuses = {
+            TaskStatus.PENDING,
+            TaskStatus.RUNNING,
+            TaskStatus.WAITING,
+            TaskStatus.NEEDS_APPROVAL,
+            TaskStatus.FAILED,
+        }
+        return {
+            task.kind.value: max(0, task.max_attempts - task.attempts)
+            for task in tasks
+            if task.status in retry_statuses
+        }
+
+    def _methodology_candidate_action_payloads(self, candidate_actions: list[PlannedTargetAction]) -> list[dict[str, object]]:
+        return [
+            {
+                "kind": item.kind.value,
+                "title": item.title,
+                "summary": item.summary,
+                "confidence": item.confidence,
+                "phase": item.phase_label,
+                "subphase": item.subphase,
+                "transition_reason": item.transition_reason,
+                "prerequisite": item.prerequisite,
+                "metadata": dict(item.metadata),
+            }
+            for item in candidate_actions
+        ]
+
+    def _methodology_state_metadata(
+        self,
+        *,
+        active_generation: str | None,
+        evidence: list[object],
+        waiting_or_active: list[Task],
+        verified_interests: int,
+        ai_admission: dict[str, object],
+        ai_materialized_actions: list[PlannedTargetAction],
+        failed_planner_escalation: dict[str, object] | None,
+        remote_review_admission: dict[str, object],
+        rag_hint_admission: dict[str, object],
+    ) -> dict[str, object]:
+        return {
+            "active_ip_generation": active_generation,
+            "current_generation_evidence_count": len(evidence),
+            "waiting_task_count": len(waiting_or_active),
+            "verified_interest_count": verified_interests,
+            "ai_proposal_admission": ai_admission,
+            "ai_materialized_actions": self._ai_materialized_action_payloads(ai_materialized_actions),
+            "planner_escalation_status": {"latest_failed": failed_planner_escalation},
+            "remote_review_admission": {
+                "accepted": remote_review_admission["accepted"],
+                "rejected": remote_review_admission["rejected"],
             },
-        )
+            "rag_hint_admission": {
+                "accepted": rag_hint_admission["accepted"],
+                "rejected": rag_hint_admission["rejected"],
+            },
+        }
+
+    def _ai_materialized_action_payloads(self, actions: list[PlannedTargetAction]) -> list[dict[str, object]]:
+        return [
+            {
+                "kind": item.kind.value,
+                "title": item.title,
+                "primitive_hint": item.metadata.get("primitive_hint"),
+                "source_ai_task_id": item.metadata.get("source_ai_task_id"),
+            }
+            for item in actions
+        ]
 
     def _methodology_candidate_actions(self, target: Target) -> list[PlannedTargetAction]:
-        actions: list[PlannedTargetAction] = []
-
-        def add(
-            kind: TaskKind,
-            title: str,
-            summary: str,
-            *,
-            confidence: float,
-            subphase: str,
-            transition_reason: str,
-            prerequisite: str | None = None,
-            metadata: dict[str, object] | None = None,
-        ) -> None:
-            active_generation = self._target_active_generation(target)
-            if kind != TaskKind.ANALYZE_EVIDENCE and self._task_exists_for_current_generation(target.id, kind, active_generation):
-                return
-            actions.append(
-                PlannedTargetAction(
-                    kind=kind,
-                    title=title,
-                    summary=summary,
-                    confidence=confidence,
-                    phase_label=blueprint_for(kind).phase.value,
-                    subphase=subphase,
-                    transition_reason=transition_reason,
-                    prerequisite=prerequisite,
-                    metadata=metadata or {},
-                )
-            )
-
         if not self._target_has_current_generation_evidence(target):
-            add(
-                TaskKind.RECON_SCAN,
-                "Run recon sweep",
-                f"Collect initial recon evidence for {target.handle}.",
-                confidence=0.95,
-                subphase="bootstrap",
-                transition_reason="No current-generation evidence exists for the active target generation.",
-            )
-            if self._should_plan_service_discovery(target):
-                add(
-                    TaskKind.SERVICE_DISCOVERY,
-                    "Run bounded service discovery",
-                    f"Collect TCP service inventory evidence for {target.handle}.",
-                    confidence=0.93,
-                    subphase="service_inventory",
-                    transition_reason="A fresh active-IP generation needs service inventory before deeper branching.",
-                )
-            return actions
+            return self._bootstrap_methodology_candidate_actions(target)
+        return [
+            *self._inventory_methodology_candidate_actions(target),
+            *self._analysis_and_research_candidate_actions(target),
+            *self._attack_and_access_candidate_actions(target),
+            *self._verification_and_maintenance_candidate_actions(target),
+        ]
 
+    def _methodology_action(
+        self,
+        target: Target,
+        kind: TaskKind,
+        title: str,
+        summary: str,
+        *,
+        confidence: float,
+        subphase: str,
+        transition_reason: str,
+        prerequisite: str | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> PlannedTargetAction | None:
+        active_generation = self._target_active_generation(target)
+        if kind != TaskKind.ANALYZE_EVIDENCE and self._task_exists_for_current_generation(
+            target.id, kind, active_generation
+        ):
+            return None
+        return PlannedTargetAction(
+            kind=kind,
+            title=title,
+            summary=summary,
+            confidence=confidence,
+            phase_label=blueprint_for(kind).phase.value,
+            subphase=subphase,
+            transition_reason=transition_reason,
+            prerequisite=prerequisite,
+            metadata=metadata or {},
+        )
+
+    def _methodology_actions(self, target: Target, specs: list[dict[str, object]]) -> list[PlannedTargetAction]:
+        actions: list[PlannedTargetAction] = []
+        for spec in specs:
+            action = self._methodology_action(target, **spec)
+            if action is not None:
+                actions.append(action)
+        return actions
+
+    def _bootstrap_methodology_candidate_actions(self, target: Target) -> list[PlannedTargetAction]:
+        specs: list[dict[str, object]] = [
+            {
+                "kind": TaskKind.RECON_SCAN,
+                "title": "Run recon sweep",
+                "summary": f"Collect initial recon evidence for {target.handle}.",
+                "confidence": 0.95,
+                "subphase": "bootstrap",
+                "transition_reason": "No current-generation evidence exists for the active target generation.",
+            }
+        ]
         if self._should_plan_service_discovery(target):
-            add(
-                TaskKind.SERVICE_DISCOVERY,
-                "Run bounded service discovery",
-                f"Collect TCP service inventory evidence for {target.handle}.",
-                confidence=0.93,
-                subphase="service_inventory",
-                transition_reason="Fresh service inventory is missing for the active target generation.",
+            specs.append(
+                {
+                    "kind": TaskKind.SERVICE_DISCOVERY,
+                    "title": "Run bounded service discovery",
+                    "summary": f"Collect TCP service inventory evidence for {target.handle}.",
+                    "confidence": 0.93,
+                    "subphase": "service_inventory",
+                    "transition_reason": "A fresh active-IP generation needs service inventory before deeper branching.",
+                }
             )
-        if self._should_plan_dns_enumeration(target):
-            add(
-                TaskKind.DNS_ENUMERATION,
-                "Run bounded DNS enumeration",
-                f"Collect DNS records and zone-transfer evidence for {target.handle}.",
-                confidence=0.88,
-                subphase="dns_inventory",
-                transition_reason="Port and host evidence indicates DNS is present and unresolved for the current generation.",
-                prerequisite="current-generation service discovery",
+        return self._methodology_actions(target, specs)
+
+    def _inventory_methodology_candidate_actions(self, target: Target) -> list[PlannedTargetAction]:
+        specs: list[dict[str, object]] = []
+        if self._should_plan_service_discovery(target):
+            specs.append(
+                {
+                    "kind": TaskKind.SERVICE_DISCOVERY,
+                    "title": "Run bounded service discovery",
+                    "summary": f"Collect TCP service inventory evidence for {target.handle}.",
+                    "confidence": 0.93,
+                    "subphase": "service_inventory",
+                    "transition_reason": "Fresh service inventory is missing for the active target generation.",
+                }
             )
-        if self._should_plan_web_content_discovery(target):
-            add(
-                TaskKind.WEB_CONTENT_DISCOVERY,
-                "Run bounded web content discovery",
-                f"Discover HTTP paths and virtual directories for {target.handle}.",
-                confidence=0.87,
-                subphase="web_surface",
-                transition_reason="HTTP evidence exists without bounded content-discovery coverage for the current generation.",
-                prerequisite="current-generation HTTP probe evidence",
-            )
-        if self._should_plan_ad_enumeration(target):
-            add(
-                TaskKind.AD_ENUMERATION,
-                "Run bounded AD enumeration",
-                f"Collect anonymous SMB/LDAP/RPC inventory for {target.handle}.",
-                confidence=0.89,
-                subphase="ad_inventory",
-                transition_reason="Current-generation service evidence exposes AD-adjacent ports without corresponding AD inventory.",
-                prerequisite="current-generation service discovery",
-            )
-        if self._should_plan_kerberos_user_discovery(target):
-            add(
-                TaskKind.KERBEROS_USER_DISCOVERY,
-                "Run Kerberos/LDAP user discovery",
-                f"Discover candidate AD/Kerberos principals for {target.handle}.",
-                confidence=0.83,
-                subphase="principal_discovery",
-                transition_reason="AD evidence exists, but current-generation principal discovery has not run yet.",
-                prerequisite="current-generation AD enumeration",
-            )
+        specs.extend(self._conditional_inventory_action_specs(target))
+        return self._methodology_actions(target, specs)
+
+    def _conditional_inventory_action_specs(self, target: Target) -> list[dict[str, object]]:
+        checks = [
+            (
+                self._should_plan_dns_enumeration,
+                {
+                    "kind": TaskKind.DNS_ENUMERATION,
+                    "title": "Run bounded DNS enumeration",
+                    "summary": f"Collect DNS records and zone-transfer evidence for {target.handle}.",
+                    "confidence": 0.88,
+                    "subphase": "dns_inventory",
+                    "transition_reason": "Port and host evidence indicates DNS is present and unresolved for the current generation.",
+                    "prerequisite": "current-generation service discovery",
+                },
+            ),
+            (
+                self._should_plan_web_content_discovery,
+                {
+                    "kind": TaskKind.WEB_CONTENT_DISCOVERY,
+                    "title": "Run bounded web content discovery",
+                    "summary": f"Discover HTTP paths and virtual directories for {target.handle}.",
+                    "confidence": 0.87,
+                    "subphase": "web_surface",
+                    "transition_reason": "HTTP evidence exists without bounded content-discovery coverage for the current generation.",
+                    "prerequisite": "current-generation HTTP probe evidence",
+                },
+            ),
+            (
+                self._should_plan_ad_enumeration,
+                {
+                    "kind": TaskKind.AD_ENUMERATION,
+                    "title": "Run bounded AD enumeration",
+                    "summary": f"Collect anonymous SMB/LDAP/RPC inventory for {target.handle}.",
+                    "confidence": 0.89,
+                    "subphase": "ad_inventory",
+                    "transition_reason": "Current-generation service evidence exposes AD-adjacent ports without corresponding AD inventory.",
+                    "prerequisite": "current-generation service discovery",
+                },
+            ),
+            (
+                self._should_plan_kerberos_user_discovery,
+                {
+                    "kind": TaskKind.KERBEROS_USER_DISCOVERY,
+                    "title": "Run Kerberos/LDAP user discovery",
+                    "summary": f"Discover candidate AD/Kerberos principals for {target.handle}.",
+                    "confidence": 0.83,
+                    "subphase": "principal_discovery",
+                    "transition_reason": "AD evidence exists, but current-generation principal discovery has not run yet.",
+                    "prerequisite": "current-generation AD enumeration",
+                },
+            ),
+        ]
+        return [spec for predicate, spec in checks if predicate(target)]
+
+    def _analysis_and_research_candidate_actions(self, target: Target) -> list[PlannedTargetAction]:
+        specs: list[dict[str, object]] = []
         if self._analysis_is_stale(target):
-            add(
-                TaskKind.ANALYZE_EVIDENCE,
-                "Analyze accumulated evidence",
-                f"Cluster recon evidence and generate bounded hypotheses for {target.handle}.",
-                confidence=0.9,
-                subphase="evidence_review",
-                transition_reason="The current evidence signature has not been analyzed yet.",
-                prerequisite="current-generation recon evidence",
+            specs.append(
+                {
+                    "kind": TaskKind.ANALYZE_EVIDENCE,
+                    "title": "Analyze accumulated evidence",
+                    "summary": f"Cluster recon evidence and generate bounded hypotheses for {target.handle}.",
+                    "confidence": 0.9,
+                    "subphase": "evidence_review",
+                    "transition_reason": "The current evidence signature has not been analyzed yet.",
+                    "prerequisite": "current-generation recon evidence",
+                }
             )
         if self._should_plan_exploit_research(target):
-            add(
-                TaskKind.EXPLOIT_RESEARCH,
-                "Research relevant public PoCs",
-                f"Search local exploit references for evidence-backed services on {target.handle}.",
-                confidence=0.81,
-                subphase="exploit_research",
-                transition_reason="Current-generation recon evidence supports public exploit research triage.",
-                prerequisite="current-generation service or AD evidence",
+            specs.append(
+                {
+                    "kind": TaskKind.EXPLOIT_RESEARCH,
+                    "title": "Research relevant public PoCs",
+                    "summary": f"Search local exploit references for evidence-backed services on {target.handle}.",
+                    "confidence": 0.81,
+                    "subphase": "exploit_research",
+                    "transition_reason": "Current-generation recon evidence supports public exploit research triage.",
+                    "prerequisite": "current-generation service or AD evidence",
+                }
             )
         if self._should_plan_poc_applicability_validation(target):
-            add(
-                TaskKind.POC_APPLICABILITY_VALIDATION,
-                "Validate public PoC applicability",
-                (
-                    "Classify retained public exploit references against exact service/version evidence, "
-                    f"foothold prerequisites, and policy gates for {target.handle}."
-                ),
-                confidence=0.79,
-                subphase="poc_gating",
-                transition_reason="Retained public PoC research exists, but deterministic applicability gating has not run.",
-                prerequisite="current-generation exploit research",
-            )
+            specs.append(self._poc_applicability_action_spec(target))
+        return self._methodology_actions(target, specs)
+
+    def _poc_applicability_action_spec(self, target: Target) -> dict[str, object]:
+        return {
+            "kind": TaskKind.POC_APPLICABILITY_VALIDATION,
+            "title": "Validate public PoC applicability",
+            "summary": (
+                "Classify retained public exploit references against exact service/version evidence, "
+                f"foothold prerequisites, and policy gates for {target.handle}."
+            ),
+            "confidence": 0.79,
+            "subphase": "poc_gating",
+            "transition_reason": "Retained public PoC research exists, but deterministic applicability gating has not run.",
+            "prerequisite": "current-generation exploit research",
+        }
+
+    def _attack_and_access_candidate_actions(self, target: Target) -> list[PlannedTargetAction]:
+        specs: list[dict[str, object]] = []
         kerberos_checks = self._planned_kerberos_check_types(target)
         if kerberos_checks:
-            add(
-                TaskKind.KERBEROS_ATTACK_CHECK,
-                "Run Kerberos attack-path checks",
-                f"Check allowed Kerberos attack-path applicability for discovered principals on {target.handle}.",
-                confidence=0.76,
-                subphase="kerberos_attack_path",
-                transition_reason="Current-generation principal evidence supports bounded Kerberos attack-path checks.",
-                prerequisite="current-generation principal discovery",
-                metadata={"kerberos_checks": kerberos_checks},
+            specs.append(
+                {
+                    "kind": TaskKind.KERBEROS_ATTACK_CHECK,
+                    "title": "Run Kerberos attack-path checks",
+                    "summary": f"Check allowed Kerberos attack-path applicability for discovered principals on {target.handle}.",
+                    "confidence": 0.76,
+                    "subphase": "kerberos_attack_path",
+                    "transition_reason": "Current-generation principal evidence supports bounded Kerberos attack-path checks.",
+                    "prerequisite": "current-generation principal discovery",
+                    "metadata": {"kerberos_checks": kerberos_checks},
+                }
             )
         credential_surface = self._current_credentialed_access_surface(target)
         if self._should_plan_credentialed_access_check(target, credential_surface):
-            add(
-                TaskKind.CREDENTIALED_ACCESS_CHECK,
-                "Verify credentialed Windows SMB/WinRM access",
-                f"Use configured known credentials to verify evidence-supported Windows access for {target.handle}.",
-                confidence=0.75,
-                subphase="credentialed_verification",
-                transition_reason="Operator-configured known credentials are present and current evidence supports Windows SMB/WinRM or AD/DC access.",
-                prerequisite="configured known credentials and current-generation Windows SMB/WinRM or AD/DC evidence",
-                metadata={
-                    "credential_namespace": "known",
-                    "credentialed_access_surface": credential_surface.as_payload(),
-                    "protocols": list(credential_surface.protocols),
-                    "os_family": credential_surface.os_family,
-                    "evidence_refs": list(credential_surface.evidence_refs),
-                },
-            )
+            specs.append(self._credentialed_access_action_spec(target, credential_surface))
+        return self._methodology_actions(target, specs)
+
+    def _credentialed_access_action_spec(
+        self,
+        target: Target,
+        credential_surface: CredentialedAccessSurface,
+    ) -> dict[str, object]:
+        return {
+            "kind": TaskKind.CREDENTIALED_ACCESS_CHECK,
+            "title": "Verify credentialed Windows SMB/WinRM access",
+            "summary": f"Use configured known credentials to verify evidence-supported Windows access for {target.handle}.",
+            "confidence": 0.75,
+            "subphase": "credentialed_verification",
+            "transition_reason": (
+                "Operator-configured known credentials are present and current evidence supports Windows SMB/WinRM "
+                "or AD/DC access."
+            ),
+            "prerequisite": "configured known credentials and current-generation Windows SMB/WinRM or AD/DC evidence",
+            "metadata": {
+                "credential_namespace": "known",
+                "credentialed_access_surface": credential_surface.as_payload(),
+                "protocols": list(credential_surface.protocols),
+                "os_family": credential_surface.os_family,
+                "evidence_refs": list(credential_surface.evidence_refs),
+            },
+        }
+
+    def _verification_and_maintenance_candidate_actions(self, target: Target) -> list[PlannedTargetAction]:
+        specs: list[dict[str, object]] = []
         verified_interests = self._verified_interest_count_current_generation(target)
         if verified_interests >= 1:
-            add(
-                TaskKind.VERIFY_HYPOTHESIS,
-                "Verify prioritized hypothesis",
-                f"Run bounded verification for a high-value hypothesis on {target.handle}.",
-                confidence=0.71,
-                subphase="bounded_verification",
-                transition_reason="At least one current-generation verified interest exists and deserves bounded verification planning.",
-                prerequisite="current-generation verified interest",
+            specs.append(
+                {
+                    "kind": TaskKind.VERIFY_HYPOTHESIS,
+                    "title": "Verify prioritized hypothesis",
+                    "summary": f"Run bounded verification for a high-value hypothesis on {target.handle}.",
+                    "confidence": 0.71,
+                    "subphase": "bounded_verification",
+                    "transition_reason": "At least one current-generation verified interest exists and deserves bounded verification planning.",
+                    "prerequisite": "current-generation verified interest",
+                }
             )
         if verified_interests >= 2:
-            add(
-                TaskKind.CHAIN_CANDIDATES,
-                "Review exploit-chain candidates",
-                f"Review related verified interests for possible exploit chains on {target.handle}.",
-                confidence=0.67,
-                subphase="chain_review",
-                transition_reason="Multiple current-generation verified interests may support exploit-chain review.",
-                prerequisite="two or more current-generation verified interests",
+            specs.append(
+                {
+                    "kind": TaskKind.CHAIN_CANDIDATES,
+                    "title": "Review exploit-chain candidates",
+                    "summary": f"Review related verified interests for possible exploit chains on {target.handle}.",
+                    "confidence": 0.67,
+                    "subphase": "chain_review",
+                    "transition_reason": "Multiple current-generation verified interests may support exploit-chain review.",
+                    "prerequisite": "two or more current-generation verified interests",
+                }
             )
         if self._memory_service().needs_compaction(target.id):
-            add(
-                TaskKind.COMPACT_MEMORY,
-                "Compact notes and memory",
-                f"Promote durable memory and compact noisy context for {target.handle}.",
-                confidence=0.64,
-                subphase="memory_maintenance",
-                transition_reason="Memory service indicates the current target context needs compaction.",
-            )
-        return actions
+            specs.append(self._memory_compaction_action_spec(target))
+        return self._methodology_actions(target, specs)
+
+    def _memory_compaction_action_spec(self, target: Target) -> dict[str, object]:
+        return {
+            "kind": TaskKind.COMPACT_MEMORY,
+            "title": "Compact notes and memory",
+            "summary": f"Promote durable memory and compact noisy context for {target.handle}.",
+            "confidence": 0.64,
+            "subphase": "memory_maintenance",
+            "transition_reason": "Memory service indicates the current target context needs compaction.",
+        }
 
     def _methodology_blockers(self, target: Target, evidence) -> list[str]:
         blockers: list[str] = []
@@ -1060,8 +1217,59 @@ class WorkflowOrchestrator:
         if self.store.has_active_task(target.id, TaskKind.REVIEW_PREMIUM_ESCALATION):
             return None
         evidence_ids = [item.id for item in evidence]
-        reason_payload = uncertainty_reasons or [{"code": reason_code, "summary": question}]
-        key = json.dumps(
+        reason_payload = self._planner_uncertainty_reason_payload(reason_code, question, uncertainty_reasons)
+        key = self._planner_uncertainty_key(reason_code, question, evidence_ids, reason_payload)
+        if target.metadata.get("last_planner_uncertainty_escalation_key") == key:
+            return None
+
+        task = self._build_task(
+            target_id=target.id,
+            kind=TaskKind.REVIEW_PREMIUM_ESCALATION,
+            title=self._planner_uncertainty_title(),
+            summary="Resolve an evidence-linked planner uncertainty without bypassing policy.",
+            session_id=session_id,
+        )
+        task.evidence_refs = evidence_ids
+        self._attach_planner_uncertainty_generation(task, target)
+        self._attach_planner_uncertainty_package(
+            task,
+            target,
+            evidence=evidence,
+            evidence_ids=evidence_ids,
+            question=question,
+            blockers=blockers or [],
+            rejected_proposals=rejected_proposals if isinstance(rejected_proposals, list) else [],
+            invalid_existing_tasks=invalid_existing_tasks or [],
+            reason_code=reason_code,
+            uncertainty_reasons=reason_payload,
+        )
+        task.metadata["planner_uncertainty"] = {
+            "reason_code": reason_code,
+            "reasons": reason_payload,
+            "question": question,
+        }
+        self._mark_agent_chat_wrapper_review(task)
+        if not self.autonomy.allow_remote_premium and not task.metadata.get("remote_premium_local_wrapper"):
+            task.metadata["remote_premium_policy_approval_required"] = True
+        self._persist_planner_uncertainty_escalation(target, task, key, report)
+        return self.store.get_task(task.id)
+
+    def _planner_uncertainty_reason_payload(
+        self,
+        reason_code: str,
+        question: str,
+        uncertainty_reasons: list[dict[str, object]] | None,
+    ) -> list[dict[str, object]]:
+        return uncertainty_reasons or [{"code": reason_code, "summary": question}]
+
+    def _planner_uncertainty_key(
+        self,
+        reason_code: str,
+        question: str,
+        evidence_ids: list[str],
+        reason_payload: list[dict[str, object]],
+    ) -> str:
+        return json.dumps(
             {
                 "reason_code": reason_code,
                 "question": question,
@@ -1070,41 +1278,65 @@ class WorkflowOrchestrator:
             },
             sort_keys=True,
         )
-        if target.metadata.get("last_planner_uncertainty_escalation_key") == key:
-            return None
 
-        task = self._build_task(
-            target_id=target.id,
-            kind=TaskKind.REVIEW_PREMIUM_ESCALATION,
-            title=(
-                "Escalate uncertain planner state to Claude/GPT"
-                if not self.autonomy.allow_remote_premium
-                else "Premium planner review requested"
-            ),
-            summary="Resolve an evidence-linked planner uncertainty without bypassing policy.",
-            session_id=session_id,
-        )
-        task.evidence_refs = evidence_ids
+    def _planner_uncertainty_title(self) -> str:
+        if self.autonomy.allow_remote_premium:
+            return "Premium planner review requested"
+        return "Escalate uncertain planner state to Claude/GPT"
+
+    def _attach_planner_uncertainty_generation(self, task: Task, target: Target) -> None:
         active_generation = self._target_active_generation(target)
         if active_generation is not None:
             task.metadata["active_ip_generation"] = active_generation
             task.metadata["active_ip"] = target.metadata.get("active_ip")
+
+    def _attach_planner_uncertainty_package(
+        self,
+        task: Task,
+        target: Target,
+        *,
+        evidence: list[object],
+        evidence_ids: list[str],
+        question: str,
+        blockers: list[str],
+        rejected_proposals: list[object],
+        invalid_existing_tasks: list[dict[str, object]],
+        reason_code: str,
+        uncertainty_reasons: list[dict[str, object]],
+    ) -> None:
         surface = classify_credentialed_access_surface(evidence)
         packet = self._planner_review_packet(
             target,
             evidence=evidence,
             surface=surface,
             question=question,
-            blockers=blockers or [],
-            rejected_proposals=rejected_proposals if isinstance(rejected_proposals, list) else [],
-            invalid_existing_tasks=invalid_existing_tasks or [],
-            uncertainty_reasons=reason_payload,
+            blockers=blockers,
+            rejected_proposals=rejected_proposals,
+            invalid_existing_tasks=invalid_existing_tasks,
+            uncertainty_reasons=uncertainty_reasons,
         )
-        package = EscalationPackage(
+        package = self._planner_uncertainty_package(
+            task, target, evidence, evidence_ids, packet, question, reason_code, uncertainty_reasons
+        )
+        task.metadata["escalation_package"] = package.as_payload()
+
+    def _planner_uncertainty_package(
+        self,
+        task: Task,
+        target: Target,
+        evidence: list[object],
+        evidence_ids: list[str],
+        packet: dict[str, object],
+        question: str,
+        reason_code: str,
+        reason_payload: list[dict[str, object]],
+    ) -> EscalationPackage:
+        reason = "; ".join(str(item.get("summary") or item.get("code") or reason_code) for item in reason_payload[:4])
+        return EscalationPackage(
             task_id=task.id,
             target_id=target.id,
             mode="planner_uncertainty_review",
-            reason="; ".join(str(item.get("summary") or item.get("code") or reason_code) for item in reason_payload[:4]),
+            reason=reason,
             expected_value="Recover a valid next action while preserving deterministic task admission.",
             cost_tier="remote_premium",
             question=question,
@@ -1118,21 +1350,19 @@ class WorkflowOrchestrator:
                 "authority_limits": packet["authority_limits"],
             },
         )
-        task.metadata["escalation_package"] = package.as_payload()
-        task.metadata["planner_uncertainty"] = {
-            "reason_code": reason_code,
-            "reasons": reason_payload,
-            "question": question,
-        }
-        self._mark_agent_chat_wrapper_review(task)
-        if not self.autonomy.allow_remote_premium and not task.metadata.get("remote_premium_local_wrapper"):
-            task.metadata["remote_premium_policy_approval_required"] = True
+
+    def _persist_planner_uncertainty_escalation(
+        self,
+        target: Target,
+        task: Task,
+        key: str,
+        report: OrchestrationReport | None,
+    ) -> None:
         target.metadata["last_planner_uncertainty_escalation_key"] = key
         target.updated_at = utc_now()
         self.store.insert_target(target)
         escalation_report = report or OrchestrationReport()
         self._register_task(task, target, escalation_report)
-        return self.store.get_task(task.id)
 
     def _planner_review_packet(
         self,
@@ -1580,257 +1810,366 @@ class WorkflowOrchestrator:
 
     def _evaluate_remote_review_admission(self, target: Target) -> dict[str, object]:
         evidence = self._current_generation_evidence(target, limit=200)
-        current_evidence_ids = {item.id for item in evidence}
-        review_records = [
-            item
-            for item in evidence
-            if str(item.metadata.get("kind") or "").lower()
-            in {"premium_review_result", "planner_remote_review", "remote_premium_review"}
-        ]
+        review_records = self._remote_review_records(evidence)
         if not review_records:
             return {"actions": [], "accepted": [], "rejected": []}
+        context = self._remote_review_admission_context(target, evidence)
+        results = [self._remote_review_record_admission(target, record, context) for record in review_records]
+        return self._merge_admission_results(results)
+
+    def _remote_review_records(self, evidence: list[object]) -> list[object]:
+        review_kinds = {"premium_review_result", "planner_remote_review", "remote_premium_review"}
+        return [item for item in evidence if str(item.metadata.get("kind") or "").lower() in review_kinds]
+
+    def _remote_review_admission_context(
+        self,
+        target: Target,
+        evidence: list[object],
+    ) -> RemoteReviewAdmissionContext:
         primitives = self.store.list_primitives()
-        available = {
+        available_primitives = {
             value.lower()
             for primitive in primitives
             for value in [primitive.name, *primitive.capability_tags]
         }
-        actions: list[PlannedTargetAction] = []
-        accepted: list[dict[str, object]] = []
-        rejected: list[dict[str, object]] = []
-        active_generation = self._target_active_generation(target)
-        surface = self._current_credentialed_access_surface(target)
-        for record in review_records:
-            review = self._remote_review_payload(record.metadata)
-            missing_fields = [
-                field
-                for field in (
-                    "recommended_next_actions",
-                    "missing_evidence",
-                    "invalid_existing_tasks",
-                    "primitive_gaps",
-                    "confidence",
-                    "rationale_with_evidence_refs",
-                )
-                if field not in review
-            ]
-            if missing_fields:
-                rejected.append(
-                    {
-                        "review_evidence_id": record.id,
-                        "title": record.title,
-                        "reason": "remote review response missing required fields: " + ", ".join(missing_fields),
-                    }
-                )
+        return RemoteReviewAdmissionContext(
+            current_evidence_ids={item.id for item in evidence},
+            available_primitives=available_primitives,
+            active_generation=self._target_active_generation(target),
+            surface=self._current_credentialed_access_surface(target),
+        )
+
+    def _remote_review_record_admission(
+        self,
+        target: Target,
+        record: object,
+        context: RemoteReviewAdmissionContext,
+    ) -> dict[str, list[object]]:
+        review = self._remote_review_payload(record.metadata)
+        missing_fields = self._remote_review_missing_required_fields(review)
+        if missing_fields:
+            reason = "remote review response missing required fields: " + ", ".join(missing_fields)
+            return self._admission_result(rejected=[self._remote_review_rejection(record, record.title, reason)])
+        recommendations = review.get("recommended_next_actions")
+        if not isinstance(recommendations, list):
+            return self._admission_result(
+                rejected=[self._remote_review_rejection(record, record.title, "recommended_next_actions is not a list")]
+            )
+        rationale_refs = self._review_rationale_evidence_refs(review.get("rationale_with_evidence_refs"))
+        return self._remote_review_recommendations_admission(
+            target, record, review, recommendations, rationale_refs, context
+        )
+
+    def _remote_review_missing_required_fields(self, review: dict[str, object]) -> list[str]:
+        required_fields = (
+            "recommended_next_actions",
+            "missing_evidence",
+            "invalid_existing_tasks",
+            "primitive_gaps",
+            "confidence",
+            "rationale_with_evidence_refs",
+        )
+        return [field for field in required_fields if field not in review]
+
+    def _remote_review_recommendations_admission(
+        self,
+        target: Target,
+        record: object,
+        review: dict[str, object],
+        recommendations: list[object],
+        rationale_refs: list[str],
+        context: RemoteReviewAdmissionContext,
+    ) -> dict[str, list[object]]:
+        result = self._admission_result()
+        for recommendation in recommendations[:8]:
+            if not isinstance(recommendation, dict):
+                rejection = self._remote_review_rejection(record, str(recommendation)[:80], "recommended action is not an object")
+                result["rejected"].append(rejection)
                 continue
-            recommendations = review.get("recommended_next_actions")
-            if not isinstance(recommendations, list):
-                rejected.append(
-                    {
-                        "review_evidence_id": record.id,
-                        "title": record.title,
-                        "reason": "recommended_next_actions is not a list",
-                    }
-                )
-                continue
-            rationale_refs = self._review_rationale_evidence_refs(review.get("rationale_with_evidence_refs"))
-            for recommendation in recommendations[:8]:
-                if not isinstance(recommendation, dict):
-                    rejected.append(
-                        {
-                            "review_evidence_id": record.id,
-                            "title": str(recommendation)[:80],
-                            "reason": "recommended action is not an object",
-                        }
-                    )
-                    continue
-                title = str(recommendation.get("title") or recommendation.get("action") or "untitled action").strip()
-                reason = self._remote_review_action_reject_reason(
-                    target=target,
-                    recommendation=recommendation,
-                    available=available,
-                    current_evidence_ids=current_evidence_ids,
-                    rationale_refs=rationale_refs,
-                    surface=surface,
-                )
-                primitive_hint = self._normalized_primitive_hint(recommendation)
-                raw_primitive_hint = self._raw_primitive_hint(recommendation)
-                task_kind = self.REMOTE_REVIEW_KIND_BY_PRIMITIVE.get(primitive_hint)
-                action_refs = self._remote_review_action_refs(recommendation, rationale_refs)
-                if reason:
-                    rejected.append(
-                        {
-                            "review_evidence_id": record.id,
-                            "title": title,
-                            "primitive_hint": primitive_hint,
-                            "reason": reason,
-                        }
-                    )
-                    continue
-                assert task_kind is not None
-                if task_kind != TaskKind.ANALYZE_EVIDENCE and self._task_exists_for_current_generation(target.id, task_kind, active_generation):
-                    rejected.append(
-                        {
-                            "review_evidence_id": record.id,
-                            "title": title,
-                            "primitive_hint": primitive_hint,
-                            "reason": "equivalent current-generation task already exists",
-                        }
-                    )
-                    continue
-                confidence = self._float_between_0_1(recommendation.get("confidence"), review.get("confidence"))
-                summary = str(recommendation.get("summary") or recommendation.get("rationale") or title)
-                metadata = {
-                    "remote_review_admitted": True,
-                    "source_review_evidence_id": record.id,
-                    "primitive_hint": primitive_hint,
-                    "evidence_refs": action_refs,
-                    "supporting_evidence_refs": action_refs,
-                }
-                if raw_primitive_hint and raw_primitive_hint.lower().replace("_", "-") != primitive_hint:
-                    metadata["raw_primitive_hint"] = raw_primitive_hint
-                actions.append(
-                    PlannedTargetAction(
-                        kind=task_kind,
-                        title=title,
-                        summary=summary,
-                        confidence=confidence,
-                        phase_label=blueprint_for(task_kind).phase.value,
-                        subphase=f"remote_review:{task_kind.value}",
-                        transition_reason=(
-                            "Remote premium review recommended this action, and deterministic admission "
-                            "validated primitive, evidence, scope, policy, and Operator Intent gates."
-                        ),
-                        prerequisite=str(recommendation.get("prerequisite") or "current-generation evidence refs"),
-                        metadata=metadata,
-                    )
-                )
-                accepted.append(
-                    {
-                        "review_evidence_id": record.id,
-                        "title": title,
-                        "primitive_hint": primitive_hint,
-                        "task_kind": task_kind.value,
-                        "evidence_refs": action_refs,
-                    }
-                )
-        return {"actions": actions[:6], "accepted": accepted[:8], "rejected": rejected[:12]}
+            admission = self._remote_review_recommendation_admission(
+                target, record, review, recommendation, rationale_refs, context
+            )
+            self._extend_admission_result(result, admission)
+        return result
+
+    def _remote_review_recommendation_admission(
+        self,
+        target: Target,
+        record: object,
+        review: dict[str, object],
+        recommendation: dict[str, object],
+        rationale_refs: list[str],
+        context: RemoteReviewAdmissionContext,
+    ) -> dict[str, list[object]]:
+        title = str(recommendation.get("title") or recommendation.get("action") or "untitled action").strip()
+        primitive_hint = self._normalized_primitive_hint(recommendation)
+        reason = self._remote_review_action_reject_reason(
+            target=target,
+            recommendation=recommendation,
+            available=context.available_primitives,
+            current_evidence_ids=context.current_evidence_ids,
+            rationale_refs=rationale_refs,
+            surface=context.surface,
+        )
+        if reason:
+            rejection = self._remote_review_rejection(record, title, reason, primitive_hint=primitive_hint)
+            return self._admission_result(rejected=[rejection])
+        task_kind = self.REMOTE_REVIEW_KIND_BY_PRIMITIVE[primitive_hint]
+        if self._remote_review_task_exists(target, task_kind, context.active_generation):
+            rejection = self._remote_review_rejection(
+                record, title, "equivalent current-generation task already exists", primitive_hint=primitive_hint
+            )
+            return self._admission_result(rejected=[rejection])
+        action_refs = self._remote_review_action_refs(recommendation, rationale_refs)
+        action = self._remote_review_planned_action(record, review, recommendation, task_kind, action_refs)
+        accepted = self._remote_review_acceptance(record, title, primitive_hint, task_kind, action_refs)
+        return self._admission_result(actions=[action], accepted=[accepted])
+
+    def _remote_review_task_exists(
+        self,
+        target: Target,
+        task_kind: TaskKind,
+        active_generation: str | None,
+    ) -> bool:
+        if task_kind == TaskKind.ANALYZE_EVIDENCE:
+            return False
+        return self._task_exists_for_current_generation(target.id, task_kind, active_generation)
+
+    def _remote_review_planned_action(
+        self,
+        record: object,
+        review: dict[str, object],
+        recommendation: dict[str, object],
+        task_kind: TaskKind,
+        action_refs: list[str],
+    ) -> PlannedTargetAction:
+        title = str(recommendation.get("title") or recommendation.get("action") or "untitled action").strip()
+        primitive_hint = self._normalized_primitive_hint(recommendation)
+        metadata = self._remote_review_action_metadata(record, recommendation, primitive_hint, action_refs)
+        return PlannedTargetAction(
+            kind=task_kind,
+            title=title,
+            summary=str(recommendation.get("summary") or recommendation.get("rationale") or title),
+            confidence=self._float_between_0_1(recommendation.get("confidence"), review.get("confidence")),
+            phase_label=blueprint_for(task_kind).phase.value,
+            subphase=f"remote_review:{task_kind.value}",
+            transition_reason=(
+                "Remote premium review recommended this action, and deterministic admission "
+                "validated primitive, evidence, scope, policy, and Operator Intent gates."
+            ),
+            prerequisite=str(recommendation.get("prerequisite") or "current-generation evidence refs"),
+            metadata=metadata,
+        )
+
+    def _remote_review_action_metadata(
+        self,
+        record: object,
+        recommendation: dict[str, object],
+        primitive_hint: str,
+        action_refs: list[str],
+    ) -> dict[str, object]:
+        metadata: dict[str, object] = {
+            "remote_review_admitted": True,
+            "source_review_evidence_id": record.id,
+            "primitive_hint": primitive_hint,
+            "evidence_refs": action_refs,
+            "supporting_evidence_refs": action_refs,
+        }
+        raw_primitive_hint = self._raw_primitive_hint(recommendation)
+        if raw_primitive_hint and raw_primitive_hint.lower().replace("_", "-") != primitive_hint:
+            metadata["raw_primitive_hint"] = raw_primitive_hint
+        return metadata
+
+    def _remote_review_acceptance(
+        self,
+        record: object,
+        title: str,
+        primitive_hint: str,
+        task_kind: TaskKind,
+        action_refs: list[str],
+    ) -> dict[str, object]:
+        return {
+            "review_evidence_id": record.id,
+            "title": title,
+            "primitive_hint": primitive_hint,
+            "task_kind": task_kind.value,
+            "evidence_refs": action_refs,
+        }
+
+    def _remote_review_rejection(
+        self,
+        record: object,
+        title: str,
+        reason: str,
+        *,
+        primitive_hint: str | None = None,
+    ) -> dict[str, object]:
+        payload = {"review_evidence_id": record.id, "title": title, "reason": reason}
+        if primitive_hint is not None:
+            payload["primitive_hint"] = primitive_hint
+        return payload
+
+    def _admission_result(
+        self,
+        *,
+        actions: list[PlannedTargetAction] | None = None,
+        accepted: list[dict[str, object]] | None = None,
+        rejected: list[dict[str, object]] | None = None,
+    ) -> dict[str, list[object]]:
+        return {"actions": actions or [], "accepted": accepted or [], "rejected": rejected or []}
+
+    def _extend_admission_result(self, result: dict[str, list[object]], incoming: dict[str, list[object]]) -> None:
+        result["actions"].extend(incoming["actions"])
+        result["accepted"].extend(incoming["accepted"])
+        result["rejected"].extend(incoming["rejected"])
+
+    def _merge_admission_results(self, results: list[dict[str, list[object]]]) -> dict[str, object]:
+        merged = self._admission_result()
+        for result in results:
+            self._extend_admission_result(merged, result)
+        return {
+            "actions": merged["actions"][:6],
+            "accepted": merged["accepted"][:8],
+            "rejected": merged["rejected"][:12],
+        }
 
     def build_rag_task_hints(self, target: Target, *, query: str = "", limit: int = 8) -> dict[str, object]:
         return self._evaluate_rag_hint_admission(target, query=query, limit=limit)
 
     def _evaluate_rag_hint_admission(self, target: Target, *, query: str = "", limit: int = 8) -> dict[str, object]:
         evidence = self._current_generation_evidence(target, limit=200)
-        current_evidence_ids = {item.id for item in evidence}
         chunks = self._rag_hint_chunks(target, query=query, limit=limit)
         if not chunks:
             return {"actions": [], "accepted": [], "rejected": []}
-        primitives = self.store.list_primitives()
-        available = {
-            value.lower()
-            for primitive in primitives
-            for value in [primitive.name, *primitive.capability_tags]
+        context = self._remote_review_admission_context(target, evidence)
+        results = [self._rag_hint_chunk_admission(target, chunk, evidence, context) for chunk in chunks]
+        return self._merge_admission_results(results)
+
+    def _rag_hint_chunk_admission(
+        self,
+        target: Target,
+        chunk: DocumentChunk,
+        evidence: list[object],
+        context: RemoteReviewAdmissionContext,
+    ) -> dict[str, list[object]]:
+        recommendation, local_reject = self._rag_hint_recommendation(target, chunk, evidence)
+        title = self._rag_hint_title(chunk, recommendation)
+        corpus_type = self._rag_hint_corpus_type(chunk)
+        if local_reject:
+            rejection = self._rag_hint_rejection(chunk, title, corpus_type, local_reject)
+            return self._admission_result(rejected=[rejection])
+        assert recommendation is not None
+        primitive_hint = self._normalized_primitive_hint(recommendation)
+        reason = self._remote_review_action_reject_reason(
+            target=target,
+            recommendation=recommendation,
+            available=context.available_primitives,
+            current_evidence_ids=context.current_evidence_ids,
+            rationale_refs=[],
+            surface=context.surface,
+        )
+        if reason:
+            rejection = self._rag_hint_rejection(chunk, title, corpus_type, reason, primitive_hint=primitive_hint)
+            return self._admission_result(rejected=[rejection])
+        task_kind = self.REMOTE_REVIEW_KIND_BY_PRIMITIVE[primitive_hint]
+        if self._remote_review_task_exists(target, task_kind, context.active_generation):
+            rejection = self._rag_hint_rejection(
+                chunk, title, corpus_type, "equivalent current-generation task already exists", primitive_hint=primitive_hint
+            )
+            return self._admission_result(rejected=[rejection])
+        action_refs = self._remote_review_action_refs(recommendation, [])
+        action = self._rag_hint_planned_action(chunk, recommendation, corpus_type, task_kind, action_refs)
+        accepted = self._rag_hint_acceptance(chunk, action, corpus_type, primitive_hint, task_kind, action_refs)
+        return self._admission_result(actions=[action], accepted=[accepted])
+
+    def _rag_hint_title(self, chunk: DocumentChunk, recommendation: dict[str, object] | None) -> str:
+        return str(recommendation.get("title") if recommendation else chunk.title)
+
+    def _rag_hint_corpus_type(self, chunk: DocumentChunk) -> str:
+        return str(metadata_value(chunk.metadata, "corpus_type") or "operator_note")
+
+    def _rag_hint_planned_action(
+        self,
+        chunk: DocumentChunk,
+        recommendation: dict[str, object],
+        corpus_type: str,
+        task_kind: TaskKind,
+        action_refs: list[str],
+    ) -> PlannedTargetAction:
+        title = self._rag_hint_title(chunk, recommendation)
+        primitive_hint = self._normalized_primitive_hint(recommendation)
+        return PlannedTargetAction(
+            kind=task_kind,
+            title=title,
+            summary=str(recommendation.get("summary") or recommendation.get("rationale") or title),
+            confidence=self._float_between_0_1(recommendation.get("confidence"), 0.68),
+            phase_label=blueprint_for(task_kind).phase.value,
+            subphase=f"rag_hint:{task_kind.value}",
+            transition_reason=(
+                "RAG direct task hint was citation-bound and deterministic admission validated "
+                "current evidence, primitive coverage, scope, policy, and Operator Intent gates."
+            ),
+            prerequisite="current-generation evidence plus cited RAG chunk",
+            metadata=self._rag_hint_action_metadata(chunk, recommendation, corpus_type, primitive_hint, action_refs),
+        )
+
+    def _rag_hint_action_metadata(
+        self,
+        chunk: DocumentChunk,
+        recommendation: dict[str, object],
+        corpus_type: str,
+        primitive_hint: str,
+        action_refs: list[str],
+    ) -> dict[str, object]:
+        classification = str(recommendation.get("applicability_classification") or "unknown")
+        return {
+            "rag_hint_admitted": True,
+            "source_rag_chunk_id": chunk.id,
+            "source_rag_artifact_id": chunk.source_artifact_id,
+            "rag_corpus_type": corpus_type,
+            "rag_source_trust": metadata_value(chunk.metadata, "source_trust"),
+            "rag_hint_policy": metadata_value(chunk.metadata, "hint_policy"),
+            "rag_walkthrough_hint": metadata_bool_value(chunk.metadata, "walkthrough_hint") or corpus_type == "htb_writeup",
+            "rag_applicability_classification": classification,
+            "rag_cve_ids": metadata_list_value(chunk.metadata, "cve_ids"),
+            "primitive_hint": primitive_hint,
+            "evidence_refs": action_refs,
+            "supporting_evidence_refs": action_refs,
+            "supporting_rag_chunk_ids": [chunk.id],
         }
-        active_generation = self._target_active_generation(target)
-        surface = self._current_credentialed_access_surface(target)
-        actions: list[PlannedTargetAction] = []
-        accepted: list[dict[str, object]] = []
-        rejected: list[dict[str, object]] = []
-        for chunk in chunks:
-            recommendation, local_reject = self._rag_hint_recommendation(target, chunk, evidence)
-            title = str(recommendation.get("title") if recommendation else chunk.title)
-            corpus_type = str(metadata_value(chunk.metadata, "corpus_type") or "operator_note")
-            if local_reject:
-                rejected.append(
-                    {
-                        "rag_chunk_id": chunk.id,
-                        "title": title,
-                        "corpus_type": corpus_type,
-                        "reason": local_reject,
-                    }
-                )
-                continue
-            assert recommendation is not None
-            reason = self._remote_review_action_reject_reason(
-                target=target,
-                recommendation=recommendation,
-                available=available,
-                current_evidence_ids=current_evidence_ids,
-                rationale_refs=[],
-                surface=surface,
-            )
-            primitive_hint = self._normalized_primitive_hint(recommendation)
-            task_kind = self.REMOTE_REVIEW_KIND_BY_PRIMITIVE.get(primitive_hint)
-            action_refs = self._remote_review_action_refs(recommendation, [])
-            if reason:
-                rejected.append(
-                    {
-                        "rag_chunk_id": chunk.id,
-                        "title": title,
-                        "corpus_type": corpus_type,
-                        "primitive_hint": primitive_hint,
-                        "reason": reason,
-                    }
-                )
-                continue
-            assert task_kind is not None
-            if task_kind != TaskKind.ANALYZE_EVIDENCE and self._task_exists_for_current_generation(target.id, task_kind, active_generation):
-                rejected.append(
-                    {
-                        "rag_chunk_id": chunk.id,
-                        "title": title,
-                        "corpus_type": corpus_type,
-                        "primitive_hint": primitive_hint,
-                        "reason": "equivalent current-generation task already exists",
-                    }
-                )
-                continue
-            confidence = self._float_between_0_1(recommendation.get("confidence"), 0.68)
-            classification = str(recommendation.get("applicability_classification") or "unknown")
-            summary = str(recommendation.get("summary") or recommendation.get("rationale") or title)
-            metadata = {
-                "rag_hint_admitted": True,
-                "source_rag_chunk_id": chunk.id,
-                "source_rag_artifact_id": chunk.source_artifact_id,
-                "rag_corpus_type": corpus_type,
-                "rag_source_trust": metadata_value(chunk.metadata, "source_trust"),
-                "rag_hint_policy": metadata_value(chunk.metadata, "hint_policy"),
-                "rag_walkthrough_hint": metadata_bool_value(chunk.metadata, "walkthrough_hint") or corpus_type == "htb_writeup",
-                "rag_applicability_classification": classification,
-                "rag_cve_ids": metadata_list_value(chunk.metadata, "cve_ids"),
-                "primitive_hint": primitive_hint,
-                "evidence_refs": action_refs,
-                "supporting_evidence_refs": action_refs,
-                "supporting_rag_chunk_ids": [chunk.id],
-            }
-            actions.append(
-                PlannedTargetAction(
-                    kind=task_kind,
-                    title=title,
-                    summary=summary,
-                    confidence=confidence,
-                    phase_label=blueprint_for(task_kind).phase.value,
-                    subphase=f"rag_hint:{task_kind.value}",
-                    transition_reason=(
-                        "RAG direct task hint was citation-bound and deterministic admission validated "
-                        "current evidence, primitive coverage, scope, policy, and Operator Intent gates."
-                    ),
-                    prerequisite="current-generation evidence plus cited RAG chunk",
-                    metadata=metadata,
-                )
-            )
-            accepted.append(
-                {
-                    "rag_chunk_id": chunk.id,
-                    "title": title,
-                    "corpus_type": corpus_type,
-                    "primitive_hint": primitive_hint,
-                    "task_kind": task_kind.value,
-                    "evidence_refs": action_refs,
-                    "applicability_classification": classification,
-                }
-            )
-        return {"actions": actions[:6], "accepted": accepted[:8], "rejected": rejected[:12]}
+
+    def _rag_hint_acceptance(
+        self,
+        chunk: DocumentChunk,
+        action: PlannedTargetAction,
+        corpus_type: str,
+        primitive_hint: str,
+        task_kind: TaskKind,
+        action_refs: list[str],
+    ) -> dict[str, object]:
+        return {
+            "rag_chunk_id": chunk.id,
+            "title": action.title,
+            "corpus_type": corpus_type,
+            "primitive_hint": primitive_hint,
+            "task_kind": task_kind.value,
+            "evidence_refs": action_refs,
+            "applicability_classification": action.metadata["rag_applicability_classification"],
+        }
+
+    def _rag_hint_rejection(
+        self,
+        chunk: DocumentChunk,
+        title: str,
+        corpus_type: str,
+        reason: str,
+        *,
+        primitive_hint: str | None = None,
+    ) -> dict[str, object]:
+        payload = {"rag_chunk_id": chunk.id, "title": title, "corpus_type": corpus_type, "reason": reason}
+        if primitive_hint is not None:
+            payload["primitive_hint"] = primitive_hint
+        return payload
 
     def _rag_hint_chunks(self, target: Target, *, query: str, limit: int) -> list[DocumentChunk]:
         terms = {
@@ -2570,220 +2909,294 @@ class WorkflowOrchestrator:
             task = self.store.claim_next_pending_task()
             if not task:
                 return
-            target = self.store.get_target(task.target_id)
-            if self._execution_target_is_invalid(task, target, report):
-                continue
-            task_decision = self.policy_engine.evaluate_task(task, target)
-            self.store.insert_policy_decision(task_decision)
-            if task_decision.verdict != PolicyVerdict.ALLOW:
-                self.policy_engine.apply_decision_to_task(task, task_decision)
-                task.updated_at = utc_now()
-                self.store.guarded_update_task(task, from_statuses=[TaskStatus.RUNNING])
-                event = EventRecord(
-                    type=EventType.TASK_NEEDS_APPROVAL
-                    if task_decision.verdict == PolicyVerdict.NEEDS_APPROVAL
-                    else EventType.TASK_BLOCKED,
-                    summary=f"Task gated before execution: {task_decision.reason}",
-                    target_id=task.target_id,
-                    task_id=task.id,
-                    metadata={"reason": task_decision.reason, "pre_dispatch_policy_recheck": True},
-                )
-                self.store.insert_event(event)
-                report.events.append(event)
-                continue
-            resource_block = self._resource_reserve_block(task)
-            if resource_block is not None:
-                self.resume_tracker.defer_task(
-                    task,
-                    str(resource_block["reason"]),
-                    delay_seconds=self.autonomy.defer_retry_seconds,
-                    metadata=dict(resource_block["metadata"]),
-                )
-                continue
-            selection = self.provider_router.select_route(task)
-            scheduler_decision = self.model_scheduler.evaluate(
-                task,
-                selection,
-                active_runs=self.store.list_running_task_runs(),
-            )
-            if not scheduler_decision.granted:
-                self.resume_tracker.defer_task(
-                    task,
-                    scheduler_decision.reason,
-                    delay_seconds=scheduler_decision.defer_seconds,
-                    metadata={"lane": scheduler_decision.lane, "route": selection.route.value},
-                )
-                continue
+            self._execute_claimed_task(task, report)
 
-            context = (
-                self._memory_service().build_context_slice(task.target_id, task.role)
-                if task.target_id
-                else None
-            )
-            primitives = self._primitive_resolver().resolve_primitives(task)
-            validation_issues = self.validation_registry.validate(
-                ValidationStage.EXECUTION_PREFLIGHT,
-                ValidationContext(task=task, target=target, store=self.store, primitives=primitives),
-            )
-            self._apply_validation_annotations(task, validation_issues)
-            if any(issue.blocks_progress for issue in validation_issues):
-                self._record_validation_failure(
-                    task,
-                    validation_issues,
-                    report,
-                    stage=ValidationStage.EXECUTION_PREFLIGHT,
-                )
-                continue
+    def _execute_claimed_task(self, task: Task, report: OrchestrationReport) -> None:
+        target = self.store.get_target(task.target_id)
+        if self._execution_target_is_invalid(task, target, report):
+            return
+        if self._task_policy_blocks_execution(task, target, report):
+            return
+        if self._defer_for_resource_reserve(task):
+            return
+        selection, scheduler_decision = self._execution_route_and_schedule(task)
+        if self._defer_for_scheduler(task, selection, scheduler_decision):
+            return
+        context = self._execution_context(task)
+        primitives = self._primitive_resolver().resolve_primitives(task)
+        if self._execution_validation_blocks(task, target, primitives, report):
+            return
+        if self._primitive_policy_blocks_execution(task, primitives):
+            return
+        run = self._create_execution_run(task, selection, scheduler_decision)
+        self._persist_claimed_execution(task, run, selection)
+        dispatch = self.worker_broker.dispatch(task, selection)
+        if not dispatch.accepted:
+            self._handle_dispatch_rejection(task, run, dispatch, report)
+            return
+        self._start_dispatched_execution(task, run, dispatch)
+        self._execute_dispatched_task(task, run, dispatch, context, report)
 
-            primitive_decision = self._evaluate_primitives(task, primitives)
-            if primitive_decision is not None:
-                self.store.insert_policy_decision(primitive_decision)
-                if primitive_decision.verdict == PolicyVerdict.NEEDS_APPROVAL:
-                    task.status = TaskStatus.NEEDS_APPROVAL
-                    task.requires_approval = True
-                    self.store.insert_task(task)
-                    self.store.insert_event(
-                        EventRecord(
-                            type=EventType.TASK_NEEDS_APPROVAL,
-                            summary=primitive_decision.reason,
-                            target_id=task.target_id,
-                            task_id=task.id,
-                        )
-                    )
-                    continue
-                if primitive_decision.verdict == PolicyVerdict.DENY:
-                    task.status = TaskStatus.BLOCKED
-                    self.store.insert_task(task)
-                    self.store.insert_event(
-                        EventRecord(
-                            type=EventType.TASK_BLOCKED,
-                            summary=primitive_decision.reason,
-                            target_id=task.target_id,
-                            task_id=task.id,
-                        )
-                    )
-                    continue
+    def _task_policy_blocks_execution(self, task: Task, target: Target | None, report: OrchestrationReport) -> bool:
+        task_decision = self.policy_engine.evaluate_task(task, target)
+        self.store.insert_policy_decision(task_decision)
+        if task_decision.verdict == PolicyVerdict.ALLOW:
+            return False
+        self.policy_engine.apply_decision_to_task(task, task_decision)
+        task.updated_at = utc_now()
+        self.store.guarded_update_task(task, from_statuses=[TaskStatus.RUNNING])
+        event_type = (
+            EventType.TASK_NEEDS_APPROVAL
+            if task_decision.verdict == PolicyVerdict.NEEDS_APPROVAL
+            else EventType.TASK_BLOCKED
+        )
+        event = EventRecord(
+            type=event_type,
+            summary=f"Task gated before execution: {task_decision.reason}",
+            target_id=task.target_id,
+            task_id=task.id,
+            metadata={"reason": task_decision.reason, "pre_dispatch_policy_recheck": True},
+        )
+        self.store.insert_event(event)
+        report.events.append(event)
+        return True
 
-            run = TaskRun(
+    def _defer_for_resource_reserve(self, task: Task) -> bool:
+        resource_block = self._resource_reserve_block(task)
+        if resource_block is None:
+            return False
+        self.resume_tracker.defer_task(
+            task,
+            str(resource_block["reason"]),
+            delay_seconds=self.autonomy.defer_retry_seconds,
+            metadata=dict(resource_block["metadata"]),
+        )
+        return True
+
+    def _execution_route_and_schedule(self, task: Task):
+        selection = self.provider_router.select_route(task)
+        scheduler_decision = self.model_scheduler.evaluate(
+            task,
+            selection,
+            active_runs=self.store.list_running_task_runs(),
+        )
+        return selection, scheduler_decision
+
+    def _defer_for_scheduler(self, task: Task, selection, scheduler_decision) -> bool:
+        if scheduler_decision.granted:
+            return False
+        self.resume_tracker.defer_task(
+            task,
+            scheduler_decision.reason,
+            delay_seconds=scheduler_decision.defer_seconds,
+            metadata={"lane": scheduler_decision.lane, "route": selection.route.value},
+        )
+        return True
+
+    def _execution_context(self, task: Task):
+        if not task.target_id:
+            return None
+        return self._memory_service().build_context_slice(task.target_id, task.role)
+
+    def _execution_validation_blocks(
+        self,
+        task: Task,
+        target: Target | None,
+        primitives: list[PrimitiveManifest],
+        report: OrchestrationReport,
+    ) -> bool:
+        validation_issues = self.validation_registry.validate(
+            ValidationStage.EXECUTION_PREFLIGHT,
+            ValidationContext(task=task, target=target, store=self.store, primitives=primitives),
+        )
+        self._apply_validation_annotations(task, validation_issues)
+        if not any(issue.blocks_progress for issue in validation_issues):
+            return False
+        self._record_validation_failure(
+            task,
+            validation_issues,
+            report,
+            stage=ValidationStage.EXECUTION_PREFLIGHT,
+        )
+        return True
+
+    def _primitive_policy_blocks_execution(self, task: Task, primitives: list[PrimitiveManifest]) -> bool:
+        primitive_decision = self._evaluate_primitives(task, primitives)
+        if primitive_decision is None:
+            return False
+        self.store.insert_policy_decision(primitive_decision)
+        if primitive_decision.verdict == PolicyVerdict.NEEDS_APPROVAL:
+            self._mark_task_needs_primitive_approval(task, primitive_decision.reason)
+            return True
+        if primitive_decision.verdict == PolicyVerdict.DENY:
+            self._block_task_for_primitive_policy(task, primitive_decision.reason)
+            return True
+        return False
+
+    def _mark_task_needs_primitive_approval(self, task: Task, reason: str) -> None:
+        task.status = TaskStatus.NEEDS_APPROVAL
+        task.requires_approval = True
+        self.store.insert_task(task)
+        self.store.insert_event(
+            EventRecord(
+                type=EventType.TASK_NEEDS_APPROVAL,
+                summary=reason,
+                target_id=task.target_id,
                 task_id=task.id,
-                status=TaskRunStatus.CLAIMED,
-                attempt_number=task.attempts + 1,
-                role=task.role,
-                provider_route=selection.route,
-                model_name=selection.model_name,
-                cold_path=selection.cold_path,
-                heartbeat_at=utc_now(),
-                lease_expires_at=utc_now() + timedelta(minutes=5),
-                trace_summary="task claimed for brokered execution",
-                metadata={
-                    "rationale": selection.rationale,
-                    "risk_tier": task.risk_tier.value,
-                    "scheduler_lane": scheduler_decision.lane,
-                },
             )
-            task.latest_run_id = run.id
-            task.provider_route = selection.route
-            task.provider_model = selection.model_name
-            self.store.insert_task_run(run)
-            self.store.insert_task(task)
-            self._write_checkpoint(task, run, summary="pre-execution checkpoint", payload={"task": task.as_payload()}, phase="pre")
-            dispatch = self.worker_broker.dispatch(task, selection)
-            if not dispatch.accepted:
-                run.status = TaskRunStatus.CANCELLED
-                run.error = dispatch.reason
-                run.finished_at = utc_now()
-                run.metadata.update(
-                    {
-                        "worker_lane": dispatch.lane,
-                        "runner_id": dispatch.runner_id,
-                        "offer_id": dispatch.offer_id,
-                        "offer_count": dispatch.offer_count,
-                        "worker_contract": dispatch.worker_contract,
-                        "suitability_score": dispatch.suitability_score,
-                    }
-                )
-                self.store.insert_task_run(run)
-                defer_count = int(task.metadata.get("defer_count", 0)) + 1
-                task.metadata["defer_count"] = defer_count
-                if defer_count >= self.autonomy.max_defer_count:
-                    task.status = TaskStatus.NEEDS_APPROVAL
-                    task.metadata["defer_escalation_reason"] = (
-                        f"deferred {defer_count} times without dispatch: {dispatch.reason}"
-                    )
-                    self.store.insert_task(task)
-                    report.events.append(
-                        EventRecord(
-                            type=EventType.TASK_FAILED,
-                            summary=f"Task escalated to NEEDS_APPROVAL after {defer_count} defers: {task.title}",
-                            target_id=task.target_id,
-                            task_id=task.id,
-                            metadata={"defer_count": defer_count, "reason": dispatch.reason},
-                        )
-                    )
-                else:
-                    self.resume_tracker.defer_task(
-                        task,
-                        dispatch.reason,
-                        delay_seconds=dispatch.defer_seconds,
-                        metadata={
-                            "lane": dispatch.lane,
-                            "runner_id": dispatch.runner_id,
-                            "offer_count": dispatch.offer_count,
-                            "defer_count": defer_count,
-                        },
-                    )
-                continue
+        )
 
-            run.status = TaskRunStatus.RUNNING
-            run.metadata.update(
-                {
-                    "worker_lane": dispatch.lane,
-                    "runner_id": dispatch.runner_id,
-                    "offer_id": dispatch.offer_id,
-                    "offer_count": dispatch.offer_count,
-                    "worker_contract": dispatch.worker_contract,
-                    "suitability_score": dispatch.suitability_score,
-                }
+    def _block_task_for_primitive_policy(self, task: Task, reason: str) -> None:
+        task.status = TaskStatus.BLOCKED
+        self.store.insert_task(task)
+        self.store.insert_event(
+            EventRecord(
+                type=EventType.TASK_BLOCKED,
+                summary=reason,
+                target_id=task.target_id,
+                task_id=task.id,
             )
-            if dispatch.worker_contract:
-                task.metadata["worker_contract"] = dispatch.worker_contract
-            self.store.insert_task_run(run)
-            self.store.insert_event(
-                EventRecord(
-                    type=EventType.TASK_STARTED,
-                    summary=task.title,
-                    target_id=task.target_id,
-                    task_id=task.id,
-                    metadata={"runner_id": dispatch.runner_id, "lane": dispatch.lane},
-                )
+        )
+
+    def _create_execution_run(self, task: Task, selection, scheduler_decision) -> TaskRun:
+        now = utc_now()
+        return TaskRun(
+            task_id=task.id,
+            status=TaskRunStatus.CLAIMED,
+            attempt_number=task.attempts + 1,
+            role=task.role,
+            provider_route=selection.route,
+            model_name=selection.model_name,
+            cold_path=selection.cold_path,
+            heartbeat_at=now,
+            lease_expires_at=now + timedelta(minutes=5),
+            trace_summary="task claimed for brokered execution",
+            metadata={
+                "rationale": selection.rationale,
+                "risk_tier": task.risk_tier.value,
+                "scheduler_lane": scheduler_decision.lane,
+            },
+        )
+
+    def _persist_claimed_execution(self, task: Task, run: TaskRun, selection) -> None:
+        task.latest_run_id = run.id
+        task.provider_route = selection.route
+        task.provider_model = selection.model_name
+        self.store.insert_task_run(run)
+        self.store.insert_task(task)
+        self._write_checkpoint(task, run, summary="pre-execution checkpoint", payload={"task": task.as_payload()}, phase="pre")
+
+    def _handle_dispatch_rejection(self, task: Task, run: TaskRun, dispatch, report: OrchestrationReport) -> None:
+        run.status = TaskRunStatus.CANCELLED
+        run.error = dispatch.reason
+        run.finished_at = utc_now()
+        run.metadata.update(self._dispatch_metadata(dispatch))
+        self.store.insert_task_run(run)
+        defer_count = int(task.metadata.get("defer_count", 0)) + 1
+        task.metadata["defer_count"] = defer_count
+        if defer_count >= self.autonomy.max_defer_count:
+            self._escalate_dispatch_defers(task, dispatch, defer_count, report)
+            return
+        self.resume_tracker.defer_task(
+            task,
+            dispatch.reason,
+            delay_seconds=dispatch.defer_seconds,
+            metadata={
+                "lane": dispatch.lane,
+                "runner_id": dispatch.runner_id,
+                "offer_count": dispatch.offer_count,
+                "defer_count": defer_count,
+            },
+        )
+
+    def _dispatch_metadata(self, dispatch) -> dict[str, object]:
+        return {
+            "worker_lane": dispatch.lane,
+            "runner_id": dispatch.runner_id,
+            "offer_id": dispatch.offer_id,
+            "offer_count": dispatch.offer_count,
+            "worker_contract": dispatch.worker_contract,
+            "suitability_score": dispatch.suitability_score,
+        }
+
+    def _escalate_dispatch_defers(
+        self,
+        task: Task,
+        dispatch,
+        defer_count: int,
+        report: OrchestrationReport,
+    ) -> None:
+        task.status = TaskStatus.NEEDS_APPROVAL
+        task.metadata["defer_escalation_reason"] = f"deferred {defer_count} times without dispatch: {dispatch.reason}"
+        self.store.insert_task(task)
+        report.events.append(
+            EventRecord(
+                type=EventType.TASK_FAILED,
+                summary=f"Task escalated to NEEDS_APPROVAL after {defer_count} defers: {task.title}",
+                target_id=task.target_id,
+                task_id=task.id,
+                metadata={"defer_count": defer_count, "reason": dispatch.reason},
             )
-            if self.event_bus is not None:
-                self.event_bus.emit(
-                    RuntimeSignal.TASK_STARTED,
-                    {
-                        "task_id": task.id,
-                        "target_id": task.target_id,
-                        "run_id": run.id,
-                        "runner_id": dispatch.runner_id,
-                    },
-                )
-            try:
-                result = self.worker_broker.execute(dispatch, task, context)
-                if result is None:
-                    run.status = TaskRunStatus.CANCELLED
-                    run.error = "worker assignment vanished before execution"
-                    run.finished_at = utc_now()
-                    self.store.insert_task_run(run)
-                    self.resume_tracker.defer_task(
-                        task,
-                        "worker assignment vanished before execution",
-                        delay_seconds=self.autonomy.defer_retry_seconds,
-                        metadata={"runner_id": dispatch.runner_id, "lane": dispatch.lane},
-                    )
-                    continue
-                self._persist_execution_result(task, run, result, report)
-            except Exception as exc:  # noqa: BLE001 - finalize brokered runs even when execution crashes
-                self._persist_execution_exception(task, run, exc, report)
+        )
+
+    def _start_dispatched_execution(self, task: Task, run: TaskRun, dispatch) -> None:
+        run.status = TaskRunStatus.RUNNING
+        run.metadata.update(self._dispatch_metadata(dispatch))
+        if dispatch.worker_contract:
+            task.metadata["worker_contract"] = dispatch.worker_contract
+        self.store.insert_task_run(run)
+        self.store.insert_event(
+            EventRecord(
+                type=EventType.TASK_STARTED,
+                summary=task.title,
+                target_id=task.target_id,
+                task_id=task.id,
+                metadata={"runner_id": dispatch.runner_id, "lane": dispatch.lane},
+            )
+        )
+        self._emit_task_started(task, run, dispatch)
+
+    def _emit_task_started(self, task: Task, run: TaskRun, dispatch) -> None:
+        if self.event_bus is None:
+            return
+        self.event_bus.emit(
+            RuntimeSignal.TASK_STARTED,
+            {
+                "task_id": task.id,
+                "target_id": task.target_id,
+                "run_id": run.id,
+                "runner_id": dispatch.runner_id,
+            },
+        )
+
+    def _execute_dispatched_task(
+        self,
+        task: Task,
+        run: TaskRun,
+        dispatch,
+        context,
+        report: OrchestrationReport,
+    ) -> None:
+        try:
+            result = self.worker_broker.execute(dispatch, task, context)
+            if result is None:
+                self._defer_vanished_worker_assignment(task, run, dispatch)
+                return
+            self._persist_execution_result(task, run, result, report)
+        except Exception as exc:  # noqa: BLE001 - finalize brokered runs even when execution crashes
+            self._persist_execution_exception(task, run, exc, report)
+
+    def _defer_vanished_worker_assignment(self, task: Task, run: TaskRun, dispatch) -> None:
+        run.status = TaskRunStatus.CANCELLED
+        run.error = "worker assignment vanished before execution"
+        run.finished_at = utc_now()
+        self.store.insert_task_run(run)
+        self.resume_tracker.defer_task(
+            task,
+            "worker assignment vanished before execution",
+            delay_seconds=self.autonomy.defer_retry_seconds,
+            metadata={"runner_id": dispatch.runner_id, "lane": dispatch.lane},
+        )
 
     def _resource_reserve_block(self, task: Task) -> dict[str, object] | None:
         if self.resource_status_loader is None or self.resource_reserve_loader is None:
@@ -2858,6 +3271,13 @@ class WorkflowOrchestrator:
         return True
 
     def _persist_execution_result(self, task: Task, run: TaskRun, result, report: OrchestrationReport) -> None:
+        self._persist_result_traces(task, result)
+        self._persist_result_records(task, result, report)
+        self._handle_result_escalation_package(task, result, report)
+        self._apply_result_status(task, run, result)
+        self._finalize_persisted_execution_result(task, run, result, report)
+
+    def _persist_result_traces(self, task: Task, result) -> None:
         for trace in result.traces:
             self.store.insert_trace(trace)
         if not result.traces:
@@ -2871,6 +3291,7 @@ class WorkflowOrchestrator:
                 )
             )
 
+    def _persist_result_records(self, task: Task, result, report: OrchestrationReport) -> None:
         for artifact in result.artifacts:
             self.store.insert_artifact(artifact)
         for evidence in result.evidence:
@@ -2882,6 +3303,14 @@ class WorkflowOrchestrator:
         for interest in result.interests:
             self._annotate_result_metadata(task, interest.metadata)
             self.store.insert_interest(interest)
+        self._persist_result_findings(task, result)
+        self._persist_result_handoffs(task, result)
+        self._persist_result_notifications(result)
+        self._persist_result_sync_jobs(task, result)
+        self._queue_notion_sync_for_meaningful_updates(task, result)
+        self._persist_result_next_tasks_and_events(task, result, report)
+
+    def _persist_result_findings(self, task: Task, result) -> None:
         for finding in result.findings:
             self._annotate_result_metadata(task, finding.metadata)
             self.store.insert_finding(finding)
@@ -2906,6 +3335,8 @@ class WorkflowOrchestrator:
                         dedupe_key=f"finding:{finding.title}",
                     )
                 )
+
+    def _persist_result_handoffs(self, task: Task, result) -> None:
         for handoff in result.handoffs:
             self.store.insert_handoff(handoff)
             self.store.insert_event(
@@ -2916,11 +3347,15 @@ class WorkflowOrchestrator:
                     target_id=task.target_id,
                 )
             )
+
+    def _persist_result_notifications(self, result) -> None:
         for notification in result.notifications:
             existing = notification.dedupe_key and self.store.find_latest_notification_by_dedupe(notification.dedupe_key)
             if existing and existing.status in {NotificationStatus.PENDING, NotificationStatus.DELIVERED}:
                 continue
             self.store.insert_notification(notification)
+
+    def _persist_result_sync_jobs(self, task: Task, result) -> None:
         for sync_job in result.sync_jobs:
             if sync_job.kind == ExternalSyncKind.NOTION and self._notion_sync_auth_blocked():
                 self.store.insert_event(
@@ -2943,6 +3378,8 @@ class WorkflowOrchestrator:
                     metadata={"kind": sync_job.kind.value},
                 )
             )
+
+    def _queue_notion_sync_for_meaningful_updates(self, task: Task, result) -> None:
         if task.target_id and (result.notes or result.findings) and not self._notion_sync_auth_blocked():
             self.store.insert_external_sync_job(
                 ExternalSyncJob(
@@ -2952,6 +3389,8 @@ class WorkflowOrchestrator:
                     payload={"target_id": task.target_id, "task_id": task.id, "kind": task.kind.value},
                 )
             )
+
+    def _persist_result_next_tasks_and_events(self, task: Task, result, report: OrchestrationReport) -> None:
         for next_task in result.next_tasks:
             target = self.store.get_target(next_task.target_id)
             self._register_task(next_task, target, report)
@@ -2959,45 +3398,59 @@ class WorkflowOrchestrator:
             self.store.insert_event(event)
             report.events.append(event)
 
+    def _handle_result_escalation_package(self, task: Task, result, report: OrchestrationReport) -> None:
         if result.escalation_package:
-            local_wrapper_available = self.worker_broker.has_runner_for(
-                route=ProviderRoute.REMOTE_PREMIUM,
-                kind=TaskKind.REVIEW_PREMIUM_ESCALATION,
-                role=AgentRole.CLAUDE_REVIEWER,
-                runner_id="agent-chat-premium-runner",
-            )
+            local_wrapper_available = self._agent_chat_premium_runner_available()
             if not self.autonomy.allow_remote_premium and not local_wrapper_available:
-                # Remote premium is policy-disabled — record the suppressed escalation so the
-                # operator can act on it if they later enable allow_remote_premium.
-                note = Note(
-                    target_id=task.target_id,
-                    task_id=task.id,
-                    title="Premium escalation suppressed (allow_remote_premium=False)",
-                    body=(
-                        f"An escalation package was generated but remote premium review is "
-                        f"policy-disabled. Reason: {result.escalation_package.reason}. "
-                        "Enable PRIMORDIAL_ALLOW_REMOTE_PREMIUM to activate premium routing."
-                    ),
-                    confidence=0.95,
-                    freshness=1.0,
-                    metadata={"escalation_suppressed": True, "reason": result.escalation_package.reason},
-                )
-                self.store.insert_note(note)
+                self._record_suppressed_premium_escalation(task, result.escalation_package)
             elif not self.store.has_active_task(task.target_id, TaskKind.REVIEW_PREMIUM_ESCALATION):
-                escalation_task = self._build_task(
-                    target_id=task.target_id,
-                    kind=TaskKind.REVIEW_PREMIUM_ESCALATION,
-                    title="Premium review requested",
-                    summary=result.escalation_package.reason,
-                    session_id=task.session_id,
-                )
-                escalation_task.evidence_refs = result.escalation_package.evidence_refs
-                escalation_task.metadata["escalation_package"] = result.escalation_package.as_payload()
-                self._mark_agent_chat_wrapper_review(escalation_task)
-                if not self.autonomy.allow_remote_premium and not escalation_task.metadata.get("remote_premium_local_wrapper"):
-                    escalation_task.metadata["remote_premium_policy_approval_required"] = True
-                self._register_task(escalation_task, self.store.get_target(task.target_id), report)
+                self._register_premium_escalation_task(task, result.escalation_package, report)
 
+    def _agent_chat_premium_runner_available(self) -> bool:
+        return self.worker_broker.has_runner_for(
+            route=ProviderRoute.REMOTE_PREMIUM,
+            kind=TaskKind.REVIEW_PREMIUM_ESCALATION,
+            role=AgentRole.CLAUDE_REVIEWER,
+            runner_id="agent-chat-premium-runner",
+        )
+
+    def _record_suppressed_premium_escalation(self, task: Task, escalation_package: EscalationPackage) -> None:
+        note = Note(
+            target_id=task.target_id,
+            task_id=task.id,
+            title="Premium escalation suppressed (allow_remote_premium=False)",
+            body=(
+                "An escalation package was generated but remote premium review is "
+                f"policy-disabled. Reason: {escalation_package.reason}. "
+                "Enable PRIMORDIAL_ALLOW_REMOTE_PREMIUM to activate premium routing."
+            ),
+            confidence=0.95,
+            freshness=1.0,
+            metadata={"escalation_suppressed": True, "reason": escalation_package.reason},
+        )
+        self.store.insert_note(note)
+
+    def _register_premium_escalation_task(
+        self,
+        task: Task,
+        escalation_package: EscalationPackage,
+        report: OrchestrationReport,
+    ) -> None:
+        escalation_task = self._build_task(
+            target_id=task.target_id,
+            kind=TaskKind.REVIEW_PREMIUM_ESCALATION,
+            title="Premium review requested",
+            summary=escalation_package.reason,
+            session_id=task.session_id,
+        )
+        escalation_task.evidence_refs = escalation_package.evidence_refs
+        escalation_task.metadata["escalation_package"] = escalation_package.as_payload()
+        self._mark_agent_chat_wrapper_review(escalation_task)
+        if not self.autonomy.allow_remote_premium and not escalation_task.metadata.get("remote_premium_local_wrapper"):
+            escalation_task.metadata["remote_premium_policy_approval_required"] = True
+        self._register_task(escalation_task, self.store.get_target(task.target_id), report)
+
+    def _apply_result_status(self, task: Task, run: TaskRun, result) -> None:
         result_timed_out = self._result_timed_out(result)
         if result.success:
             task.status = TaskStatus.SUCCEEDED
@@ -3029,6 +3482,7 @@ class WorkflowOrchestrator:
                 run.metadata["timed_out"] = True
                 task.metadata["last_run_timed_out"] = True
 
+    def _finalize_persisted_execution_result(self, task: Task, run: TaskRun, result, report: OrchestrationReport) -> None:
         run.finished_at = utc_now()
         run.heartbeat_at = utc_now()
         self.store.guarded_update_task_run(run, from_statuses=[TaskRunStatus.RUNNING])
@@ -3089,8 +3543,7 @@ class WorkflowOrchestrator:
         now = utc_now()
         exception_type = type(exc).__name__
         traceback_text = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-        timed_out = self._is_timeout_exception(exc)
-        transient = False if timed_out else self._is_transient_exception(exc)
+        timed_out, transient = self._execution_exception_flags(exc)
         if timed_out:
             task.attempts += 1
             task.status = TaskStatus.PENDING if task.attempts < task.max_attempts else TaskStatus.FAILED
@@ -3147,7 +3600,24 @@ class WorkflowOrchestrator:
             },
             phase="exception",
         )
-        event = EventRecord(
+        event = self._execution_exception_event(task, exc, exception_type, traceback_text)
+        self.store.insert_event(event)
+        report.events.append(event)
+        report.completed_runs.append(run)
+
+    def _execution_exception_flags(self, exc: Exception) -> tuple[bool, bool]:
+        timed_out = self._is_timeout_exception(exc)
+        transient = False if timed_out else self._is_transient_exception(exc)
+        return timed_out, transient
+
+    def _execution_exception_event(
+        self,
+        task: Task,
+        exc: Exception,
+        exception_type: str,
+        traceback_text: str,
+    ) -> EventRecord:
+        return EventRecord(
             type=EventType.TASK_FAILED,
             summary=f"Execution crashed: {task.title}",
             target_id=task.target_id,
@@ -3159,9 +3629,6 @@ class WorkflowOrchestrator:
                 "traceback": traceback_text,
             },
         )
-        self.store.insert_event(event)
-        report.events.append(event)
-        report.completed_runs.append(run)
 
     def _annotate_result_metadata(self, task: Task, metadata: dict[str, object]) -> None:
         if task.metadata.get("active_ip_generation") is not None:

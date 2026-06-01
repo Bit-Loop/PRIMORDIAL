@@ -39,10 +39,13 @@ from primordial.core.domain.models import (
 )
 from primordial.core.domain.models import OrchestrationReport
 from primordial.core.web.app import PrimordialWebApp
-from tests.support import build_probe_fixture, write_scope_file
+from tests.support import build_probe_fixture, fixture_ip, fixture_secret, write_scope_file
 
 
 MANIFESTS_DIR = Path(__file__).resolve().parents[1] / "manifests"
+ACTIVE_IP = fixture_ip(10, 129, 47, 117)
+CORRECTED_IP = fixture_ip(10, 129, 244, 95)
+INVALID_IP = fixture_ip(10, 129, 244, 220)
 
 
 class WorkflowTests(unittest.TestCase):
@@ -129,7 +132,7 @@ class WorkflowTests(unittest.TestCase):
             self.runtime.update_target_fields(
                 handle="",
                 profile=ScopeProfile.HACK_THE_BOX,
-                assets=["10.129.244.220"],
+                assets=[INVALID_IP],
             )
 
     def test_evidence_drives_analysis_and_exploitation_planning(self) -> None:
@@ -514,7 +517,7 @@ class WorkflowTests(unittest.TestCase):
         self.runtime.register_target(
             handle="pirate.htb",
             profile=ScopeProfile.HACK_THE_BOX,
-            assets=[{"asset": "10.129.47.117", "asset_type": "ip"}],
+            assets=[{"asset": ACTIVE_IP, "asset_type": "ip"}],
             emit_event=False,
         )
         self.runtime.store.insert_evidence(
@@ -522,24 +525,24 @@ class WorkflowTests(unittest.TestCase):
                 target_id=self.target.id,
                 type=EvidenceType.TOOL_OUTPUT,
                 title="Old TCP service discovery",
-                summary="Observed services on 10.129.47.117.",
+                summary="Observed services on " + ACTIVE_IP + ".",
                 source_ref="fixture://old-service",
                 verification_status=VerificationStatus.VERIFIED,
                 confidence=0.8,
                 freshness=0.9,
                 metadata={
                     "kind": "tcp_service_discovery",
-                    "open_services": [{"host": "10.129.47.117", "port": 445, "service": "smb"}],
+                    "open_services": [{"host": ACTIVE_IP, "port": 445, "service": "smb"}],
                 },
             )
         )
 
-        self.runtime.ask_operator_ai("You should be using 10.129.244.95", target="pirate.htb")
+        self.runtime.ask_operator_ai("You should be using " + CORRECTED_IP, target="pirate.htb")
         report = self.runtime.run_tick(max_executions=0)
 
         self.assertTrue(any(task.kind == TaskKind.SERVICE_DISCOVERY for task in report.created_tasks))
         service_task = next(task for task in report.created_tasks if task.kind == TaskKind.SERVICE_DISCOVERY)
-        self.assertEqual(service_task.metadata["active_ip"], "10.129.244.95")
+        self.assertEqual(service_task.metadata["active_ip"], CORRECTED_IP)
         self.assertEqual(str(service_task.metadata["active_ip_generation"]), "1")
 
     def test_planner_persists_methodology_state_for_target(self) -> None:
@@ -707,7 +710,7 @@ class WorkflowTests(unittest.TestCase):
 
     def test_ssh_http_linux_evidence_blocks_credentialed_windows_prompt_and_stale_approval(self) -> None:
         self.runtime.set_operator_intent("credential_validation")
-        self.runtime.set_known_credentials(username="anne", password="secret", domain="PIRATE")
+        self.runtime.set_known_credentials(username=fixture_secret("anne"), password=fixture_secret("secret"), domain="PIRATE")
         self.runtime.store.insert_evidence(
             EvidenceRecord(
                 target_id=self.target.id,
@@ -751,7 +754,7 @@ class WorkflowTests(unittest.TestCase):
 
     def test_linux_samba_on_445_does_not_plan_windows_credentialed_access(self) -> None:
         self.runtime.set_operator_intent("credential_validation")
-        self.runtime.set_known_credentials(username="anne", password="secret", domain="")
+        self.runtime.set_known_credentials(username=fixture_secret("anne"), password=fixture_secret("secret"), domain="")
         self.runtime.store.insert_evidence(
             EvidenceRecord(
                 target_id=self.target.id,
@@ -784,7 +787,7 @@ class WorkflowTests(unittest.TestCase):
 
     def test_windows_credentialed_access_requires_intent_and_windows_surface_evidence(self) -> None:
         self.runtime.set_operator_intent("recon_only")
-        self.runtime.set_known_credentials(username="anne", password="secret", domain="PIRATE")
+        self.runtime.set_known_credentials(username=fixture_secret("anne"), password=fixture_secret("secret"), domain="PIRATE")
         service_evidence = EvidenceRecord(
             target_id=self.target.id,
             type=EvidenceType.TOOL_OUTPUT,

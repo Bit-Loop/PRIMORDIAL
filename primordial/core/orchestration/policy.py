@@ -3,31 +3,30 @@ from __future__ import annotations
 from typing import Callable
 
 from primordial.core.config import AutonomySettings
-from primordial.core.domain.enums import (
-    AgentRole,
-    ApprovalAction,
-    AutonomyMode,
-    MethodologyPhase,
-    PolicyVerdict,
-    ProviderRoute,
-    RiskTier,
-    ScopeProfile,
-    SideEffectLevel,
-    TaskStatus,
-    TaskKind,
-)
+from primordial.core.domain.enums import ApprovalAction, AutonomyMode, PolicyVerdict, RiskTier, SideEffectLevel
+from primordial.core.domain.enums import TaskStatus
 from primordial.core.domain.models import PolicyDecision, PrimitiveManifest, Target, Task
+from primordial.core.orchestration.policy_rules import (
+    SECRET_FIELD_ALIASES,
+    credential_usage_class,
+    estimated_remote_cost,
+    evaluate_agent_safety_gate,
+    evaluate_high_risk_task,
+    evaluate_primitive_bounds,
+    evaluate_remote_premium_approval_gate,
+    evaluate_remote_premium_budget,
+    evaluate_remote_premium_task,
+    evaluate_task_bounds,
+    primitive_action_policy,
+    secret_service_key,
+    secrets_available,
+    task_action_policy,
+    uses_local_chat_wrapper,
+)
 
 
 class PolicyEngine:
-    SECRET_FIELD_ALIASES = {
-        "DISCORD_WEBHOOK_URL": ("discord", "webhook_url"),
-        "NOTION_API_KEY": ("notion", "api_key"),
-        "NOTION_PARENT_PAGE_ID": ("notion", "parent_page_id"),
-        "NOTION_VERSION": ("notion", "version"),
-        "PRIMORDIAL_CAIDO_GRAPHQL_URL": ("caido", "graphql_url"),
-        "PRIMORDIAL_CAIDO_API_TOKEN": ("caido", "api_token"),
-    }
+    SECRET_FIELD_ALIASES = SECRET_FIELD_ALIASES
 
     def __init__(
         self,
@@ -49,107 +48,17 @@ class PolicyEngine:
                 target_id=task.target_id,
                 task_id=task.id,
             )
-
-        uses_local_chat_wrapper = self._uses_local_chat_wrapper(task)
-        if (
-            task.provider_route == ProviderRoute.REMOTE_PREMIUM
-            and not self.settings.allow_remote_premium
-            and not uses_local_chat_wrapper
-        ):
-            if (
-                task.kind == TaskKind.REVIEW_PREMIUM_ESCALATION
-                and task.metadata.get("remote_premium_policy_approval_required")
-                and not task.metadata.get("remote_premium_operator_approved")
-            ):
-                return PolicyDecision(
-                    action_kind=task.kind.value,
-                    verdict=PolicyVerdict.NEEDS_APPROVAL,
-                    reason="remote premium provider use is disabled by policy and requires explicit operator approval",
-                    target_id=task.target_id,
-                    task_id=task.id,
-                    metadata={"remote_premium_policy_approval_required": True},
-                )
-            if (
-                task.kind == TaskKind.REVIEW_PREMIUM_ESCALATION
-                and task.metadata.get("remote_premium_policy_approval_required")
-                and task.metadata.get("remote_premium_operator_approved")
-            ):
-                pass
-            else:
-                return PolicyDecision(
-                    action_kind=task.kind.value,
-                    verdict=PolicyVerdict.DENY,
-                    reason="remote premium provider use is disabled by policy",
-                    target_id=task.target_id,
-                    task_id=task.id,
-                )
-
-        if (
-            task.provider_route == ProviderRoute.REMOTE_PREMIUM
-            and self.daily_remote_cost_loader is not None
-            and not uses_local_chat_wrapper
-        ):
-            try:
-                daily_spent = float(self.daily_remote_cost_loader())
-            except Exception as exc:  # noqa: BLE001 - remote spend uncertainty must fail closed
-                return PolicyDecision(
-                    action_kind=task.kind.value,
-                    verdict=PolicyVerdict.DENY,
-                    reason="daily remote budget could not be read from the cost ledger",
-                    target_id=task.target_id,
-                    task_id=task.id,
-                    metadata={"error": str(exc), "daily_budget_usd": self.settings.daily_remote_budget},
-                )
-            estimated_cost = self._estimated_remote_cost(task)
-            if daily_spent >= self.settings.daily_remote_budget or daily_spent + estimated_cost > self.settings.daily_remote_budget:
-                return PolicyDecision(
-                    action_kind=task.kind.value,
-                    verdict=PolicyVerdict.DENY,
-                    reason=(
-                        "daily remote budget exhausted: "
-                        f"${daily_spent:.2f} spent + ${estimated_cost:.2f} estimated > "
-                        f"${self.settings.daily_remote_budget:.2f}"
-                    ),
-                    target_id=task.target_id,
-                    task_id=task.id,
-                    metadata={
-                        "daily_spent_usd": daily_spent,
-                        "estimated_task_cost_usd": estimated_cost,
-                        "daily_budget_usd": self.settings.daily_remote_budget,
-                    },
-                )
-
+        remote_gate = self._evaluate_remote_premium_task(task, self._uses_local_chat_wrapper(task))
+        if remote_gate is not None:
+            return remote_gate
         action_policy = self._task_action_policy(task, target)
         bounded_gate = self._evaluate_task_bounds(task, action_policy)
         if bounded_gate is not None:
             bounded_gate.metadata.setdefault("action_policy", action_policy)
             return bounded_gate
-
-        risky_phase = task.phase in {MethodologyPhase.EXPLOITATION, MethodologyPhase.CHAINING}
-        high_risk = task.risk_tier in {RiskTier.HIGH, RiskTier.CRITICAL}
-        if risky_phase or high_risk:
-            if not self.settings.allow_exploitative_actions:
-                return PolicyDecision(
-                    action_kind=task.kind.value,
-                    verdict=PolicyVerdict.NEEDS_APPROVAL,
-                    reason="exploitative or high-risk task requires approval because exploitative actions are disabled",
-                    target_id=task.target_id,
-                    task_id=task.id,
-                    metadata={"mode": self.settings.mode.value, "action_policy": action_policy},
-                )
-            agent_gate = self._evaluate_agent_safety_gate(task, target)
-            if agent_gate is not None:
-                agent_gate.metadata.setdefault("action_policy", action_policy)
-                return agent_gate
-            return PolicyDecision(
-                action_kind=task.kind.value,
-                verdict=PolicyVerdict.NEEDS_APPROVAL,
-                reason="task is gated by autonomy mode, risk policy, or missing agent safety approval",
-                target_id=task.target_id,
-                task_id=task.id,
-                metadata={"mode": self.settings.mode.value, "action_policy": action_policy},
-            )
-
+        risk_gate = self._evaluate_high_risk_task(task, target, action_policy)
+        if risk_gate is not None:
+            return risk_gate
         return PolicyDecision(
             action_kind=task.kind.value,
             verdict=PolicyVerdict.ALLOW,
@@ -157,85 +66,6 @@ class PolicyEngine:
             target_id=task.target_id,
             task_id=task.id,
             metadata={"mode": self.settings.mode.value, "action_policy": action_policy},
-        )
-
-    def _evaluate_agent_safety_gate(self, task: Task, target: Target | None) -> PolicyDecision | None:
-        if not self.settings.allow_agent_safety_approval:
-            return None
-        if self.settings.mode not in {AutonomyMode.SUPERVISED_AUTO, AutonomyMode.HIGH_AUTONOMY}:
-            return None
-        if target is None:
-            return None
-        if target.profile == ScopeProfile.HACKERONE and not target.metadata.get("allow_agent_poc_execution"):
-            return None
-        approval = task.metadata.get("agent_safety_approval")
-        if not isinstance(approval, dict):
-            return None
-        reviewer = str(approval.get("reviewer_agent", ""))
-        if reviewer not in self.settings.approved_reviewer_agents:
-            return None
-        checks = {
-            "approved": approval.get("approved") is True,
-            "scope_verified": approval.get("scope_verified") is True,
-            "bounded_execution": approval.get("bounded_execution") is True,
-            "dos_risk_false": approval.get("dos_risk") is False,
-            "ddos_risk_false": approval.get("ddos_risk") is False,
-            "evidence_linked": bool(approval.get("evidence_refs") or task.evidence_refs),
-        }
-        try:
-            timeout_seconds = int(approval.get("timeout_seconds", 0))
-            max_requests = int(approval.get("max_requests", 0))
-        except (TypeError, ValueError):
-            return None
-        checks["timeout_bounded"] = 0 < timeout_seconds <= self.settings.max_poc_timeout_seconds
-        checks["request_bounded"] = 0 < max_requests <= self.settings.max_poc_requests
-        if not all(checks.values()):
-            return None
-        if self.settings.mode == AutonomyMode.SUPERVISED_AUTO and task.metadata.get("operator_approved") is not True:
-            return PolicyDecision(
-                action_kind=task.kind.value,
-                verdict=PolicyVerdict.NEEDS_APPROVAL,
-                reason="supervised-auto exploitative or high-risk task requires operator approval in addition to agent safety approval",
-                target_id=task.target_id,
-                task_id=task.id,
-                metadata={
-                    "mode": self.settings.mode.value,
-                    "approval_source": reviewer,
-                    "safety_checks": checks,
-                    "timeout_seconds": timeout_seconds,
-                    "max_requests": max_requests,
-                    "operator_approval_required": True,
-                },
-            )
-        return PolicyDecision(
-            action_kind=task.kind.value,
-            verdict=PolicyVerdict.ALLOW,
-            reason="task allowed by explicit agent safety approval and bounded non-DoS execution policy",
-            target_id=task.target_id,
-            task_id=task.id,
-            metadata={
-                "mode": self.settings.mode.value,
-                "approval_source": reviewer,
-                "safety_checks": checks,
-                "timeout_seconds": timeout_seconds,
-                "max_requests": max_requests,
-            },
-        )
-
-    def _estimated_remote_cost(self, task: Task) -> float:
-        raw = task.metadata.get("estimated_remote_cost_usd", 0.0)
-        try:
-            return max(0.0, float(raw))
-        except (TypeError, ValueError):
-            return 0.0
-
-    def _uses_local_chat_wrapper(self, task: Task) -> bool:
-        return (
-            task.provider_route == ProviderRoute.REMOTE_PREMIUM
-            and task.kind == TaskKind.REVIEW_PREMIUM_ESCALATION
-            and task.role == AgentRole.CLAUDE_REVIEWER
-            and task.metadata.get("local_chat_wrapper") == "agent_chat_api"
-            and task.metadata.get("remote_premium_local_wrapper") is True
         )
 
     def evaluate_primitive(
@@ -252,7 +82,6 @@ class PolicyEngine:
                 target_id=task.target_id,
                 task_id=task.id,
             )
-
         if task.phase not in primitive.allowed_phases:
             return PolicyDecision(
                 action_kind=primitive.name,
@@ -262,27 +91,20 @@ class PolicyEngine:
                 task_id=task.id,
                 metadata={"phase": task.phase.value},
             )
-
         action_policy = self._primitive_action_policy(task, target, primitive)
         bounded_gate = self._evaluate_primitive_bounds(task, primitive, action_policy)
         if bounded_gate is not None:
             bounded_gate.metadata.setdefault("action_policy", action_policy)
             return bounded_gate
-
-        if primitive.risk_tier in {RiskTier.HIGH, RiskTier.CRITICAL} and self.settings.mode in {
-            AutonomyMode.MANUAL,
-            AutonomyMode.ASSISTED,
-        }:
-            if not (task.metadata.get("operator_approved") is True and primitive.side_effect_level == SideEffectLevel.READ_ONLY):
-                return PolicyDecision(
-                    action_kind=primitive.name,
-                    verdict=PolicyVerdict.NEEDS_APPROVAL,
-                    reason="high-risk primitive requires approval in the current autonomy mode",
-                    target_id=task.target_id,
-                    task_id=task.id,
-                    metadata={"action_policy": action_policy},
-                )
-
+        if self._high_risk_primitive_needs_approval(task, primitive):
+            return PolicyDecision(
+                action_kind=primitive.name,
+                verdict=PolicyVerdict.NEEDS_APPROVAL,
+                reason="high-risk primitive requires approval in the current autonomy mode",
+                target_id=task.target_id,
+                task_id=task.id,
+                metadata={"action_policy": action_policy},
+            )
         return PolicyDecision(
             action_kind=primitive.name,
             verdict=PolicyVerdict.ALLOW,
@@ -311,26 +133,34 @@ class PolicyEngine:
             task.status = TaskStatus.CANCELLED
         return task
 
+    def _evaluate_remote_premium_task(self, task: Task, local_wrapper: bool) -> PolicyDecision | None:
+        return evaluate_remote_premium_task(self.settings, task, local_wrapper, self.daily_remote_cost_loader)
+
+    def _evaluate_remote_premium_approval_gate(self, task: Task) -> PolicyDecision | None:
+        return evaluate_remote_premium_approval_gate(task)
+
+    def _evaluate_remote_premium_budget(self, task: Task, daily_spent: float) -> PolicyDecision | None:
+        return evaluate_remote_premium_budget(self.settings, task, daily_spent)
+
+    def _evaluate_high_risk_task(
+        self,
+        task: Task,
+        target: Target | None,
+        action_policy: dict[str, object],
+    ) -> PolicyDecision | None:
+        return evaluate_high_risk_task(self.settings, task, target, action_policy)
+
+    def _evaluate_agent_safety_gate(self, task: Task, target: Target | None) -> PolicyDecision | None:
+        return evaluate_agent_safety_gate(self.settings, task, target)
+
+    def _estimated_remote_cost(self, task: Task) -> float:
+        return estimated_remote_cost(task)
+
+    def _uses_local_chat_wrapper(self, task: Task) -> bool:
+        return uses_local_chat_wrapper(task)
+
     def _task_action_policy(self, task: Task, target: Target | None) -> dict[str, object]:
-        risky = task.phase in {MethodologyPhase.EXPLOITATION, MethodologyPhase.CHAINING} or task.risk_tier in {
-            RiskTier.HIGH,
-            RiskTier.CRITICAL,
-        }
-        target_metadata = target.metadata if target else {}
-        explicit_time_cap = "timeout_seconds" in task.metadata or "policy_timeout_seconds" in target_metadata
-        default_timeout = self.settings.max_poc_timeout_seconds if risky else max(180, self.settings.max_poc_timeout_seconds)
-        default_requests = self.settings.max_poc_requests if risky else max(25, self.settings.max_poc_requests)
-        default_concurrency = self.settings.high_risk_concurrency if risky else self.settings.hot_path_concurrency
-        return {
-            "target_profile": target.profile.value if target else None,
-            "request_cap": int(task.metadata.get("max_requests", target_metadata.get("policy_max_requests", default_requests)) or default_requests),
-            "time_cap_seconds": int(task.metadata.get("timeout_seconds", target_metadata.get("policy_timeout_seconds", default_timeout)) or default_timeout),
-            "explicit_time_cap": explicit_time_cap,
-            "rate_window_seconds": int(target_metadata.get("policy_rate_window_seconds", 60 if target and target.profile == ScopeProfile.HACK_THE_BOX else 300)),
-            "concurrency_ceiling": int(target_metadata.get("policy_concurrency_ceiling", default_concurrency) or default_concurrency),
-            "side_effect_class": str(task.metadata.get("side_effect_class", "exploitative" if risky else "read_only")),
-            "credential_usage_class": str(task.metadata.get("credential_usage_class", "none")),
-        }
+        return task_action_policy(self.settings, task, target)
 
     def _primitive_action_policy(
         self,
@@ -338,52 +168,10 @@ class PolicyEngine:
         target: Target | None,
         primitive: PrimitiveManifest,
     ) -> dict[str, object]:
-        task_policy = self._task_action_policy(task, target)
-        max_requests = int(
-            primitive.metadata.get(
-                "max_requests",
-                task.metadata.get("max_requests", target.metadata.get("policy_max_requests") if target else task_policy["request_cap"]),
-            )
-            or task_policy["request_cap"]
-        )
-        return {
-            **task_policy,
-            "primitive": primitive.name,
-            "primitive_timeout_seconds": primitive.timeout_seconds,
-            "request_cap": max_requests,
-            "side_effect_class": primitive.side_effect_level.value,
-            "credential_usage_class": self._credential_usage_class(primitive.required_secrets),
-            "required_secrets": list(primitive.required_secrets),
-        }
+        return primitive_action_policy(self.settings, task, target, primitive)
 
     def _evaluate_task_bounds(self, task: Task, action_policy: dict[str, object]) -> PolicyDecision | None:
-        timeout_seconds = int(action_policy["time_cap_seconds"])
-        request_cap = int(action_policy["request_cap"])
-        if timeout_seconds <= 0 or request_cap <= 0:
-            return PolicyDecision(
-                action_kind=task.kind.value,
-                verdict=PolicyVerdict.DENY,
-                reason="task action-policy bounds are invalid",
-                target_id=task.target_id,
-                task_id=task.id,
-            )
-        if task.risk_tier in {RiskTier.HIGH, RiskTier.CRITICAL} and timeout_seconds > self.settings.max_poc_timeout_seconds:
-            return PolicyDecision(
-                action_kind=task.kind.value,
-                verdict=PolicyVerdict.NEEDS_APPROVAL,
-                reason="task exceeds the configured high-risk timeout ceiling",
-                target_id=task.target_id,
-                task_id=task.id,
-            )
-        if task.risk_tier in {RiskTier.HIGH, RiskTier.CRITICAL} and request_cap > self.settings.max_poc_requests:
-            return PolicyDecision(
-                action_kind=task.kind.value,
-                verdict=PolicyVerdict.NEEDS_APPROVAL,
-                reason="task exceeds the configured high-risk request ceiling",
-                target_id=task.target_id,
-                task_id=task.id,
-            )
-        return None
+        return evaluate_task_bounds(self.settings, task, action_policy)
 
     def _evaluate_primitive_bounds(
         self,
@@ -391,72 +179,26 @@ class PolicyEngine:
         primitive: PrimitiveManifest,
         action_policy: dict[str, object],
     ) -> PolicyDecision | None:
-        required_secrets = list(primitive.required_secrets)
-        if required_secrets and not self._secrets_available(required_secrets):
-            return PolicyDecision(
-                action_kind=primitive.name,
-                verdict=PolicyVerdict.NEEDS_APPROVAL,
-                reason="primitive requires credentials or integration secrets that are not configured",
-                target_id=task.target_id,
-                task_id=task.id,
-            )
-        if (
-            primitive.timeout_seconds > int(action_policy["time_cap_seconds"])
-            and (
-                bool(action_policy.get("explicit_time_cap"))
-                or task.risk_tier in {RiskTier.HIGH, RiskTier.CRITICAL}
-                or primitive.side_effect_level in {SideEffectLevel.MUTATING, SideEffectLevel.EXPLOITATIVE}
-            )
-        ):
-            return PolicyDecision(
-                action_kind=primitive.name,
-                verdict=PolicyVerdict.NEEDS_APPROVAL,
-                reason="primitive timeout exceeds the target action-policy time cap",
-                target_id=task.target_id,
-                task_id=task.id,
-            )
-        if primitive.side_effect_level in {SideEffectLevel.MUTATING, SideEffectLevel.EXPLOITATIVE}:
-            if self.settings.mode in {AutonomyMode.MANUAL, AutonomyMode.ASSISTED}:
-                return PolicyDecision(
-                    action_kind=primitive.name,
-                    verdict=PolicyVerdict.NEEDS_APPROVAL,
-                    reason="mutating or exploitative primitive requires approval in the current autonomy mode",
-                    target_id=task.target_id,
-                    task_id=task.id,
-                )
-        return None
+        return evaluate_primitive_bounds(
+            self.settings,
+            self.credentials_status_loader,
+            task,
+            primitive,
+            action_policy,
+        )
 
     def _secrets_available(self, required_secrets: list[str]) -> bool:
-        if not required_secrets:
-            return True
-        if self.credentials_status_loader is None:
-            return False
-        payload = self.credentials_status_loader()
-        services = payload.get("services", {}) if isinstance(payload, dict) else {}
-        if not isinstance(services, dict):
-            return False
-        for secret in required_secrets:
-            service_key = self._secret_service_key(secret)
-            if service_key is None:
-                return False
-            service, key = service_key
-            entry = services.get(service, {})
-            status = entry.get(key, {}) if isinstance(entry, dict) else {}
-            if not isinstance(status, dict) or not status.get("configured"):
-                return False
-        return True
+        return secrets_available(self.credentials_status_loader, required_secrets)
 
     def _secret_service_key(self, secret: str) -> tuple[str, str] | None:
-        if "." in secret:
-            service, key = secret.split(".", 1)
-            return service, key
-        return self.SECRET_FIELD_ALIASES.get(secret)
+        return secret_service_key(secret)
 
     def _credential_usage_class(self, required_secrets: list[str]) -> str:
-        if not required_secrets:
-            return "none"
-        if any(secret.startswith("lab.") for secret in required_secrets):
-            return "lab"
-        if any(secret.startswith("caido.") for secret in required_secrets):
-            return "integration"
-        return "external_secret"
+        return credential_usage_class(required_secrets)
+
+    def _high_risk_primitive_needs_approval(self, task: Task, primitive: PrimitiveManifest) -> bool:
+        if primitive.risk_tier not in {RiskTier.HIGH, RiskTier.CRITICAL}:
+            return False
+        if self.settings.mode not in {AutonomyMode.MANUAL, AutonomyMode.ASSISTED}:
+            return False
+        return not (task.metadata.get("operator_approved") is True and primitive.side_effect_level == SideEffectLevel.READ_ONLY)
