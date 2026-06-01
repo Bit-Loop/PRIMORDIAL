@@ -7,6 +7,31 @@ from primordial.core.quality.structure import audit_structure
 
 
 class WorkflowStructureQualityTests(unittest.TestCase):
+    def test_workflow_module_and_class_are_bounded_after_composition_extraction(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+
+        audit = audit_structure(root)
+
+        records = [
+            record
+            for record in audit.records
+            if record.path == "primordial/core/orchestration/workflow.py"
+            and record.kind in {"module", "class"}
+        ]
+        self.assertEqual(records, [])
+
+    def test_workflow_composition_modules_have_no_structure_violations(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+
+        audit = audit_structure(root)
+
+        records = [
+            record
+            for record in audit.records
+            if record.path.startswith("primordial/core/orchestration/workflow_")
+        ]
+        self.assertEqual(records, [])
+
     def test_evaluate_target_methodology_state_is_not_oversized(self) -> None:
         root = Path(__file__).resolve().parents[1]
 
