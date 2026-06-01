@@ -20,12 +20,14 @@ from primordial.core.domain.models import EvidenceRecord, Target, Task
 from primordial.core.intent.models import KerberosPolicy, OperatorIntentPolicy
 from primordial.core.intent import OperatorIntentRegistry
 from primordial.core.primitives.catalog import PrimitiveCatalog
-from tests.support import write_scope_file
+from tests.support import fixture_ip, write_scope_file
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MANIFESTS_DIR = REPO_ROOT / "manifests"
 CATALOG_DIR = REPO_ROOT / "catalog"
+LAB_IP = fixture_ip(10, 10, 10, 10)
+INTERPOLATION_IP = fixture_ip(10, 0, 0, 1)
 
 
 class OperatorIntentCatalogAutonomyTests(unittest.TestCase):
@@ -154,7 +156,7 @@ class OperatorIntentCatalogAutonomyTests(unittest.TestCase):
                         "handle": "target.htb",
                         "display_name": "Target Fixture",
                         "in_scope": True,
-                        "assets": [{"asset": "10.10.10.10", "asset_type": "ip"}],
+                        "assets": [{"asset": LAB_IP, "asset_type": "ip"}],
                     }
                 ],
             )
@@ -176,9 +178,9 @@ class OperatorIntentCatalogAutonomyTests(unittest.TestCase):
                     metadata={
                         "kind": "tcp_service_discovery",
                         "open_services": [
-                            {"host": "10.10.10.10", "port": 80, "service": "http", "banner": "Microsoft-IIS/10.0"},
-                            {"host": "10.10.10.10", "port": 88, "service": "kerberos", "banner": ""},
-                            {"host": "10.10.10.10", "port": 445, "service": "smb", "banner": ""},
+                            {"host": LAB_IP, "port": 80, "service": "http", "banner": "Microsoft-IIS/10.0"},
+                            {"host": LAB_IP, "port": 88, "service": "kerberos", "banner": ""},
+                            {"host": LAB_IP, "port": 445, "service": "smb", "banner": ""},
                         ],
                     },
                 )
@@ -205,7 +207,7 @@ class OperatorIntentCatalogAutonomyTests(unittest.TestCase):
             config.ensure_directories()
             scope_path = write_scope_file(
                 root,
-                targets=[{"handle": "target.htb", "assets": [{"asset": "10.10.10.10", "asset_type": "ip"}]}],
+                targets=[{"handle": "target.htb", "assets": [{"asset": LAB_IP, "asset_type": "ip"}]}],
             )
             runtime = PrimordialRuntime(config)
             runtime.initialize()
@@ -233,7 +235,7 @@ class OperatorIntentCatalogAutonomyTests(unittest.TestCase):
                     "targets": [
                         {
                             "handle": "target.htb",
-                            "assets": [{"asset": "10.10.10.10", "asset_type": "ip"}],
+                            "assets": [{"asset": LAB_IP, "asset_type": "ip"}],
                         }
                     ],
                 },
@@ -292,7 +294,7 @@ class OperatorIntentCatalogAutonomyTests(unittest.TestCase):
             config.ensure_directories()
             scope_path = write_scope_file(
                 root,
-                targets=[{"handle": "target.htb", "assets": [{"asset": "10.10.10.10", "asset_type": "ip"}]}],
+                targets=[{"handle": "target.htb", "assets": [{"asset": LAB_IP, "asset_type": "ip"}]}],
             )
             runtime = PrimordialRuntime(config)
             runtime.initialize()
@@ -323,9 +325,9 @@ class OperatorIntentCatalogAutonomyTests(unittest.TestCase):
         loaded = playbooks.load()
         self.assertTrue(any(item.id == "recon.ad_enumeration" for item in loaded))
         command = playbooks.get("recon.ad_enumeration").commands[0]  # type: ignore[union-attr]
-        self.assertEqual(command.render_argv("/usr/bin/ldapsearch", {"target": {"host": "10.0.0.1"}})[0], "/usr/bin/ldapsearch")
+        self.assertEqual(command.render_argv("/usr/bin/ldapsearch", {"target": {"host": INTERPOLATION_IP}})[0], "/usr/bin/ldapsearch")
         with self.assertRaises(CatalogValidationError):
-            interpolate_argv(["{{ target.missing }}"], {"target": {"host": "10.0.0.1"}})
+            interpolate_argv(["{{ target.missing }}"], {"target": {"host": INTERPOLATION_IP}})
 
         capabilities = CapabilityCatalog(CATALOG_DIR / "capabilities" / "semantics.yaml")
         capabilities.load()
