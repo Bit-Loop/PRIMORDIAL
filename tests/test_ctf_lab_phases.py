@@ -129,6 +129,7 @@ class CTFLabPhaseCatalogTests(unittest.TestCase):
             ),
         )
         self.assertIn("github_pr:37", phase.evidence_refs)
+        self.assertIn("github_pr:38", phase.evidence_refs)
         self.assertIn("evidence:local-container:25b6e4a57ca5f06a", phase.evidence_refs)
         self.assertIn("evidence:local-container:0b034b3310edd0bb", phase.evidence_refs)
         self.assertIn("evidence:cicd-goat-compose-reset-teardown", phase.evidence_refs)
