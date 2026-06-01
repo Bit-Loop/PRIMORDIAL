@@ -90,7 +90,7 @@ phases:
       - phase_targets_loaded_from_manifests
       - scoring_results_include_evidence_refs
     validation_commands:
-      - python3 -m unittest tests.test_ctf_harness_phase_targets tests.test_ctf_lab_phases -q
+      - python3 -m unittest tests.test_ctf_harness_phase_targets tests.test_ctf_harness_phase_scoring tests.test_ctf_lab_phases -q
     evidence_refs:
       - github_pr:36
   - number: 4

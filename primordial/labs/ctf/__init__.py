@@ -22,7 +22,11 @@ from primordial.labs.ctf.patches import PatchProposal
 from primordial.labs.ctf.phase_targets import CTFPhaseTargetSet, load_ctf_phase_target_manifests
 from primordial.labs.ctf.phases import CTFLabPhase, CTFLabPhaseCatalog, load_ctf_lab_phase_catalog
 from primordial.labs.ctf.postmortem import PostmortemRecord
-from primordial.labs.ctf.scoring import compute_scoring_summary
+from primordial.labs.ctf.scoring import (
+    ScoringEvidenceResult,
+    compute_scoring_summary,
+    validate_scoring_results_evidence_refs,
+)
 from primordial.labs.ctf.sessions import SolveSession
 from primordial.labs.ctf.targets import (
     CTFTarget,
@@ -59,6 +63,7 @@ __all__ = [
     "PatchProposal",
     "PostmortemRecord",
     "ResetMetadata",
+    "ScoringEvidenceResult",
     "SolveSession",
     "SolveVerificationResult",
     "SolveVerifier",
@@ -66,6 +71,7 @@ __all__ = [
     "VulnerabilityMetadata",
     "VulhubEnvironmentProof",
     "compute_scoring_summary",
+    "validate_scoring_results_evidence_refs",
     "load_ctf_target_manifest",
     "load_ctf_target_manifest_file",
     "load_ctf_lab_phase_catalog",
