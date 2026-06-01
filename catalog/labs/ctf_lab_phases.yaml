@@ -183,7 +183,7 @@ phases:
   - number: 8
     id: phase_8_dreadgoad_ctf_dojo_nyu_ctf_bench
     name: Phase 8 DreadGOAD/CTF-Dojo/NYU CTF Bench
-    status: not_started
+    status: in_progress
     target_families:
       - dreadgoad
       - ctf_dojo
@@ -196,4 +196,6 @@ phases:
       - benchmark_environment_verified
       - target_rotation_and_reset_verified
       - aggregate_scoring_uses_evidence_backed_results
-    validation_commands: []
+    validation_commands:
+      - python3 -m unittest tests.test_ctf_harness_benchmark_phase tests.test_ctf_lab_phases -q
+      - python3 -m primordial.core.quality.hardcode

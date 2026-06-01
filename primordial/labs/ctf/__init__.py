@@ -5,6 +5,7 @@ from primordial.labs.ctf.applicability import (
     validate_vulhub_exploit_applicability,
 )
 from primordial.labs.ctf.benchmark import BenchmarkRun
+from primordial.labs.ctf.benchmark_phase import BenchmarkPhaseControlResult, verify_benchmark_phase_controls
 from primordial.labs.ctf.cicd import CICDGoatPhaseControlResult, verify_cicd_goat_phase_controls
 from primordial.labs.ctf.cloudgoat import CloudGoatPhaseControlResult, verify_cloudgoat_phase_controls
 from primordial.labs.ctf.closed_book import ClosedBookPackage
@@ -20,6 +21,7 @@ from primordial.labs.ctf.environment import (
     verify_local_ad_lab_environment,
     verify_local_cluster_environment,
     verify_local_container_environment,
+    verify_benchmark_environment,
     verify_sandbox_cloud_environment,
 )
 from primordial.labs.ctf.failures import FailureAnalysis
@@ -52,6 +54,7 @@ from primordial.labs.ctf.verification import SolveVerificationResult, SolveVerif
 
 __all__ = [
     "BenchmarkRun",
+    "BenchmarkPhaseControlResult",
     "CICDGoatPhaseControlResult",
     "CTFTarget",
     "CTFHarnessIntegrity",
@@ -87,6 +90,7 @@ __all__ = [
     "VulhubEnvironmentProof",
     "compute_scoring_summary",
     "validate_scoring_results_evidence_refs",
+    "verify_benchmark_phase_controls",
     "verify_cicd_goat_phase_controls",
     "verify_cloudgoat_phase_controls",
     "verify_goad_phase_controls",
@@ -99,6 +103,7 @@ __all__ = [
     "probe_local_container_environment",
     "probe_vulhub_cve_environment",
     "validate_vulhub_exploit_applicability",
+    "verify_benchmark_environment",
     "verify_phase_local_lab_environment",
     "verify_local_ad_lab_environment",
     "verify_local_cluster_environment",

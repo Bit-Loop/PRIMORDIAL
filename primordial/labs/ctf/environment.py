@@ -17,10 +17,12 @@ LOCAL_CONTAINER_MODES = frozenset({"container", "docker", "podman"})
 LOCAL_CLUSTER_MODES = frozenset({"kubernetes", "kind", "k3d", "minikube", "local_cluster"})
 LOCAL_AD_LAB_MODES = frozenset({"active_directory", "ad_lab", "goad", "goad_light"})
 SANDBOX_CLOUD_MODES = frozenset({"cloud", "sandbox_cloud", "terraform"})
+BENCHMARK_MODES = frozenset({"benchmark", "benchmark_fixture", "ctf_benchmark"})
 LOCAL_CONTAINER_EXIT_GATES = ("local_container_environment_verified",)
 LOCAL_CLUSTER_EXIT_GATES = ("local_cluster_environment_verified",)
 LOCAL_AD_LAB_EXIT_GATES = ("local_ad_lab_environment_verified",)
 SANDBOX_CLOUD_EXIT_GATES = ("sandbox_cloud_account_verified",)
+BENCHMARK_EXIT_GATES = ("benchmark_environment_verified",)
 PHASE_LOCAL_LAB_EXIT_GATES = ("local_lab_environment_verified",)
 _SERVER_PRODUCT_VERSION = re.compile(r"(?P<product>[A-Za-z][A-Za-z0-9_.-]*)/(?P<version>[0-9][A-Za-z0-9_.-]*)")
 
@@ -276,6 +278,53 @@ def verify_sandbox_cloud_environment(
     )
 
 
+def verify_benchmark_environment(
+    target: CTFTarget,
+    *,
+    observed_assets: list[str] | tuple[str, ...],
+    evidence_refs: list[str] | tuple[str, ...],
+    reset_evidence_ref: str,
+    profile: str,
+    target_rotation: list[str] | tuple[str, ...],
+    observations: Mapping[str, Any] | None = None,
+) -> EnvironmentProof:
+    payload = {
+        "target_id": target.id,
+        "observed_assets": observed_assets,
+        "evidence_refs": evidence_refs,
+        "reset_evidence_ref": reset_evidence_ref,
+        "profile": profile,
+        "target_rotation": target_rotation,
+        "observations": dict(observations or {}),
+    }
+    reject_hidden_flag_material(payload, path="ctf_benchmark_environment_proof", label="EnvironmentProof")
+    _validate_benchmark_target(target)
+    checked_profile = _profile(target, profile)
+    checked_assets = _observed_assets(target, observed_assets)
+    checked_rotation = _rotation(target_rotation)
+    missing_rotation = [item for item in checked_rotation if item not in target.scope.assets]
+    if missing_rotation:
+        raise ValueError("EnvironmentProof benchmark target_rotation must stay in lab scope")
+    checked_refs = _evidence_ref_tuple(evidence_refs)
+    checked_reset_ref = _evidence_ref(reset_evidence_ref, "reset_evidence_ref")
+    if checked_reset_ref not in checked_refs:
+        raise ValueError("EnvironmentProof reset_evidence_ref must be included in evidence_refs")
+    provisioning = _provisioning_payload(target)
+    provisioning["target_rotation"] = list(checked_rotation)
+    return EnvironmentProof(
+        target_id=target.id,
+        status="verified",
+        profile=checked_profile,
+        environment_kind="benchmark_environment",
+        observed_assets=checked_assets,
+        evidence_refs=checked_refs,
+        reset_evidence_ref=checked_reset_ref,
+        exit_gates=BENCHMARK_EXIT_GATES,
+        provisioning=provisioning,
+        observations=dict(observations or {}),
+    )
+
+
 def probe_local_container_environment(
     target: CTFTarget,
     *,
@@ -421,6 +470,16 @@ def _validate_sandbox_cloud_target(target: CTFTarget) -> None:
         raise ValueError("EnvironmentProof sandbox cloud target requires account boundary metadata")
 
 
+def _validate_benchmark_target(target: CTFTarget) -> None:
+    mode = _token(target.reset.mode or target.platform)
+    if mode not in BENCHMARK_MODES:
+        raise ValueError("EnvironmentProof target must use benchmark provisioning")
+    if len(target.scope.assets) < 2:
+        raise ValueError("EnvironmentProof benchmark target requires at least two scoped assets")
+    if not (target.scope.network or target.reset.network):
+        raise ValueError("EnvironmentProof benchmark target requires rotation metadata")
+
+
 def _namespace(value: str) -> str:
     namespace = str(value or "").strip()
     if not namespace:
@@ -453,6 +512,17 @@ def _regions(value: list[str] | tuple[str, ...]) -> tuple[str, ...]:
     if len(set(regions)) != len(regions):
         raise ValueError("EnvironmentProof duplicate sandbox cloud region")
     return regions
+
+
+def _rotation(value: list[str] | tuple[str, ...]) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("EnvironmentProof target_rotation must be a list or tuple")
+    rotation = tuple(str(item or "").strip() for item in value if str(item or "").strip())
+    if len(rotation) < 2:
+        raise ValueError("EnvironmentProof target_rotation requires at least two targets")
+    if len(set(rotation)) != len(rotation):
+        raise ValueError("EnvironmentProof duplicate target_rotation entry")
+    return rotation
 
 
 def _profile(target: CTFTarget, profile: str) -> str:
