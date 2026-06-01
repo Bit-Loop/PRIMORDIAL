@@ -1,0 +1,215 @@
+id: ai_agent_orchestration_tui_prd
+source_path: ai-agent-prd.md
+status: draft_v0_migrated
+last_updated: "2026-05-04"
+overview:
+  - local_first_cli_tui_application
+  - methodology_driven_authorized_security_testing
+  - manages_tools_notes_context_evidence_and_long_running_execution
+  - avoids_single_ever_growing_prompt_session
+problem_statement:
+  - raw_tool_surface_overwhelms_models
+  - context_growth_causes_quality_collapse
+  - unstructured_notes_are_hard_to_query
+  - long_running_sessions_drift_stall_or_loop
+  - scope_and_policy_boundaries_need_stronger_enforcement
+  - local_only_setups_need_selective_stronger_provider_support
+vision:
+  - terminal_native_operator_cockpit
+  - operator_provides_scope_and_methodology
+  - system_runs_safely_within_policy
+  - ai_plans_tasks_manages_context_and_maintains_notes
+  - evidence_and_actions_are_inspectable_and_reproducible
+  - stronger_providers_invoked_selectively
+target_users:
+  - individual_bug_bounty_hunters
+  - independent_pentesters
+  - internal_security_engineers
+  - ctf_hack_the_box_operators
+primary_use_cases:
+  - import_hackerone_scope_and_normalize_targets
+  - continuous_methodology_driven_auditing
+  - track_interests_for_endpoints_auth_parameters_boundaries_and_behaviors
+  - maintain_compact_queryable_evidence_linked_notes
+  - notion_per_target_operator_note_sync
+  - caido_traffic_search_replay_findings_workflows
+  - selective_claude_or_premium_provider_escalation
+  - verify_multi_step_vulnerability_chains
+  - high_signal_discord_notifications
+non_goals:
+  - fully_autonomous_unrestricted_offensive_action
+  - replacing_caido_as_http_testing_source_of_truth
+  - running_every_possible_script_directly_through_the_model
+  - relying_on_one_giant_conversational_context
+  - assuming_local_models_match_top_tier_business_logic_reasoning
+core_requirements:
+  - id: scope_management
+    requirements:
+      - accept_hackerone_scope_files_or_lists
+      - normalize_asset_definitions
+      - preserve_per_asset_metadata
+      - support_hackerone_and_hack_the_box_profiles
+      - enforce_in_scope_out_of_scope_policy_at_execution_time
+  - id: methodology_engine
+    requirements:
+      - selectable_tui_workflows
+      - phases_gates_retry_policies_and_branching_rules
+      - restrict_orchestrator_to_admissible_next_actions
+      - human_pause_resume_approve_deny_reprioritize_controls
+      - phases_recon_hypothesis_exploitation_chaining_agent_verification
+  - id: agent_orchestration
+    requirements:
+      - primary_orchestrator_role
+      - bounded_task_workers
+      - provider_abstraction_for_local_models_and_claude_agents
+      - task_level_escalation_to_stronger_providers
+      - specialist_chaining_and_behavior_verification_agents
+  - id: context_note_management
+    requirements:
+      - ai_actively_manages_notes_and_context
+      - structured_notes_not_only_freeform_text
+      - summarize_compact_dedupe_cluster_and_relink_notes
+      - preserve_evidence_provenance
+      - track_confidence_freshness_and_relevance
+      - notion_sync_for_operator_facing_organization
+      - keep_local_structured_storage_canonical
+  - id: tool_primitive_management
+    requirements:
+      - typed_primitives_for_tools_and_scripts
+      - define_input_output_side_effect_timeout_and_cost_schema
+      - limit_model_visibility_to_approved_primitives
+      - support_large_tool_collections_without_prompt_overload
+      - manifest_driven_tool_onboarding
+      - capability_based_routing
+      - output_normalization_and_evidence_extraction
+      - per_tool_risk_sandbox_secret_install_health_metadata
+  - id: long_running_reliability
+    requirements:
+      - continuous_day_scale_runtime
+      - queues_leases_heartbeats_retries_and_checkpoints
+      - avoid_persistent_unbounded_prompt_sessions
+      - persist_all_critical_state
+      - clean_recovery_after_crashes_or_model_tool_failures
+functional_components:
+  - id: tui
+    requirements:
+      - dashboard
+      - scope_browser
+      - methodology_menu
+      - task_queue_view
+      - interests_view
+      - notes_context_view
+      - findings_evidence_view
+      - model_provider_view
+      - logs_health_view
+      - notification_approval_view
+  - id: data_model
+    requirements:
+      - target
+      - scope_asset
+      - methodology
+      - phase
+      - task
+      - primitive
+      - note
+      - interest
+      - evidence
+      - finding
+      - session
+      - provider
+      - policy_rule
+      - notification_event
+      - external_sync_state
+  - id: model_providers
+    requirements:
+      - local_gpu_planning_reasoning_model
+      - local_cpu_summarization_compaction_model
+      - optional_claude_agent_hard_task_integration
+  - id: learning_memory_system
+    requirements:
+      - memory_improvement_without_unbounded_prompt_growth
+      - separate_inference_from_memory_accumulation
+      - working_episodic_semantic_memory_layers
+      - continuous_note_compaction
+      - durable_fact_promotion_requires_evidence_confidence_metadata
+      - offline_adaptation_workflows_optional
+      - no_live_online_weight_updates_required
+  - id: caido_integration
+    requirements:
+      - use_caido_sdk_skills_or_client_apis
+      - pull_search_traffic_and_replay_data
+      - create_or_link_findings_replays_notes
+      - caido_operational_testing_backbone_for_web_targets
+operating_model:
+  - orchestrator_loads_scope_policy_and_methodology
+  - generates_bounded_tasks_from_admissible_steps
+  - workers_execute_typed_primitives
+  - results_convert_to_structured_notes_and_evidence
+  - compaction_updates_interests_and_keeps_context_small
+  - higher_value_unresolved_tasks_can_escalate_to_claude
+required_architecture_components:
+  - id: action_policy_engine
+    capabilities:
+      - scope_binding
+      - target_profile_restrictions
+      - methodology_phase_restrictions
+      - rate_concurrency_caps
+      - approval_requirements
+      - exploit_depth_limits
+      - stop_conditions
+  - id: durable_workflow_engine
+    capabilities:
+      - task_queues
+      - leases
+      - retries
+      - heartbeats
+      - resumability
+      - checkpoint_replay
+  - id: memory_service
+    capabilities:
+      - working_episodic_semantic_layers
+      - promotion_and_demotion
+      - contradiction_handling
+      - supersession_invalidation
+      - retrieval_ranking
+      - freshness_decay
+      - target_program_scoping
+  - id: evidence_provenance_layer
+    capabilities:
+      - source_references
+      - timestamps
+      - verification_state
+      - contradiction_links
+      - fact_to_evidence_lineage
+  - id: observability_deterministic_verification
+    capabilities:
+      - trace_capture
+      - repeated_action_detection
+      - retry_storm_detection
+      - unsupported_claim_detection
+      - cost_latency_tracking
+      - recovery_tracking
+      - optional_secondary_llm_judging
+  - id: model_scheduler
+    capabilities:
+      - primary_hot_model_scheduling
+      - cold_path_reviewer_dispatch
+      - queueing_preemption_rules
+      - escalation_routing
+      - cache_residency_awareness
+  - id: tooling_substrate
+    capabilities:
+      - tool_catalog_with_manifests
+      - primitive_wrapper_generation
+      - capability_taxonomy
+      - install_and_health_checks
+      - auth_secret_requirements
+      - side_effect_and_risk_classification
+      - sandbox_container_profiles
+      - output_normalization
+      - evidence_extraction_adapters
+      - methodology_profile_tool_bundling
+architecture_shifts:
+  - from_multi_agent_prompts_to_deterministic_workflow_model_workers
+  - from_context_window_working_memory_to_memory_service
+  - from_llm_safety_judgment_to_policy_engine_decision

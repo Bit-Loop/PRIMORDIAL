@@ -36,15 +36,16 @@ class _DummyResponse:
 class CliWebAliasTests(unittest.TestCase):
     def test_gui_command_launches_web_console(self) -> None:
         runtime = _DummyRuntime()
+        web_port = 1444
         with patch("primordial.cli.run_startup_preflight"), patch(
             "primordial.cli.PrimordialRuntime.from_env", return_value=runtime
         ), patch("primordial.cli.serve_web_console") as serve:
-            result = cli.main(["gui", "--host", "0.0.0.0", "--port", "1444"])
+            result = cli.main(["gui", "--host", "0.0.0.0", "--port", str(web_port)])
 
         self.assertEqual(result, 0)
         self.assertTrue(runtime.initialized)
         self.assertTrue(runtime.shutdown_called)
-        serve.assert_called_once_with(runtime, host="0.0.0.0", port=1444)
+        serve.assert_called_once_with(runtime, host="0.0.0.0", port=web_port)
 
     def test_doctor_command_runs_without_runtime_startup(self) -> None:
         with patch("primordial.cli.run_doctor", return_value={"ok": True, "status": "ok", "checks": []}), patch(

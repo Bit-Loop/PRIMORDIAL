@@ -1,0 +1,835 @@
+migrations:
+  - source_path: docs/operator_intent.md
+    status: migrated
+    replacement_refs:
+      - catalog/intents/recon_only.yaml
+      - catalog/intents/web_triage.yaml
+      - catalog/intents/ad_lab.yaml
+      - catalog/intents/credential_validation.yaml
+      - catalog/intents/exploit_research_allowed.yaml
+      - catalog/intents/htb_lab.yaml
+      - catalog/intents/local_ctf_container.yaml
+      - primordial/core/intent/models.py
+      - primordial/core/intent/registry.py
+      - primordial/core/environment.py
+    verification_refs:
+      - tests/test_operator_intent_catalog_autonomy.py
+      - tests/test_environment_classifier.py
+      - tests/test_context_task_metadata.py
+  - source_path: docs/capability_catalog.md
+    status: migrated
+    replacement_refs:
+      - catalog/capabilities/semantics.yaml
+      - catalog/heuristics/service_discovery.yaml
+      - catalog/heuristics/web_discovery.yaml
+      - catalog/heuristics/exploit_research.yaml
+      - catalog/playbooks/recon/ad_enumeration.yaml
+      - catalog/playbooks/lab/htb_windows_flag_collection.yaml
+      - catalog/agent_skills/operator_intent.yaml
+      - primordial/core/catalog/capabilities.py
+      - primordial/core/catalog/playbooks.py
+      - primordial/core/catalog/interpolation.py
+    verification_refs:
+      - tests/test_operator_intent_catalog_autonomy.py
+  - source_path: AUTONOMOUS_RUNTIME_TEST_REPORT.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/AUTONOMOUS_RUNTIME_TEST_REPORT.md
+    verification_refs:
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: HELIX_RUNTIME_TEST_REPORT.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/HELIX_RUNTIME_TEST_REPORT.md
+    verification_refs:
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: PROJECT_COMPLEXITY_REPORT.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/PROJECT_COMPLEXITY_REPORT.md
+    verification_refs:
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: quick-complexity-notes.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/quick-complexity-notes.md
+    verification_refs:
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: codex_primordial_model_role_benchmark_20260509.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/codex_primordial_model_role_benchmark_20260509.md
+    verification_refs:
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: codex_primordial_OLLAMA-model_role_benchmark_20260509.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/codex_primordial_OLLAMA-model_role_benchmark_20260509.md
+    verification_refs:
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: skills/caido-httpql/SKILL.md
+    status: migrated
+    replacement_refs:
+      - skills/caido-httpql/skill.yaml
+      - primordial/core/skills.py
+    verification_refs:
+      - tests/test_caido_and_skills.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: findings/README.md
+    status: migrated
+    replacement_refs:
+      - findings/workspace.yaml
+      - primordial/core/findings_context.py
+    verification_refs:
+      - tests/test_findings_context.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: agent_chat_api/README.md
+    status: migrated
+    replacement_refs:
+      - agent_chat_api/service.json
+      - agent_chat_api/manifest.py
+      - agent_chat_api/test_reporter.py
+    verification_refs:
+      - agent_chat_api/tests/test_service_manifest.py
+      - agent_chat_api/tests/test_reporter.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: README.md
+    status: migrated
+    replacement_refs:
+      - catalog/project/primordial.yaml
+      - primordial/core/catalog/project_manifest.py
+    verification_refs:
+      - tests/test_project_manifest.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: TODO-real-v1.md
+    status: migrated
+    replacement_refs:
+      - catalog/project/v1_roadmap.yaml
+      - primordial/core/catalog/v1_roadmap.py
+    verification_refs:
+      - tests/test_v1_roadmap_catalog.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: ai-agent-current-context.md
+    status: migrated
+    replacement_refs:
+      - catalog/project/ai_agent_current_context.yaml
+      - primordial/core/catalog/ai_agent_context.py
+    verification_refs:
+      - tests/test_ai_agent_context_catalog.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: ai-agent-prd.md
+    status: migrated
+    replacement_refs:
+      - catalog/project/ai_agent_prd.yaml
+      - primordial/core/catalog/ai_agent_prd.py
+    verification_refs:
+      - tests/test_ai_agent_prd_catalog.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: ai-tuning.md
+    status: migrated
+    replacement_refs:
+      - catalog/project/lmstudio_tuning.yaml
+      - primordial/core/catalog/model_tuning.py
+    verification_refs:
+      - tests/test_model_tuning_catalog.py
+      - tests/test_model_eval.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: docs/CONFLICTING_METHODOLOGIES.md
+    status: migrated
+    replacement_refs:
+      - catalog/project/decision_pressure.yaml
+      - primordial/core/catalog/decision_pressure.py
+    verification_refs:
+      - tests/test_decision_pressure_catalog.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: docs/FLOOR_PLAN.md
+    status: migrated
+    replacement_refs:
+      - catalog/project/codebase_floor_plan.yaml
+      - primordial/core/catalog/codebase_floor_plan.py
+    verification_refs:
+      - tests/test_codebase_floor_plan_catalog.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: docs/HOW_PRIMORDIAL_WORKS.md
+    status: migrated
+    replacement_refs:
+      - catalog/project/operational_architecture.yaml
+      - primordial/core/catalog/operational_architecture.py
+    verification_refs:
+      - tests/test_operational_architecture_catalog.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: docs/HUMAN_CHANGE_GUIDE.md
+    status: migrated
+    replacement_refs:
+      - catalog/project/human_change_safety.yaml
+      - primordial/core/catalog/human_change_safety.py
+    verification_refs:
+      - tests/test_human_change_safety_catalog.py
+      - tests/test_markdown_quality.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: CLAUDE.md
+    status: migrated
+    replacement_refs:
+      - catalog/project/assistant_operating_contract.yaml
+      - primordial/core/catalog/assistant_operating_contract.py
+      - catalog/project/primordial.yaml
+      - catalog/project/ai_agent_current_context.yaml
+      - catalog/project/human_change_safety.yaml
+      - catalog/project/structured_autonomy.yaml
+    verification_refs:
+      - tests/test_assistant_operating_contract_catalog.py
+      - tests/test_agent_runtime_policy.py
+      - tests/test_human_change_safety_catalog.py
+      - tests/test_markdown_quality.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: claude-instructions.md
+    status: migrated
+    replacement_refs:
+      - catalog/project/assistant_operating_contract.yaml
+      - primordial/core/catalog/assistant_operating_contract.py
+      - catalog/project/ai_agent_current_context.yaml
+      - catalog/project/human_change_safety.yaml
+      - catalog/project/structured_autonomy.yaml
+      - catalog/project/v1_roadmap.yaml
+    verification_refs:
+      - tests/test_assistant_operating_contract_catalog.py
+      - tests/test_agent_runtime_policy.py
+      - tests/test_human_change_safety_catalog.py
+      - tests/test_markdown_quality.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: docs/RAG_SRC/0x10-api-security-risks.md
+    status: migrated
+    replacement_refs:
+      - catalog/rag/advisory_corpus.yaml
+      - primordial/core/catalog/rag_advisory_corpus.py
+      - runtime/quarantine/markdown/docs/RAG_SRC/0x10-api-security-risks.md
+    verification_refs:
+      - tests/test_rag_advisory_corpus_catalog.py
+      - tests/test_rag_source_markdown_boundaries.py
+      - tests/test_context_assembler.py
+      - tests/test_markdown_quality.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: docs/RAG_SRC/0x11-t10.md
+    status: migrated
+    replacement_refs:
+      - catalog/rag/advisory_corpus.yaml
+      - primordial/core/catalog/rag_advisory_corpus.py
+      - runtime/quarantine/markdown/docs/RAG_SRC/0x11-t10.md
+    verification_refs:
+      - tests/test_rag_advisory_corpus_catalog.py
+      - tests/test_rag_source_markdown_boundaries.py
+      - tests/test_context_assembler.py
+      - tests/test_markdown_quality.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: docs/RAG_SRC/0xa1-broken-object-level-authorization.md
+    status: migrated
+    replacement_refs:
+      - catalog/rag/advisory_corpus.yaml
+      - primordial/core/catalog/rag_advisory_corpus.py
+      - runtime/quarantine/markdown/docs/RAG_SRC/0xa1-broken-object-level-authorization.md
+    verification_refs:
+      - tests/test_rag_advisory_corpus_catalog.py
+      - tests/test_rag_source_markdown_boundaries.py
+      - tests/test_context_assembler.py
+      - tests/test_markdown_quality.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: docs/RAG_SRC/0xa2-broken-authentication.md
+    status: migrated
+    replacement_refs:
+      - catalog/rag/advisory_corpus.yaml
+      - primordial/core/catalog/rag_advisory_corpus.py
+      - runtime/quarantine/markdown/docs/RAG_SRC/0xa2-broken-authentication.md
+    verification_refs:
+      - tests/test_rag_advisory_corpus_catalog.py
+      - tests/test_rag_source_markdown_boundaries.py
+      - tests/test_context_assembler.py
+      - tests/test_markdown_quality.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: docs/RAG_SRC/0xa3-broken-object-property-level-authorization.md
+    status: migrated
+    replacement_refs:
+      - catalog/rag/advisory_corpus.yaml
+      - primordial/core/catalog/rag_advisory_corpus.py
+      - runtime/quarantine/markdown/docs/RAG_SRC/0xa3-broken-object-property-level-authorization.md
+    verification_refs:
+      - tests/test_rag_advisory_corpus_catalog.py
+      - tests/test_rag_source_markdown_boundaries.py
+      - tests/test_context_assembler.py
+      - tests/test_markdown_quality.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: docs/RAG_SRC/0xa4-unrestricted-resource-consumption.md
+    status: migrated
+    replacement_refs:
+      - catalog/rag/advisory_corpus.yaml
+      - primordial/core/catalog/rag_advisory_corpus.py
+      - runtime/quarantine/markdown/docs/RAG_SRC/0xa4-unrestricted-resource-consumption.md
+    verification_refs:
+      - tests/test_rag_advisory_corpus_catalog.py
+      - tests/test_rag_source_markdown_boundaries.py
+      - tests/test_context_assembler.py
+      - tests/test_markdown_quality.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: docs/RAG_SRC/0xa5-broken-function-level-authorization.md
+    status: migrated
+    replacement_refs:
+      - catalog/rag/advisory_corpus.yaml
+      - primordial/core/catalog/rag_advisory_corpus.py
+      - runtime/quarantine/markdown/docs/RAG_SRC/0xa5-broken-function-level-authorization.md
+    verification_refs:
+      - tests/test_rag_advisory_corpus_catalog.py
+      - tests/test_rag_source_markdown_boundaries.py
+      - tests/test_context_assembler.py
+      - tests/test_markdown_quality.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: docs/RAG_SRC/0xa6-unrestricted-access-to-sensitive-business-flows.md
+    status: migrated
+    replacement_refs:
+      - catalog/rag/advisory_corpus.yaml
+      - primordial/core/catalog/rag_advisory_corpus.py
+      - runtime/quarantine/markdown/docs/RAG_SRC/0xa6-unrestricted-access-to-sensitive-business-flows.md
+    verification_refs:
+      - tests/test_rag_advisory_corpus_catalog.py
+      - tests/test_rag_source_markdown_boundaries.py
+      - tests/test_context_assembler.py
+      - tests/test_markdown_quality.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: docs/RAG_SRC/0xa7-server-side-request-forgery.md
+    status: migrated
+    replacement_refs:
+      - catalog/rag/advisory_corpus.yaml
+      - primordial/core/catalog/rag_advisory_corpus.py
+      - runtime/quarantine/markdown/docs/RAG_SRC/0xa7-server-side-request-forgery.md
+    verification_refs:
+      - tests/test_rag_advisory_corpus_catalog.py
+      - tests/test_rag_source_markdown_boundaries.py
+      - tests/test_context_assembler.py
+      - tests/test_markdown_quality.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: docs/RAG_SRC/0xa8-security-misconfiguration.md
+    status: migrated
+    replacement_refs:
+      - catalog/rag/advisory_corpus.yaml
+      - primordial/core/catalog/rag_advisory_corpus.py
+      - runtime/quarantine/markdown/docs/RAG_SRC/0xa8-security-misconfiguration.md
+    verification_refs:
+      - tests/test_rag_advisory_corpus_catalog.py
+      - tests/test_rag_source_markdown_boundaries.py
+      - tests/test_context_assembler.py
+      - tests/test_markdown_quality.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: docs/RAG_SRC/0xa9-improper-inventory-management.md
+    status: migrated
+    replacement_refs:
+      - catalog/rag/advisory_corpus.yaml
+      - primordial/core/catalog/rag_advisory_corpus.py
+      - runtime/quarantine/markdown/docs/RAG_SRC/0xa9-improper-inventory-management.md
+    verification_refs:
+      - tests/test_rag_advisory_corpus_catalog.py
+      - tests/test_rag_source_markdown_boundaries.py
+      - tests/test_context_assembler.py
+      - tests/test_markdown_quality.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: docs/RAG_SRC/0xaa-unsafe-consumption-of-apis.md
+    status: migrated
+    replacement_refs:
+      - catalog/rag/advisory_corpus.yaml
+      - primordial/core/catalog/rag_advisory_corpus.py
+      - runtime/quarantine/markdown/docs/RAG_SRC/0xaa-unsafe-consumption-of-apis.md
+    verification_refs:
+      - tests/test_rag_advisory_corpus_catalog.py
+      - tests/test_rag_source_markdown_boundaries.py
+      - tests/test_context_assembler.py
+      - tests/test_markdown_quality.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: docs/RAG_SRC/0xb0-next-devs.md
+    status: migrated
+    replacement_refs:
+      - catalog/rag/advisory_corpus.yaml
+      - primordial/core/catalog/rag_advisory_corpus.py
+      - runtime/quarantine/markdown/docs/RAG_SRC/0xb0-next-devs.md
+    verification_refs:
+      - tests/test_rag_advisory_corpus_catalog.py
+      - tests/test_rag_source_markdown_boundaries.py
+      - tests/test_context_assembler.py
+      - tests/test_markdown_quality.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: docs/RAG_SRC/0xb1-next-devsecops.md
+    status: migrated
+    replacement_refs:
+      - catalog/rag/advisory_corpus.yaml
+      - primordial/core/catalog/rag_advisory_corpus.py
+      - runtime/quarantine/markdown/docs/RAG_SRC/0xb1-next-devsecops.md
+    verification_refs:
+      - tests/test_rag_advisory_corpus_catalog.py
+      - tests/test_rag_source_markdown_boundaries.py
+      - tests/test_context_assembler.py
+      - tests/test_markdown_quality.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: docs/RAG_SRC/0xd0-about-data.md
+    status: migrated
+    replacement_refs:
+      - catalog/rag/advisory_corpus.yaml
+      - primordial/core/catalog/rag_advisory_corpus.py
+      - runtime/quarantine/markdown/docs/RAG_SRC/0xd0-about-data.md
+    verification_refs:
+      - tests/test_rag_advisory_corpus_catalog.py
+      - tests/test_rag_source_markdown_boundaries.py
+      - tests/test_context_assembler.py
+      - tests/test_markdown_quality.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: docs/RAG_SRC/0xd1-acknowledgments.md
+    status: migrated
+    replacement_refs:
+      - catalog/rag/advisory_corpus.yaml
+      - primordial/core/catalog/rag_advisory_corpus.py
+      - runtime/quarantine/markdown/docs/RAG_SRC/0xd1-acknowledgments.md
+    verification_refs:
+      - tests/test_rag_advisory_corpus_catalog.py
+      - tests/test_rag_source_markdown_boundaries.py
+      - tests/test_context_assembler.py
+      - tests/test_markdown_quality.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: docs/MODEL_SELECTION_NOTES.md
+    status: migrated
+    replacement_refs:
+      - catalog/project/model_selection.yaml
+      - primordial/core/catalog/model_selection.py
+    verification_refs:
+      - tests/test_model_selection_catalog.py
+      - tests/test_model_eval.py
+      - tests/test_provider_router.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: docs/structured_autonomy.md
+    status: migrated
+    replacement_refs:
+      - catalog/project/structured_autonomy.yaml
+      - primordial/core/catalog/structured_autonomy.py
+    verification_refs:
+      - tests/test_structured_autonomy_catalog.py
+      - tests/test_operator_intent_catalog_autonomy.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: docs/v2/README.md
+    status: migrated
+    replacement_refs:
+      - catalog/project/v2_planning.yaml
+      - primordial/core/catalog/v2_planning.py
+    verification_refs:
+      - tests/test_v2_planning_manifest.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: docs/v2/reverse_engineering_framework.md
+    status: migrated
+    replacement_refs:
+      - catalog/project/v2_reverse_engineering_framework.yaml
+      - primordial/core/catalog/v2_reverse_engineering_framework.py
+    verification_refs:
+      - tests/test_v2_reverse_engineering_framework_catalog.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: docs/v2/reverse_engineering_test_plan.md
+    status: migrated
+    replacement_refs:
+      - catalog/project/v2_reverse_engineering_test_plan.yaml
+      - primordial/core/catalog/v2_reverse_engineering_test_plan.py
+    verification_refs:
+      - tests/test_v2_reverse_engineering_test_plan_catalog.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: examples/methodology/web_review.md
+    status: migrated
+    replacement_refs:
+      - catalog/project/methodology_examples.yaml
+      - primordial/core/catalog/methodology_examples.py
+    verification_refs:
+      - tests/test_methodology_examples_catalog.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: primordial-rag-preprocess/AGENTS.md
+    status: migrated
+    replacement_refs:
+      - primordial-rag-preprocess/config/agent_policy.yaml
+      - primordial-rag-preprocess/primordial_preprocess/agent_policy.py
+    verification_refs:
+      - tests/test_rag_preprocess_agent_policy.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: primordial-rag-preprocess/README.md
+    status: migrated
+    replacement_refs:
+      - primordial-rag-preprocess/config/pipeline_manifest.yaml
+      - primordial-rag-preprocess/primordial_preprocess/pipeline_manifest.py
+    verification_refs:
+      - tests/test_rag_preprocess_pipeline_manifest.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: AGENTS.md
+    status: migrated
+    replacement_refs:
+      - catalog/policies/agent_runtime.yaml
+      - primordial/core/catalog/agent_runtime_policy.py
+      - tests/test_agent_runtime_policy.py
+      - runtime/quarantine/markdown/AGENTS.md
+    verification_refs:
+      - tests/test_agent_runtime_policy.py
+      - tests/test_markdown_quality.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: agent_chat_api/test-results/latest.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/agent_chat_api/test-results/latest.md
+    verification_refs:
+      - agent_chat_api/tests/test_reporter.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: agent_chat_api/test-results/test-results-20260514T071359Z.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/agent_chat_api/test-results/test-results-20260514T071359Z.md
+    verification_refs:
+      - agent_chat_api/tests/test_reporter.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: agent_chat_api/test-results/test-results-20260514T083302Z.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/agent_chat_api/test-results/test-results-20260514T083302Z.md
+    verification_refs:
+      - agent_chat_api/tests/test_reporter.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: agent_chat_api/test-results/test-results-20260514T083502Z.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/agent_chat_api/test-results/test-results-20260514T083502Z.md
+    verification_refs:
+      - agent_chat_api/tests/test_reporter.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: agent_chat_api/test-results/test-results-20260514T083610Z.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/agent_chat_api/test-results/test-results-20260514T083610Z.md
+    verification_refs:
+      - agent_chat_api/tests/test_reporter.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: agent_chat_api/test-results/test-results-20260514T173503Z.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/agent_chat_api/test-results/test-results-20260514T173503Z.md
+    verification_refs:
+      - agent_chat_api/tests/test_reporter.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: agent_chat_api/test-results/test-results-20260514T211944Z.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/agent_chat_api/test-results/test-results-20260514T211944Z.md
+    verification_refs:
+      - agent_chat_api/tests/test_reporter.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: agent_chat_api/test-results/test-results-20260514T212030Z.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/agent_chat_api/test-results/test-results-20260514T212030Z.md
+    verification_refs:
+      - agent_chat_api/tests/test_reporter.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: artifacts/model_eval/full_20260508T144653Z/model_eval_20260508T151317Z.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/artifacts/model_eval/full_20260508T144653Z/model_eval_20260508T151317Z.md
+    verification_refs:
+      - tests/test_model_eval.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: findings/notion/alpha.htb/notion-export.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/findings/notion/alpha.htb/notion-export.md
+    verification_refs:
+      - tests/test_findings_context.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: findings/notion/beta.htb/notion-export.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/findings/notion/beta.htb/notion-export.md
+    verification_refs:
+      - tests/test_findings_context.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: findings/notion/custom.htb/notion-export.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/findings/notion/custom.htb/notion-export.md
+    verification_refs:
+      - tests/test_findings_context.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: findings/notion/helix.htb/notion-export.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/findings/notion/helix.htb/notion-export.md
+    verification_refs:
+      - tests/test_findings_context.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: findings/notion/pirate.htb/notion-export.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/findings/notion/pirate.htb/notion-export.md
+    verification_refs:
+      - tests/test_findings_context.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: findings/notion/principal.htb/notion-export.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/findings/notion/principal.htb/notion-export.md
+    verification_refs:
+      - tests/test_findings_context.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: findings/notion/same.htb/notion-export.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/findings/notion/same.htb/notion-export.md
+    verification_refs:
+      - tests/test_findings_context.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: findings/notion/target.htb/notion-export.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/findings/notion/target.htb/notion-export.md
+    verification_refs:
+      - tests/test_findings_context.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: findings/notion/target/notion-export.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/findings/notion/target/notion-export.md
+    verification_refs:
+      - tests/test_findings_context.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: findings/targets/alpha.htb/evidence.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/findings/targets/alpha.htb/evidence.md
+    verification_refs:
+      - tests/test_findings_context.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: findings/targets/alpha.htb/findings.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/findings/targets/alpha.htb/findings.md
+    verification_refs:
+      - tests/test_findings_context.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: findings/targets/alpha.htb/guidance.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/findings/targets/alpha.htb/guidance.md
+    verification_refs:
+      - tests/test_findings_context.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: findings/targets/beta.htb/evidence.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/findings/targets/beta.htb/evidence.md
+    verification_refs:
+      - tests/test_findings_context.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: findings/targets/beta.htb/findings.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/findings/targets/beta.htb/findings.md
+    verification_refs:
+      - tests/test_findings_context.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: findings/targets/beta.htb/guidance.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/findings/targets/beta.htb/guidance.md
+    verification_refs:
+      - tests/test_findings_context.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: findings/targets/custom.htb/evidence.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/findings/targets/custom.htb/evidence.md
+    verification_refs:
+      - tests/test_findings_context.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: findings/targets/custom.htb/findings.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/findings/targets/custom.htb/findings.md
+    verification_refs:
+      - tests/test_findings_context.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: findings/targets/custom.htb/guidance.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/findings/targets/custom.htb/guidance.md
+    verification_refs:
+      - tests/test_findings_context.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: findings/targets/helix.htb/evidence.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/findings/targets/helix.htb/evidence.md
+    verification_refs:
+      - tests/test_findings_context.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: findings/targets/helix.htb/findings.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/findings/targets/helix.htb/findings.md
+    verification_refs:
+      - tests/test_findings_context.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: findings/targets/helix.htb/guidance.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/findings/targets/helix.htb/guidance.md
+    verification_refs:
+      - tests/test_findings_context.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: findings/targets/pirate.htb/evidence.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/findings/targets/pirate.htb/evidence.md
+    verification_refs:
+      - tests/test_findings_context.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: findings/targets/pirate.htb/findings.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/findings/targets/pirate.htb/findings.md
+    verification_refs:
+      - tests/test_findings_context.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: findings/targets/pirate.htb/guidance.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/findings/targets/pirate.htb/guidance.md
+    verification_refs:
+      - tests/test_findings_context.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: findings/targets/principal.htb/evidence.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/findings/targets/principal.htb/evidence.md
+    verification_refs:
+      - tests/test_findings_context.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: findings/targets/principal.htb/findings.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/findings/targets/principal.htb/findings.md
+    verification_refs:
+      - tests/test_findings_context.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: findings/targets/principal.htb/guidance.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/findings/targets/principal.htb/guidance.md
+    verification_refs:
+      - tests/test_findings_context.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: findings/targets/same.htb/evidence.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/findings/targets/same.htb/evidence.md
+    verification_refs:
+      - tests/test_findings_context.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: findings/targets/same.htb/findings.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/findings/targets/same.htb/findings.md
+    verification_refs:
+      - tests/test_findings_context.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: findings/targets/same.htb/guidance.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/findings/targets/same.htb/guidance.md
+    verification_refs:
+      - tests/test_findings_context.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: findings/targets/target.htb/evidence.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/findings/targets/target.htb/evidence.md
+    verification_refs:
+      - tests/test_findings_context.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: findings/targets/target.htb/findings.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/findings/targets/target.htb/findings.md
+    verification_refs:
+      - tests/test_findings_context.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: findings/targets/target.htb/guidance.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/findings/targets/target.htb/guidance.md
+    verification_refs:
+      - tests/test_findings_context.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: findings/targets/target/evidence.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/findings/targets/target/evidence.md
+    verification_refs:
+      - tests/test_findings_context.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: findings/targets/target/findings.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/findings/targets/target/findings.md
+    verification_refs:
+      - tests/test_findings_context.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py
+  - source_path: findings/targets/target/guidance.md
+    status: archived_historical
+    replacement_refs:
+      - runtime/quarantine/markdown/findings/targets/target/guidance.md
+    verification_refs:
+      - tests/test_findings_context.py
+      - primordial/core/quality/markdown.py
+      - tests/test_markdown_migration_catalog.py

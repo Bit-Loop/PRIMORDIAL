@@ -33,16 +33,17 @@ class FindingsContextService:
     def initialize(self) -> None:
         self.findings_dir.mkdir(parents=True, exist_ok=True)
         self.notion_exports_dir.mkdir(parents=True, exist_ok=True)
-        readme = self.findings_dir / "README.md"
-        if not readme.exists():
-            readme.write_text(
-                "# Primordial Findings Workspace\n\n"
-                "This folder is durable operator-facing context. Agents may read bounded summaries from target "
-                "guidance files, but this folder is not loaded wholesale into model prompts.\n\n"
-                "- `targets/<target>/guidance.md`: operator guidance for agents.\n"
-                "- `targets/<target>/findings.md`: durable finding notes and manual observations.\n"
-                "- `targets/<target>/evidence.md`: lightweight evidence index generated from local state.\n"
-                "- `notion/<target>/notion-export.md`: local Notion-oriented export mirror.\n",
+        manifest = self.findings_dir / "workspace.yaml"
+        if not manifest.exists():
+            manifest.write_text(
+                "id: primordial_findings_workspace\n"
+                "authority: durable_operator_context\n"
+                "prompt_ingestion: bounded_summaries_only\n"
+                "paths:\n"
+                "  guidance_path: targets/<target>/guidance.md\n"
+                "  findings_path: targets/<target>/findings.md\n"
+                "  evidence_path: targets/<target>/evidence.md\n"
+                "  notion_export_path: notion/<target>/notion-export.md\n",
                 encoding="utf-8",
             )
 
@@ -97,6 +98,17 @@ class FindingsContextService:
         findings: list[Finding],
     ) -> TargetFindingsWorkspace:
         workspace = self.ensure_target(target)
+        self._write_evidence_index(workspace, target, evidence)
+        export_lines = self._notion_export_lines(target, evidence, notes, interests, findings)
+        workspace.notion_export_path.write_text("\n".join(export_lines).rstrip() + "\n", encoding="utf-8")
+        return workspace
+
+    def _write_evidence_index(
+        self,
+        workspace: TargetFindingsWorkspace,
+        target: Target,
+        evidence: list[EvidenceRecord],
+    ) -> None:
         evidence_lines = [
             f"# {target.display_name} Evidence Index",
             "",
@@ -107,41 +119,146 @@ class FindingsContextService:
             evidence_lines.append(f"- `{item.id}` {item.title}: {item.summary}")
         workspace.evidence_path.write_text("\n".join(evidence_lines).rstrip() + "\n", encoding="utf-8")
 
-        export_lines = [
+    def _notion_export_lines(
+        self,
+        target: Target,
+        evidence: list[EvidenceRecord],
+        notes: list[Note],
+        interests: list[Interest],
+        findings: list[Finding],
+    ) -> list[str]:
+        export_lines = self._notion_export_header(target)
+        self._extend_export_section(
+            export_lines,
+            "Observed Evidence",
+            [f"- `{item.id}` {item.title}: {item.summary}" for item in evidence[:25]],
+            "- No evidence recorded.",
+        )
+        self._extend_export_section(
+            export_lines,
+            "Reviewed Findings",
+            [f"- `{finding.severity.value}` {finding.title}: {finding.summary}" for finding in findings[:25]],
+            "- No reviewed findings recorded.",
+        )
+        self._extend_export_section(
+            export_lines,
+            "Operator Notes",
+            [f"- {note.title}: {note.body[:500]}" for note in notes[:25]],
+            "- No operator notes recorded.",
+        )
+        self._extend_export_section(export_lines, "Candidate Tasks", [], "- No candidate tasks recorded.")
+        self._extend_export_section(
+            export_lines,
+            "Hypotheses",
+            [f"- `{interest.status.value}` {interest.title}: {interest.summary}" for interest in interests[:25]],
+            "- No open interests recorded.",
+        )
+        self._append_static_empty_export_sections(export_lines)
+        return export_lines
+
+    def _notion_export_header(self, target: Target) -> list[str]:
+        return [
             f"# {target.display_name} Notion Export",
+            "",
+            "<!-- primordial-generated-export",
+            "origin: generated_export",
+            "ingest_allowed: false",
+            "operational_retrieval_allowed: false",
+            "-->",
             "",
             f"Target: `{target.handle}`",
             f"Profile: `{target.profile.value}`",
             f"Generated: {utc_now().isoformat()}",
             "",
+            "## Authoritative Runtime State",
+            "",
+            f"- Target ID: `{target.id}`",
+            f"- Target handle: `{target.handle}`",
+            f"- Scope profile: `{target.profile.value}`",
+            "- Active Operator Intent: managed by RuntimeStore.",
+            "- Policy constraints: managed by PolicyEngine.",
+            "",
             "## AI Agent Guidance",
             "",
             self.read_guidance(target, max_chars=2400) or "No target-specific guidance recorded.",
-            "",
-            "## Findings",
-            "",
         ]
-        if findings:
-            export_lines.extend(f"- `{finding.severity.value}` {finding.title}: {finding.summary}" for finding in findings[:25])
-        else:
-            export_lines.append("- No verified findings recorded.")
-        export_lines.extend(["", "## Open Interests", ""])
-        if interests:
-            export_lines.extend(f"- `{interest.status.value}` {interest.title}: {interest.summary}" for interest in interests[:25])
-        else:
-            export_lines.append("- No open interests recorded.")
-        export_lines.extend(["", "## Recent Notes", ""])
-        if notes:
-            export_lines.extend(f"- {note.title}: {note.body[:500]}" for note in notes[:25])
-        else:
-            export_lines.append("- No notes recorded.")
-        export_lines.extend(["", "## Evidence References", ""])
-        if evidence:
-            export_lines.extend(f"- `{item.id}` {item.title}: {item.summary}" for item in evidence[:25])
-        else:
-            export_lines.append("- No evidence recorded.")
-        workspace.notion_export_path.write_text("\n".join(export_lines).rstrip() + "\n", encoding="utf-8")
-        return workspace
+
+    def _extend_export_section(self, lines: list[str], title: str, rows: list[str], empty_message: str) -> None:
+        lines.extend(["", f"## {title}", ""])
+        lines.extend(rows or [empty_message])
+
+    def _append_static_empty_export_sections(self, export_lines: list[str]) -> None:
+        export_lines.extend(
+            [
+                "",
+                "## AI Summaries",
+                "",
+                "- No cited AI summaries recorded.",
+                "",
+                "## RAG Advisory Material",
+                "",
+                "- No RAG advisory material recorded.",
+                "",
+                "## Blocked Actions",
+                "",
+                "- No blocked actions recorded.",
+                "",
+                "## CTFd Scoreboard Projection",
+                "",
+                "- No CTFd scoreboard projection recorded.",
+                "",
+                "## GitHub Links",
+                "",
+                "- No GitHub links recorded.",
+                "",
+                "## Sync Log / Conflicts",
+                "",
+                "- No sync conflicts recorded.",
+            ]
+        )
+
+    def audit_generated_exports(self) -> dict[str, object]:
+        records: list[dict[str, object]] = []
+        for path in sorted(self.notion_exports_dir.glob("*/notion-export.md")):
+            markers = self._generated_export_markers(path)
+            missing = [
+                name
+                for name, expected in (
+                    ("origin", "generated_export"),
+                    ("ingest_allowed", "false"),
+                    ("operational_retrieval_allowed", "false"),
+                )
+                if markers.get(name) != expected
+            ]
+            requires_quarantine = bool(missing)
+            target_fragment = path.parent.name
+            archive_path = self.notion_exports_dir / "_archive" / target_fragment / path.name
+            records.append(
+                {
+                    "path": str(path),
+                    "status": "requires_quarantine" if requires_quarantine else "ok",
+                    "missing_metadata": missing,
+                    "origin": markers.get("origin", ""),
+                    "ingest_allowed": markers.get("ingest_allowed", ""),
+                    "operational_retrieval_allowed": markers.get("operational_retrieval_allowed", ""),
+                    "planned_action": "archive_quarantine" if requires_quarantine else "none",
+                    "archive_path": str(archive_path) if requires_quarantine else "",
+                    "quarantine_metadata": {
+                        "origin": "generated_export",
+                        "ingest_allowed": False,
+                        "operational_retrieval_allowed": False,
+                    }
+                    if requires_quarantine
+                    else {},
+                }
+            )
+        return {
+            "summary": {
+                "files_seen": len(records),
+                "quarantine_required": sum(1 for item in records if item["status"] == "requires_quarantine"),
+            },
+            "generated_exports": records,
+        }
 
     def read_guidance(self, target: Target, *, max_chars: int = 4000) -> str:
         workspace = self.ensure_target(target)
@@ -183,3 +300,15 @@ class FindingsContextService:
 
     def _safe_fragment(self, value: str) -> str:
         return re.sub(r"[^A-Za-z0-9_.-]+", "_", value.strip()).strip("._-")[:100] or "target"
+
+    def _generated_export_markers(self, path: Path) -> dict[str, str]:
+        body = self._bounded_read(path, max_chars=4096)
+        markers: dict[str, str] = {}
+        for line in body.splitlines():
+            if ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            clean_key = key.strip().lower()
+            if clean_key in {"origin", "ingest_allowed", "operational_retrieval_allowed"}:
+                markers[clean_key] = value.strip().lower()
+        return markers

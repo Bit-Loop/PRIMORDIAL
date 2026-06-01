@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from primordial.core.context.normalization import metadata_bool_value, metadata_list_value, metadata_value
+
 
 BLOCKED_VULN_OUTPUT_MODES = {
     "exploit_execution",
@@ -16,35 +18,46 @@ BLOCKED_VULN_OUTPUT_MODES = {
     "malware_behavior",
 }
 
+REQUIRED_VULN_BLOCKED_OUTPUT_MODES = {
+    "exploit_execution",
+    "action_selection",
+    "scope_expansion",
+}
+
 
 def vulnerability_hints_from_results(results: list[dict[str, Any]]) -> dict[str, object]:
     hints: list[dict[str, object]] = []
     rejected: list[dict[str, object]] = []
     for item in results:
         metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
-        if str(metadata.get("domain") or metadata.get("corpus_type") or "") != "vuln_intel":
-            rejected.append({"citation_id": item.get("citation_id"), "reason": "not vulnerability intelligence"})
+        if str(metadata_value(metadata, "domain") or metadata_value(metadata, "corpus_type") or "") != "vuln_intel":
+            rejected.append({"citation_id": _diagnostic_citation_id(item), "reason": "not vulnerability intelligence"})
             continue
-        blocked = (
-            set(str(value) for value in metadata.get("blocked_output_modes", []) if value)
-            if isinstance(metadata.get("blocked_output_modes"), list)
-            else set()
-        )
+        blocked = _blocked_output_modes(metadata)
         if not blocked:
-            rejected.append({"citation_id": item.get("citation_id"), "reason": "missing safety block metadata"})
+            rejected.append({"citation_id": _diagnostic_citation_id(item), "reason": "missing safety block metadata"})
+            continue
+        if not REQUIRED_VULN_BLOCKED_OUTPUT_MODES.issubset(blocked):
+            rejected.append(
+                {"citation_id": _diagnostic_citation_id(item), "reason": "missing required safety block metadata"}
+            )
+            continue
+        citation_id = _rag_citation_id(item)
+        if not citation_id:
+            rejected.append({"citation_id": _diagnostic_citation_id(item), "reason": "missing rag citation"})
             continue
         hint_type = _hint_type(metadata)
         hints.append(
             {
                 "hint_type": hint_type,
-                "title": item.get("title") or metadata.get("cve_id") or metadata.get("vuln_id"),
+                "title": item.get("title") or metadata_value(metadata, "cve_id") or metadata_value(metadata, "vuln_id"),
                 "summary": _summary(metadata),
-                "citation_id": item.get("citation_id"),
-                "vuln_id": metadata.get("vuln_id"),
-                "cve_id": metadata.get("cve_id"),
-                "aliases": metadata.get("aliases", []),
-                "source_refs": metadata.get("source_refs", []),
-                "allowed_output_modes": metadata.get("output_mode", []),
+                "citation_id": citation_id,
+                "vuln_id": metadata_value(metadata, "vuln_id"),
+                "cve_id": metadata_value(metadata, "cve_id"),
+                "aliases": metadata_list_value(metadata, "aliases"),
+                "source_refs": metadata_list_value(metadata, "source_refs"),
+                "allowed_output_modes": _safe_output_modes(metadata),
                 "blocked_output_modes": sorted(BLOCKED_VULN_OUTPUT_MODES),
                 "requires_operator_confirmation": hint_type == "defensive_exposure_review",
                 "creates_executable_task": False,
@@ -60,30 +73,71 @@ def vulnerability_hints_from_results(results: list[dict[str, Any]]) -> dict[str,
 
 
 def _hint_type(metadata: dict[str, Any]) -> str:
-    if bool(metadata.get("kev")):
+    if metadata_bool_value(metadata, "kev"):
         return "known_exploited_vulnerability_context"
     try:
-        if float(metadata.get("epss_percentile") or 0.0) >= 0.9:
+        if float(metadata_value(metadata, "epss_percentile") or 0.0) >= 0.9:
             return "epss_high_percentile_context"
     except (TypeError, ValueError):
         pass
-    if str(metadata.get("cvss_severity") or "").upper() in {"HIGH", "CRITICAL"}:
+    if str(metadata_value(metadata, "cvss_severity") or "").upper() in {"HIGH", "CRITICAL"}:
         return "high_severity_vulnerability_context"
-    if bool(metadata.get("fixed_version_known")):
+    if metadata_bool_value(metadata, "fixed_version_known"):
         return "patch_prioritization_context"
     return "defensive_exposure_review"
 
 
+def _rag_citation_id(item: dict[str, Any]) -> str:
+    for candidate in (item.get("citation_id"), item.get("chunk_id"), item.get("id")):
+        value = str(candidate or "").strip()
+        if not value:
+            continue
+        if not value.startswith("rag:"):
+            value = f"rag:{value}"
+        if value.lower() not in {"rag:none", "rag:null", "rag:unknown"}:
+            return value
+    return ""
+
+
+def _diagnostic_citation_id(item: dict[str, Any]) -> str | None:
+    return _rag_citation_id(item) or None
+
+
+def _safe_output_modes(metadata: dict[str, Any]) -> list[str]:
+    output_mode = metadata_list_value(metadata, "output_mode")
+    if not output_mode:
+        value = metadata_value(metadata, "output_mode")
+        output_mode = [value] if isinstance(value, str) else []
+    safe_modes: list[str] = []
+    for value in output_mode:
+        mode = str(value or "").strip()
+        if not mode or mode in BLOCKED_VULN_OUTPUT_MODES or mode in safe_modes:
+            continue
+        safe_modes.append(mode)
+    return safe_modes
+
+
+def _blocked_output_modes(metadata: dict[str, Any]) -> set[str]:
+    blocked = metadata_list_value(metadata, "blocked_output_modes")
+    if not blocked:
+        value = metadata_value(metadata, "blocked_output_modes")
+        blocked = [value] if isinstance(value, str) else []
+    return {str(value or "").strip() for value in blocked if str(value or "").strip()}
+
+
 def _summary(metadata: dict[str, Any]) -> str:
     pieces = []
-    if metadata.get("cve_id"):
-        pieces.append(str(metadata["cve_id"]))
-    if metadata.get("cvss_severity"):
-        pieces.append(f"severity={metadata['cvss_severity']}")
-    if metadata.get("kev"):
+    cve_id = metadata_value(metadata, "cve_id")
+    cvss_severity = metadata_value(metadata, "cvss_severity")
+    epss_percentile = metadata_value(metadata, "epss_percentile")
+    if cve_id:
+        pieces.append(str(cve_id))
+    if cvss_severity:
+        pieces.append(f"severity={cvss_severity}")
+    if metadata_bool_value(metadata, "kev"):
         pieces.append("KEV=true")
-    if metadata.get("epss_percentile") is not None:
-        pieces.append(f"EPSS percentile={metadata['epss_percentile']}")
-    if metadata.get("fixed_version_known"):
+    if epss_percentile is not None:
+        pieces.append(f"EPSS percentile={epss_percentile}")
+    if metadata_bool_value(metadata, "fixed_version_known"):
         pieces.append("fix available")
     return "; ".join(pieces) or "Vulnerability intelligence context is available for defensive review."

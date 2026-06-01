@@ -324,6 +324,14 @@ raise SystemExit(7)
         self.assertEqual(raised.exception.status_code, 502)
         self.assertIn("provider failed", str(raised.exception))
 
+
+class ProviderFallbackTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.root = PACKAGE_ROOT
+
+    def tearDown(self) -> None:
+        remove_test_bin(self.root)
+
     def test_fallback_uses_claude_after_codex_refusal_and_audits(self) -> None:
         fake_codex = temporary_executable(
             self.root,

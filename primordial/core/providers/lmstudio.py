@@ -64,7 +64,7 @@ class LMStudioClient:
             except Exception as exc:  # noqa: BLE001 - v1 to v0 fallback is intentional
                 errors.append(f"{endpoint}: {exc}")
                 continue
-            models = self._parse_models(data)
+            models = _parse_models(data)
             return LMStudioModelListResult(ok=True, models=models, endpoint=endpoint)
         return LMStudioModelListResult(ok=False, models=[], error="; ".join(errors) or "LM Studio is unavailable")
 
@@ -114,41 +114,16 @@ class LMStudioClient:
                 timeout_seconds=timeout_seconds,
             )
         elapsed_seconds = time.monotonic() - started
-        text, reasoning_content, finish_reason = self._extract_chat_message(data)
+        text, reasoning_content, finish_reason = _extract_chat_message(data)
         if not text and not reasoning_content:
             raise RuntimeError("LM Studio returned an empty response")
-        usage = data.get("usage") if isinstance(data, dict) else {}
-        stats = data.get("stats") if isinstance(data, dict) else {}
-        if not isinstance(usage, dict):
-            usage = {}
-        if not isinstance(stats, dict):
-            stats = {}
-        completion_tokens = self._optional_int(usage.get("completion_tokens"))
-        prompt_tokens = self._optional_int(usage.get("prompt_tokens"))
-        tokens_per_second = self._optional_float(
-            stats.get("tokens_per_second")
-            or stats.get("tokensPerSecond")
-            or data.get("tokens_per_second")
-            or data.get("tokensPerSecond")
-        )
-        ttft_seconds = self._optional_float(
-            stats.get("ttft_seconds")
-            or stats.get("time_to_first_token")
-            or stats.get("timeToFirstTokenSec")
-            or data.get("ttft_seconds")
-        )
-        if tokens_per_second is None and completion_tokens and elapsed_seconds > 0:
-            tokens_per_second = float(completion_tokens) / elapsed_seconds
-        return LMStudioResponse(
-            model=str(data.get("model", model)) if isinstance(data, dict) else model,
-            text=text,
-            elapsed_seconds=elapsed_seconds,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            tokens_per_second=tokens_per_second,
-            ttft_seconds=ttft_seconds,
-            reasoning_content=reasoning_content,
-            finish_reason=finish_reason,
+        return _chat_response_from_data(
+            data,
+            model,
+            elapsed_seconds,
+            text,
+            reasoning_content,
+            finish_reason,
         )
 
     def load_model(
@@ -175,8 +150,8 @@ class LMStudioClient:
         started = time.monotonic()
         try:
             data = self._request_json("POST", "/api/v1/models/load", payload, timeout_seconds=timeout_seconds)
-            instance_id = self._extract_instance_id(data) or model
-            load_config = self._extract_load_config(data) or self._load_config_from_payload(payload)
+            instance_id = _extract_instance_id(data) or model
+            load_config = _extract_load_config(data) or _load_config_from_payload(payload)
             return LMStudioLoadResult(
                 model=model,
                 ok=True,
@@ -190,7 +165,7 @@ class LMStudioClient:
                 ok=False,
                 error=str(exc),
                 elapsed_seconds=time.monotonic() - started,
-                load_config=self._load_config_from_payload(payload),
+                load_config=_load_config_from_payload(payload),
             )
 
     def unload_model(
@@ -227,7 +202,7 @@ class LMStudioClient:
         for model in listed.models:
             if not model.loaded:
                 continue
-            instance_ids = self._loaded_instance_ids(model)
+            instance_ids = _loaded_instance_ids(model)
             if not instance_ids:
                 instance_ids = [model.id]
             for instance_id in instance_ids:
@@ -266,158 +241,217 @@ class LMStudioClient:
             raise RuntimeError("LM Studio returned an unsupported JSON payload")
         return decoded
 
-    def _parse_models(self, data: dict[str, object] | list[object]) -> list[LMStudioModelInfo]:
-        if isinstance(data, list):
-            raw_models = data
-        elif isinstance(data.get("data"), list):
-            raw_models = data["data"]  # type: ignore[index]
-        elif isinstance(data.get("models"), list):
-            raw_models = data["models"]  # type: ignore[index]
-        else:
-            raw_models = []
-        models: list[LMStudioModelInfo] = []
-        for item in raw_models:
-            if not isinstance(item, dict):
-                continue
-            model_id = str(
-                item.get("id")
-                or item.get("model")
-                or item.get("key")
-                or item.get("path")
-                or item.get("name")
-                or item.get("display_name")
-                or ""
-            ).strip()
-            if not model_id:
-                continue
-            kind = str(item.get("type") or item.get("kind") or item.get("model_type") or "").lower()
-            if "embedding" in kind or "embedding" in model_id.lower():
-                continue
-            loaded_instances = item.get("loaded_instances")
-            loaded = bool(
-                item.get("loaded")
-                or item.get("is_loaded")
-                or item.get("state") == "loaded"
-                or (isinstance(loaded_instances, list) and loaded_instances)
+def _parse_models(data: dict[str, object] | list[object]) -> list[LMStudioModelInfo]:
+    if isinstance(data, list):
+        raw_models = data
+    elif isinstance(data.get("data"), list):
+        raw_models = data["data"]  # type: ignore[index]
+    elif isinstance(data.get("models"), list):
+        raw_models = data["models"]  # type: ignore[index]
+    else:
+        raw_models = []
+    models: list[LMStudioModelInfo] = []
+    for item in raw_models:
+        if not isinstance(item, dict):
+            continue
+        model_id = _model_id(item)
+        if not model_id or _is_embedding_model(item, model_id):
+            continue
+        quantization = item.get("quantization")
+        quantization_name = quantization.get("name") if isinstance(quantization, dict) else quantization
+        models.append(
+            LMStudioModelInfo(
+                id=model_id,
+                loaded=_is_loaded_model(item),
+                architecture=_optional_str(item.get("architecture") or item.get("arch")),
+                quantization=_optional_str(quantization_name or item.get("quant")),
+                params=_optional_str(
+                    item.get("params")
+                    or item.get("params_string")
+                    or item.get("parameter_count")
+                    or item.get("parameters")
+                ),
+                size=_optional_int(item.get("size") or item.get("size_bytes")),
+                max_context_length=_optional_int(
+                    item.get("max_context_length")
+                    or item.get("context_length")
+                    or item.get("contextLength")
+                    or item.get("n_ctx_train")
+                ),
+                raw=dict(item),
             )
-            quantization = item.get("quantization")
-            quantization_name = quantization.get("name") if isinstance(quantization, dict) else quantization
-            models.append(
-                LMStudioModelInfo(
-                    id=model_id,
-                    loaded=loaded,
-                    architecture=self._optional_str(item.get("architecture") or item.get("arch")),
-                    quantization=self._optional_str(quantization_name or item.get("quant")),
-                    params=self._optional_str(
-                        item.get("params")
-                        or item.get("params_string")
-                        or item.get("parameter_count")
-                        or item.get("parameters")
-                    ),
-                    size=self._optional_int(item.get("size") or item.get("size_bytes")),
-                    max_context_length=self._optional_int(
-                        item.get("max_context_length")
-                        or item.get("context_length")
-                        or item.get("contextLength")
-                        or item.get("n_ctx_train")
-                    ),
-                    raw=dict(item),
-                )
-            )
-        return sorted(models, key=lambda item: item.id.lower())
+        )
+    return sorted(models, key=lambda item: item.id.lower())
 
-    def _extract_chat_message(self, data: dict[str, object] | list[object]) -> tuple[str, str, str | None]:
-        if not isinstance(data, dict):
-            return "", "", None
-        choices = data.get("choices")
-        if not isinstance(choices, list) or not choices:
-            return "", "", None
-        first = choices[0]
-        if not isinstance(first, dict):
-            return "", "", None
-        finish_reason = self._optional_str(first.get("finish_reason") or first.get("finishReason"))
-        message = first.get("message")
-        if isinstance(message, dict):
-            text = str(message.get("content") or "").strip()
-            reasoning = str(
-                message.get("reasoning_content")
-                or message.get("reasoning")
-                or message.get("thinking")
-                or ""
-            ).strip()
-            return text, reasoning, finish_reason
-        return str(first.get("text") or "").strip(), "", finish_reason
 
-    def _extract_instance_id(self, data: dict[str, object] | list[object]) -> str | None:
-        if not isinstance(data, dict):
-            return None
-        for key in ("instance_id", "instanceId", "identifier", "id"):
-            value = self._optional_str(data.get(key))
+def _model_id(item: dict[str, object]) -> str:
+    return str(
+        item.get("id")
+        or item.get("model")
+        or item.get("key")
+        or item.get("path")
+        or item.get("name")
+        or item.get("display_name")
+        or ""
+    ).strip()
+
+
+def _is_embedding_model(item: dict[str, object], model_id: str) -> bool:
+    kind = str(item.get("type") or item.get("kind") or item.get("model_type") or "").lower()
+    return "embedding" in kind or "embedding" in model_id.lower()
+
+
+def _is_loaded_model(item: dict[str, object]) -> bool:
+    loaded_instances = item.get("loaded_instances")
+    return bool(
+        item.get("loaded")
+        or item.get("is_loaded")
+        or item.get("state") == "loaded"
+        or (isinstance(loaded_instances, list) and loaded_instances)
+    )
+
+
+def _extract_chat_message(data: dict[str, object] | list[object]) -> tuple[str, str, str | None]:
+    if not isinstance(data, dict):
+        return "", "", None
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return "", "", None
+    first = choices[0]
+    if not isinstance(first, dict):
+        return "", "", None
+    finish_reason = _optional_str(first.get("finish_reason") or first.get("finishReason"))
+    message = first.get("message")
+    if isinstance(message, dict):
+        text = str(message.get("content") or "").strip()
+        reasoning = str(
+            message.get("reasoning_content")
+            or message.get("reasoning")
+            or message.get("thinking")
+            or ""
+        ).strip()
+        return text, reasoning, finish_reason
+    return str(first.get("text") or "").strip(), "", finish_reason
+
+
+def _extract_instance_id(data: dict[str, object] | list[object]) -> str | None:
+    if not isinstance(data, dict):
+        return None
+    for key in ("instance_id", "instanceId", "identifier", "id"):
+        value = _optional_str(data.get(key))
+        if value:
+            return value
+    instance = data.get("instance")
+    if isinstance(instance, dict):
+        for key in ("instance_id", "identifier", "id"):
+            value = _optional_str(instance.get(key))
             if value:
                 return value
-        instance = data.get("instance")
-        if isinstance(instance, dict):
-            for key in ("instance_id", "identifier", "id"):
-                value = self._optional_str(instance.get(key))
-                if value:
-                    return value
-        return None
+    return None
 
-    def _extract_load_config(self, data: dict[str, object] | list[object]) -> dict[str, object]:
-        if not isinstance(data, dict):
-            return {}
-        load_config = data.get("load_config") or data.get("loadConfig")
-        if isinstance(load_config, dict):
-            return dict(load_config)
+
+def _extract_load_config(data: dict[str, object] | list[object]) -> dict[str, object]:
+    if not isinstance(data, dict):
         return {}
+    load_config = data.get("load_config") or data.get("loadConfig")
+    if isinstance(load_config, dict):
+        return dict(load_config)
+    return {}
 
-    def _load_config_from_payload(self, payload: dict[str, object]) -> dict[str, object]:
-        return {
-            key: value
-            for key, value in payload.items()
-            if key not in {"model", "echo_load_config"} and value is not None
-        }
 
-    def _loaded_instance_ids(self, model: LMStudioModelInfo) -> list[str]:
-        loaded_instances = model.raw.get("loaded_instances")
-        if not isinstance(loaded_instances, list):
-            return []
-        instance_ids: list[str] = []
-        for instance in loaded_instances:
-            if not isinstance(instance, dict):
-                continue
-            instance_id = self._optional_str(
-                instance.get("identifier") or instance.get("instance_id") or instance.get("id")
-            )
-            if instance_id:
-                instance_ids.append(instance_id)
-        return instance_ids
+def _load_config_from_payload(payload: dict[str, object]) -> dict[str, object]:
+    return {
+        key: value
+        for key, value in payload.items()
+        if key not in {"model", "echo_load_config"} and value is not None
+    }
 
-    def _optional_str(self, value: object) -> str | None:
-        if value is None:
-            return None
-        text = str(value).strip()
-        return text or None
 
-    def _optional_int(self, value: object) -> int | None:
-        if isinstance(value, bool):
-            return None
-        if isinstance(value, int):
-            return value
-        if isinstance(value, float):
-            return int(value)
-        if isinstance(value, str) and value.strip().isdigit():
-            return int(value.strip())
+def _loaded_instance_ids(model: LMStudioModelInfo) -> list[str]:
+    loaded_instances = model.raw.get("loaded_instances")
+    if not isinstance(loaded_instances, list):
+        return []
+    instance_ids: list[str] = []
+    for instance in loaded_instances:
+        if not isinstance(instance, dict):
+            continue
+        instance_id = _optional_str(instance.get("identifier") or instance.get("instance_id") or instance.get("id"))
+        if instance_id:
+            instance_ids.append(instance_id)
+    return instance_ids
+
+
+def _chat_response_from_data(
+    data: dict[str, object] | list[object],
+    model: str,
+    elapsed_seconds: float,
+    text: str,
+    reasoning_content: str,
+    finish_reason: str | None,
+) -> LMStudioResponse:
+    payload = data if isinstance(data, dict) else {}
+    usage = _mapping_payload(payload.get("usage"))
+    stats = _mapping_payload(payload.get("stats"))
+    completion_tokens = _optional_int(usage.get("completion_tokens"))
+    prompt_tokens = _optional_int(usage.get("prompt_tokens"))
+    tokens_per_second = _optional_float(
+        stats.get("tokens_per_second")
+        or stats.get("tokensPerSecond")
+        or payload.get("tokens_per_second")
+        or payload.get("tokensPerSecond")
+    )
+    ttft_seconds = _optional_float(
+        stats.get("ttft_seconds")
+        or stats.get("time_to_first_token")
+        or stats.get("timeToFirstTokenSec")
+        or payload.get("ttft_seconds")
+    )
+    if tokens_per_second is None and completion_tokens and elapsed_seconds > 0:
+        tokens_per_second = float(completion_tokens) / elapsed_seconds
+    return LMStudioResponse(
+        model=str(payload.get("model", model)) if payload else model,
+        text=text,
+        elapsed_seconds=elapsed_seconds,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        tokens_per_second=tokens_per_second,
+        ttft_seconds=ttft_seconds,
+        reasoning_content=reasoning_content,
+        finish_reason=finish_reason,
+    )
+
+
+def _mapping_payload(value: object) -> dict[str, object]:
+    return value if isinstance(value, dict) else {}
+
+
+def _optional_str(value: object) -> str | None:
+    if value is None:
         return None
+    text = str(value).strip()
+    return text or None
 
-    def _optional_float(self, value: object) -> float | None:
-        if isinstance(value, bool):
-            return None
-        if isinstance(value, (int, float)):
-            return float(value)
-        if isinstance(value, str):
-            try:
-                return float(value.strip())
-            except ValueError:
-                return None
+
+def _optional_int(value: object) -> int | None:
+    if isinstance(value, bool):
         return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
+
+
+def _optional_float(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return None
+    return None

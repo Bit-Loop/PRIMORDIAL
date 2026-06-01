@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 
+import yaml
+
 
 @dataclass(frozen=True, slots=True)
 class RuntimeSkill:
@@ -69,10 +71,18 @@ class RuntimeSkillRegistry:
     def _skill_paths(self) -> list[Path]:
         paths: list[Path] = []
         paths.extend(self.skills_dir.glob("*.md"))
+        paths.extend(self.skills_dir.glob("*.yaml"))
+        paths.extend(self.skills_dir.glob("*.yml"))
         paths.extend(self.skills_dir.glob("*/SKILL.md"))
+        paths.extend(self.skills_dir.glob("*/SKILL.yaml"))
+        paths.extend(self.skills_dir.glob("*/SKILL.yml"))
+        paths.extend(self.skills_dir.glob("*/skill.yaml"))
+        paths.extend(self.skills_dir.glob("*/skill.yml"))
         return sorted({path.resolve() for path in paths if path.is_file()})
 
     def _load_skill(self, path: Path) -> RuntimeSkill:
+        if path.suffix.lower() in {".yaml", ".yml"}:
+            return self._load_yaml_skill(path)
         body = path.read_text(encoding="utf-8")
         metadata, content = self._split_frontmatter(body)
         default_name = path.parent.name if path.name == "SKILL.md" else path.stem
@@ -91,6 +101,24 @@ class RuntimeSkillRegistry:
             body=content.strip(),
             path=str(path),
             tags=tags,
+        )
+
+    def _load_yaml_skill(self, path: Path) -> RuntimeSkill:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError(f"skill manifest must be a YAML object: {path}")
+        default_name = path.parent.name if path.name.lower() in {"skill.yaml", "skill.yml"} else path.stem
+        body = str(payload.get("body", "")).strip()
+        title = str(payload.get("title") or default_name).strip()
+        skill_id = str(payload.get("id") or self._safe_id(default_name)).strip()
+        summary = str(payload.get("summary") or self._first_paragraph(body) or title).strip()
+        return RuntimeSkill(
+            id=self._safe_id(skill_id),
+            title=title,
+            summary=summary,
+            body=body,
+            path=str(path),
+            tags=self._tag_tuple(payload.get("tags", ())),
         )
 
     def _split_frontmatter(self, body: str) -> tuple[dict[str, str], str]:
@@ -120,6 +148,13 @@ class RuntimeSkillRegistry:
             if text:
                 return text[:500]
         return ""
+
+    def _tag_tuple(self, value: object) -> tuple[str, ...]:
+        if isinstance(value, str):
+            return tuple(item.strip() for item in value.split(",") if item.strip())
+        if isinstance(value, list):
+            return tuple(str(item).strip() for item in value if str(item).strip())
+        return ()
 
     def _safe_id(self, value: str) -> str:
         return re.sub(r"[^a-z0-9_.-]+", "-", value.strip().lower()).strip("-") or "skill"

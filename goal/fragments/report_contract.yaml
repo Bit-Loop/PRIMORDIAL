@@ -1,0 +1,18 @@
+version: 1
+source: goal/fragments/report_contract.yaml
+required_items:
+  - dirty/staged state summary
+  - files touched
+  - what changed and why
+  - tests added or changed
+  - validation commands and results
+  - old vs generated codex-goal.instruct size comparison
+  - policy conflicts caught by the linter
+  - remaining risks
+  - next recommended slice pack
+confirmations:
+  - no live AI inference
+  - no public PoCs or real/public target actions
+  - no live runtime data mutation
+  - no unrelated dirty work overwritten
+  - README.md preserved

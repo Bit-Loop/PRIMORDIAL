@@ -1,0 +1,95 @@
+id: primordial_human_change_safety
+source_path: docs/HUMAN_CHANGE_GUIDE.md
+status: migrated
+authority: typed_engineering_workflow_not_runtime_policy
+read_first:
+  - README.md
+  - docs/HOW_PRIMORDIAL_WORKS.md
+  - docs/FLOOR_PLAN.md
+  - ai-agent-current-context.md
+  - ai-agent-prd.md
+execution_order:
+  - deterministic_planning
+  - deterministic_policy_admission
+  - bounded_execution
+  - evidence_write_back
+  - bounded_ai_review_or_proposal
+  - deterministic_verification
+core_rules:
+  - runtime_facade_for_operator_facing_behavior
+  - database_is_source_of_truth
+  - active_ip_and_generation_are_safety_critical
+  - ui_must_not_own_business_logic
+  - ai_output_requires_deterministic_checks_and_evidence_before_durable_truth
+  - do_not_bypass_scope_policy_or_generation_filters
+  - do_not_mix_historical_target_evidence_into_current_active_ip_reasoning
+source_runtime_boundaries:
+  - source_primordial_manifests_catalogs_tests
+  - runtime_data_runtime_findings_chat_log
+  - findings_context_is_operator_guidance_not_primary_transactional_store
+change_types:
+  - domain_state
+  - workflow_planning
+  - policy_safety
+  - primitive_tooling
+  - ai_model_behavior
+  - ui_api
+  - integration
+  - test_debug_observability
+authority_layers:
+  - id: runtime_facade
+    path: primordial/app/runtime.py
+  - id: workflow_planning
+    path: primordial/core/orchestration/workflow.py
+  - id: policy
+    path: primordial/core/orchestration/policy.py
+  - id: verifier
+    path: primordial/core/orchestration/verifier.py
+  - id: execution
+    path: primordial/modes/security/execution.py
+  - id: methodology
+    path: primordial/modes/security/methodology.py
+  - id: provider_routing
+    path: primordial/core/providers/router.py
+  - id: worker_dispatch
+    path: primordial/core/workers/broker.py
+  - id: storage
+    path: primordial/core/storage/
+  - id: web_api
+    path: primordial/core/web/app.py
+  - id: web_frontend
+    path: primordial/core/web/static/
+  - id: local_gui
+    path: primordial/gui/launcher.py
+change_workflow:
+  - classify_change_type_before_editing
+  - identify_owning_authority_layer
+  - read_input_decision_persistence_render_and_existing_tests
+  - change_lowest_correct_layer_first
+  - keep_deterministic_and_ai_paths_separate
+  - preserve_active_ip_generation_safety
+  - update_tests_in_same_patch
+  - run_narrow_tests_before_full_suite
+  - run_python_and_javascript_syntax_checks_when_relevant
+  - confirm_operator_surfaces_remain_coherent
+validation_commands:
+  - python3 -m unittest discover -s tests -t . -v
+  - python3 -m py_compile primordial/app/runtime.py primordial/core/orchestration/workflow.py primordial/modes/security/execution.py
+  - node --check primordial/core/web/static/app.js
+  - python3 cli.py show
+  - python3 cli.py tick
+  - python3 cli.py ask "status and next step" --target pirate.htb
+operator_surface_checks:
+  - cli_status_and_next_step
+  - gui_work_status
+  - web_api_work_status
+  - task_detail_payloads
+  - audit_event_visibility
+avoid:
+  - direct_runtime_database_edits
+  - ui_or_web_only_business_logic
+  - historical_target_evidence_in_current_planning
+  - policy_bypass_for_convenience
+  - worker_ai_as_deterministic_success_requirement_without_product_change
+  - unbounded_background_loops
+  - prose_instead_of_structured_state_for_capabilities

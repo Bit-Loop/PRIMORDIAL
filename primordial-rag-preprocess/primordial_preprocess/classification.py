@@ -13,11 +13,30 @@ def classify_sources(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def classify_record(record: dict[str, Any]) -> dict[str, Any]:
+    name, _rel, text, text_key = _record_keys(record)
+    base = _base_classification()
+    for rule_group in (
+        _classify_junk_or_attack,
+        _classify_standards_and_governance,
+        _classify_cloud_formal_and_hardware,
+        _classify_restricted_or_tooling,
+        _classify_web_and_network,
+    ):
+        classification = rule_group(base, name=name, text=text, text_key=text_key)
+        if classification is not None:
+            return classification
+    return base
+
+
+def _record_keys(record: dict[str, Any]) -> tuple[str, str, str, str]:
     name = str(record.get("filename") or "").lower()
     rel = str(record.get("relative_path") or "").lower()
     text = f"{name} {rel}"
-    text_key = text.replace("_", "-").replace(" ", "-")
-    base = {
+    return name, rel, text, text.replace("_", "-").replace(" ", "-")
+
+
+def _base_classification() -> dict[str, Any]:
+    return {
         "authority_level": "unknown",
         "corpus_type": ["low_signal"],
         "domain": [],
@@ -28,6 +47,15 @@ def classify_record(record: dict[str, Any]) -> dict[str, Any]:
         "allowed_contexts": ["owned_lab", "ctf", "authorized_security_research"],
         "classification_reason": "default unknown classification",
     }
+
+
+def _classify_junk_or_attack(
+    base: dict[str, Any],
+    *,
+    name: str,
+    text: str,
+    text_key: str,
+) -> dict[str, Any] | None:
     if "temporarily unavailable" in text or "researchgate" in text and name.endswith((".html", ".htm")):
         return {
             **base,
@@ -50,6 +78,16 @@ def classify_record(record: dict[str, Any]) -> dict[str, Any]:
             "scope_gate_required": True,
             "classification_reason": "MITRE ATT&CK STIX JSON",
         }
+    return None
+
+
+def _classify_standards_and_governance(
+    base: dict[str, Any],
+    *,
+    name: str,
+    text: str,
+    text_key: str,
+) -> dict[str, Any] | None:
     if "asvs" in text or "application-security-verification-standard" in text_key:
         return {
             **base,
@@ -97,6 +135,16 @@ def classify_record(record: dict[str, Any]) -> dict[str, Any]:
             "scope_gate_required": True,
             "classification_reason": "PTES methodology",
         }
+    return None
+
+
+def _classify_cloud_formal_and_hardware(
+    base: dict[str, Any],
+    *,
+    name: str,
+    text: str,
+    text_key: str,
+) -> dict[str, Any] | None:
     if "kubernetes" in text:
         restricted = "hacking" in text
         return {
@@ -154,6 +202,16 @@ def classify_record(record: dict[str, Any]) -> dict[str, Any]:
             "risk_level": "safe_planning",
             "classification_reason": "hardware security reference",
         }
+    return None
+
+
+def _classify_restricted_or_tooling(
+    base: dict[str, Any],
+    *,
+    name: str,
+    text: str,
+    text_key: str,
+) -> dict[str, Any] | None:
     if "binary-analysis" in text_key:
         return _restricted(base, ["binary_analysis"], "Practical binary analysis")
     if "kernel-exploitation" in text_key or "linux-kernel" in text_key:
@@ -173,6 +231,16 @@ def classify_record(record: dict[str, Any]) -> dict[str, Any]:
             "quarantine_reason": "firewall admin material disabled unless explicitly enabled",
             "classification_reason": "pfSense admin reference",
         }
+    return None
+
+
+def _classify_web_and_network(
+    base: dict[str, Any],
+    *,
+    name: str,
+    text: str,
+    text_key: str,
+) -> dict[str, Any] | None:
     if "web-application-hackers-handbook" in text or "web application hacker" in text:
         return {
             **base,
@@ -222,7 +290,7 @@ def classify_record(record: dict[str, Any]) -> dict[str, Any]:
             "quarantine_reason": "generic hacking/exploitation title requires review",
             "classification_reason": "generic hacking/exploitation title",
         }
-    return base
+    return None
 
 
 def write_classification_outputs(records: list[dict[str, Any]], output_dir: Path | str) -> None:

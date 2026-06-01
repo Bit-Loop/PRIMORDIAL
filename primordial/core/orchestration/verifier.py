@@ -35,6 +35,17 @@ class BehaviorVerifier:
         findings = findings or []
         events = events or []
 
+        current_generation_by_target = self._current_generation_by_target(targets)
+        signals.extend(self._duplicate_task_signals(tasks))
+        signals.extend(self._repeated_failure_signals(tasks))
+        signals.extend(self._trace_repeat_signals(traces))
+        signals.extend(self._evidence_generation_signals(evidence, current_generation_by_target))
+        signals.extend(self._no_progress_event_signals(events))
+        signals.extend(self._claim_support_signals(evidence, findings, interests))
+        return signals
+
+    def _duplicate_task_signals(self, tasks: list[Task]) -> list[VerifierSignal]:
+        signals: list[VerifierSignal] = []
         duplicates = Counter(
             (task.target_id, task.kind.value, task.status.value)
             for task in tasks
@@ -51,7 +62,10 @@ class BehaviorVerifier:
                         target_id=target_id,
                     )
                 )
+        return signals
 
+    def _repeated_failure_signals(self, tasks: list[Task]) -> list[VerifierSignal]:
+        signals: list[VerifierSignal] = []
         failure_counts = Counter(
             task.target_id
             for task in tasks
@@ -68,7 +82,10 @@ class BehaviorVerifier:
                         target_id=target_id,
                     )
                 )
+        return signals
 
+    def _trace_repeat_signals(self, traces: list[AgentTrace]) -> list[VerifierSignal]:
+        signals: list[VerifierSignal] = []
         trace_counter = Counter(
             trace.metadata.get("summary_key")
             for trace in traces
@@ -83,13 +100,21 @@ class BehaviorVerifier:
                         reason=f"trace pattern repeated excessively: {key}",
                     )
                 )
+        return signals
 
-        current_generation_by_target = {
+    def _current_generation_by_target(self, targets: list[Target]) -> dict[str, str]:
+        return {
             target.id: str(target.metadata.get("active_ip_generation", ""))
             for target in targets
             if target.metadata.get("active_ip_generation") is not None
         }
 
+    def _evidence_generation_signals(
+        self,
+        evidence: list[EvidenceRecord],
+        current_generation_by_target: dict[str, str],
+    ) -> list[VerifierSignal]:
+        signals: list[VerifierSignal] = []
         # Count weak evidence per (target, active_ip_generation) to avoid cross-generation false positives.
         weak_by_gen: dict[tuple[str, str], int] = defaultdict(int)
         for item in evidence:
@@ -134,7 +159,10 @@ class BehaviorVerifier:
                     target_id=target_id,
                 )
             )
+        return signals
 
+    def _no_progress_event_signals(self, events: list[EventRecord]) -> list[VerifierSignal]:
+        signals: list[VerifierSignal] = []
         no_progress_events = Counter(
             (event.target_id, event.summary)
             for event in events
@@ -150,7 +178,15 @@ class BehaviorVerifier:
                         target_id=target_id,
                     )
                 )
+        return signals
 
+    def _claim_support_signals(
+        self,
+        evidence: list[EvidenceRecord],
+        findings: list[Finding],
+        interests: list[Interest],
+    ) -> list[VerifierSignal]:
+        signals: list[VerifierSignal] = []
         verified_evidence_ids = {
             item.id
             for item in evidence

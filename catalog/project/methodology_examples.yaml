@@ -1,0 +1,33 @@
+id: primordial_methodology_examples
+status: migrated_advisory_examples
+authority: typed_advisory_examples_not_runtime_policy
+markdown_authoritative: false
+boundaries:
+  - proposal_only
+  - not_executable_by_default
+  - baseline_catalogs_not_mutated_by_examples
+  - operator_review_required_before_promotion
+  - deterministic_validation_required_before_promotion
+examples:
+  - id: web_review
+    source_path: examples/methodology/web_review.md
+    title: Web Review Methodology
+    assumptions:
+      - target_in_scope
+      - low_risk_http_review_allowed
+    steps:
+      - collect_reachable_endpoints
+      - classify_auth_surfaces
+      - review_parameters
+      - document_missing_verification_primitives
+    promotion_requirements:
+      - strict_catalog_validation
+      - focused_tests
+      - operator_approval
+    compiler_input_format: markdown
+    generated_artifact_path: proposals/methodology/web_review/proposal.md
+    proposal_semantics:
+      - operator_review_required_before_promotion
+      - strict_catalog_validation_required_before_promotion
+      - focused_runtime_tests_required_before_promotion
+      - proposal_local_artifacts_only

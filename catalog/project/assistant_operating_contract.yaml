@@ -1,0 +1,174 @@
+id: primordial_assistant_operating_contract
+source_paths:
+  - CLAUDE.md
+  - claude-instructions.md
+status: migrated
+authority: typed_assistant_guidance_not_runtime_state
+project_model:
+  - local_first_control_plane
+  - authorized_security_testing_only
+  - deterministic_workflow_system
+  - operator_directed_policy_bound_runtime
+  - bounded_llm_decision_points
+invariants:
+  - no_risky_action_without_policy_evaluation
+  - no_durable_fact_without_evidence_provenance_confidence_and_freshness
+  - ai_output_is_advisory_and_deterministic_checks_gate_decisions
+  - no_full_engagement_history_by_default
+  - explicit_scope_required_before_task_execution
+  - raw_tool_output_must_be_normalized_before_reasoning
+  - target_generation_safety_required_for_evidence_interests_findings_and_tasks
+operational_priority_order:
+  - evidence
+  - control
+  - traceability
+  - correctness
+  - maintainability
+  - performance
+layer_order:
+  - domain_models
+  - storage
+  - runtime_facade
+  - workflow_policy_execution_verifier
+  - interface_surfaces
+  - tests
+  - ui_surfaces
+layer_map:
+  - id: domain_models
+    path: primordial/core/domain/
+  - id: storage_schema
+    path: primordial/core/storage/schema.py
+  - id: storage_runtime
+    path: primordial/core/storage/runtime.py
+  - id: runtime_facade
+    path: primordial/app/runtime.py
+  - id: workflow_planning
+    path: primordial/core/orchestration/workflow.py
+  - id: policy
+    path: primordial/core/orchestration/policy.py
+  - id: verifier
+    path: primordial/core/orchestration/verifier.py
+  - id: execution
+    path: primordial/modes/security/execution.py
+  - id: methodology
+    path: primordial/modes/security/methodology.py
+  - id: memory
+    path: primordial/modes/security/memory.py
+  - id: provider_router
+    path: primordial/core/providers/router.py
+  - id: provider_scheduler
+    path: primordial/core/providers/scheduler.py
+  - id: worker_dispatch
+    path: primordial/core/workers/broker.py
+  - id: credentials
+    path: primordial/core/credentials.py
+  - id: findings_context
+    path: primordial/core/findings_context.py
+  - id: web_api
+    path: primordial/core/web/app.py
+  - id: web_frontend
+    path: primordial/core/web/static/
+  - id: local_gui
+    path: primordial/gui/launcher.py
+  - id: adapters
+    path: primordial/adapters/
+  - id: primitive_manifests
+    path: manifests/
+execution_model:
+  - bounded_ticks_not_unbounded_loops
+  - run_tick_resumes_waiting_tasks_plans_missing_tasks_runs_verifier_executes_ready_tasks_processes_queues
+  - continuous_mode_repeats_bounded_ticks
+  - policy_gates_before_execution
+  - ui_and_cli_call_runtime_facade_not_storage_or_execution_internals
+validation_commands:
+  - python3 -m unittest discover -s tests -t . -v
+  - python3 -m unittest tests.test_workflow -v
+  - python3 -m unittest tests.test_policy -v
+  - python3 -m unittest tests.test_runtime_integration -v
+  - python3 -m unittest tests.test_web_console -v
+  - python3 -m py_compile primordial/app/runtime.py primordial/core/orchestration/workflow.py primordial/modes/security/execution.py
+  - node --check primordial/core/web/static/app.js
+cli_commands:
+  - show
+  - scope
+  - tick
+  - run-loop
+  - compact
+  - process-queues
+  - add-target
+  - approve
+  - ask
+  - tui
+  - web
+  - models
+required_trace_metadata:
+  - model_name
+  - role_name
+  - task_type
+  - stage
+  - pass_fail_result
+  - confidence
+  - token_or_cost_estimate_when_available
+  - latency
+  - retry_count
+  - evidence_quality
+  - outcome_notes
+  - reason_for_success_or_failure
+tooling_inventory_rules:
+  - maintain_current_inventory_of_primitives_skills_adapters_scripts_and_workflows
+  - manifest_and_health_check_required_before_assuming_tool_exists
+  - detect_tooling_changes_disappearances_and_staleness
+  - mark_missing_degraded_or_deprecated_capabilities_unavailable
+  - tool_awareness_feeds_task_generation_methodology_and_model_routing
+resource_budget_rules:
+  - hard_token_usage_limits_per_task
+  - execution_time_ceiling_per_task_and_workflow
+  - each_task_declares_expected_cost_range_and_timeout
+  - exceeded_limits_terminate_task_and_record_failure
+  - retry_requires_explicit_justification
+  - no_runaway_loops_or_infinite_retries
+failure_containment_rules:
+  - isolate_failure_to_smallest_scope
+  - failing_task_must_not_corrupt_global_state_methodology_or_unrelated_branches
+  - partial_outputs_marked_incomplete
+  - inconsistent_state_enters_safe_mode_or_requires_operator_intervention
+  - invalid_state_transitions_rejected
+  - corrupted_or_incomplete_state_not_used_for_further_decisions
+concurrency_rules:
+  - bounded_pipeline_stages_with_inputs_outputs_exit_conditions_and_evidence
+  - parallel_work_only_when_dependencies_do_not_conflict
+  - shared_state_access_is_deterministic_and_guarded
+  - blocked_external_service_task_does_not_idle_other_safe_work
+  - detect_bottlenecks_stalls_and_deadlocks
+  - orchestrator_can_pause_split_merge_reprioritize_or_abandon_branch
+  - many_small_verifiable_steps_over_large_opaque_steps
+  - concurrency_must_not_destroy_traceability
+evidence_progression_rules:
+  - progress_only_when_evidence_supports_it
+  - do_not_advance_on_guesses_or_incomplete_output
+  - track_tool_model_and_workflow_evidence_quality
+  - de_prioritize_or_retire_repeatedly_failing_strategies
+  - never_fabricate_effectiveness
+model_routing_rules:
+  - route_work_by_role_not_habit
+  - heavy_inference_uses_gpu_routes_when_available
+  - compaction_classification_and_lightweight_checks_use_cpu_routes_when_fit
+  - role_switching_is_explicit_logged_and_evidence_based
+  - avoid_silent_role_drift
+methodology_rules:
+  - structured_phases_not_paragraphs
+  - phase_defines_goal_entry_exit_tasks_evidence_and_failure_modes
+  - methodology_changes_are_versioned_and_evidence_driven
+  - tasks_reference_parent_phase_goal_expected_output_and_success_failure_condition
+  - dead_end_branches_are_marked_exhausted_without_infinite_loops
+  - hypotheses_create_labeled_branches_with_rollback
+  - operator_can_approve_reject_modify_or_freeze_methodology
+  - ddos_and_out_of_scope_activity_never_become_methodology_tasks
+  - continuous_refinement_loop_execute_collect_evaluate_update_adjust
+markdown_governance:
+  - markdown_files_are_not_authoritative
+  - existing_markdown_content_migrates_to_typed_or_executable_sources_before_quarantine
+  - generated_markdown_exports_require_quarantine_or_runtime_paths_with_retrieval_denied
+  - legacy_allowed_markdown_list_superseded_by_active_markdown_removal
+  - legacy_ai_agent_prd_readonly_rule_superseded_by_typed_migration_and_quarantine
+  - no_new_source_markdown_files

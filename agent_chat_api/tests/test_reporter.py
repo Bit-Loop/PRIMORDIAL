@@ -11,7 +11,13 @@ try:
 except ModuleNotFoundError:
     from support import PACKAGE_ROOT
 
-from agent_chat_api.test_reporter import MarkdownTestResult, TestRecord, render_markdown_report, write_markdown_report
+from agent_chat_api.test_reporter import (
+    MarkdownTestResult,
+    TestRecord,
+    default_output_dir,
+    render_markdown_report,
+    write_markdown_report,
+)
 
 
 class ReporterTests(unittest.TestCase):
@@ -47,6 +53,15 @@ class ReporterTests(unittest.TestCase):
             self.assertTrue(report_path.name.startswith("test-results-20260514T123000Z"))
             self.assertTrue(report_path.exists())
             self.assertTrue((report_path.parent / "latest.md").exists())
+            metadata = report_path.with_suffix(report_path.suffix + ".metadata.json")
+            latest_metadata = report_path.parent / "latest.md.metadata.json"
+            self.assertTrue(metadata.exists())
+            self.assertTrue(latest_metadata.exists())
+            self.assertIn('"ingest_allowed": false', metadata.read_text(encoding="utf-8"))
+            self.assertIn('"operational_retrieval_allowed": false', metadata.read_text(encoding="utf-8"))
+
+    def test_default_output_dir_keeps_generated_markdown_under_runtime(self) -> None:
+        self.assertEqual(default_output_dir(PACKAGE_ROOT), PACKAGE_ROOT / "runtime" / "test-results")
 
 if __name__ == "__main__":
     unittest.main()

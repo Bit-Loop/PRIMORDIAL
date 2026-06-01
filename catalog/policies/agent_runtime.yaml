@@ -1,0 +1,29 @@
+id: primordial_agent_runtime
+default_operator_intent: recon_only
+authority_sources:
+  - durable_runtime_state
+  - evidence_records
+  - target_scope
+  - approvals
+  - active_operator_intent
+boundaries:
+  chat: conversational_context
+  per_target_guidance: durable_operator_instruction
+  operator_intent: durable_control_surface
+profile_label_denials:
+  - profile: hack_the_box
+    denied_authorizations:
+      - public_poc_research
+      - kerberos_attack_checks
+      - credential_validation
+      - lab_flag_collection
+baseline_forbidden_behaviors:
+  - public_poc_execution
+  - exploit_code_generation
+  - brute_force
+  - credential_spraying
+  - hash_cracking
+  - reverse_shell
+  - shell_true
+  - automatic_tool_installation
+  - unbounded_command_execution

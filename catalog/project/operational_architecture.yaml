@@ -1,0 +1,312 @@
+id: primordial_operational_architecture
+source_path: docs/HOW_PRIMORDIAL_WORKS.md
+status: migrated_operational_model
+authority: advisory_operational_model_not_runtime_policy
+runtime_model: local_first_deterministic_control_plane
+always_on_prompt_agent: false
+core_invariants:
+  - scope_must_be_explicit
+  - policy_gates_risky_actions
+  - tasks_are_durable_records_not_chat_messages
+  - evidence_is_stored_with_provenance
+  - ai_workers_receive_bounded_context_slices
+  - notion_and_discord_are_external_views_not_source_truth
+  - continuous_mode_is_bounded_repeated_ticks
+runtime_assembly:
+  entrypoint: primordial/app/runtime.py
+  components:
+    - name: RuntimeStore
+      role: postgres_pgvector_backed_durable_operational_state
+    - name: CredentialStore
+      role: local_credential_storage_and_redacted_status
+    - name: PrimitiveCatalog
+      role: loads_primitive_manifests_from_manifests
+    - name: WorkflowOrchestrator
+      role: plans_and_executes_bounded_task_ticks
+    - name: PolicyEngine
+      role: decides_allowed_denied_or_needs_approval
+    - name: ProviderRouter
+      role: chooses_local_fast_local_deep_local_code_compact_or_remote_premium_route
+    - name: ModelScheduler
+      role: controls_route_concurrency_and_scheduling
+    - name: BehaviorVerifier
+      role: detects_loops_unsupported_claims_and_suspicious_agent_behavior
+    - name: RuntimeSkillRegistry
+      role: loads_local_skills
+    - name: FindingsContextService
+      role: manages_bounded_per_target_findings_context_and_exports
+    - name: ModuleRegistry
+      role: lazy_loads_security_notion_discord_and_caido_modules
+  facade_methods:
+    - run_tick
+    - register_target
+    - import_scope_payload
+    - ask_operator_ai
+    - warm_model_routes
+    - update_execution_mode
+    - credential_setters
+  boundaries:
+    - ui_and_cli_layers_prefer_runtime_facade_methods
+    - avoid_direct_storage_or_worker_reach_from_interfaces
+storage:
+  files:
+    - primordial/core/storage/schema.py
+    - primordial/core/storage/runtime.py
+  source_of_truth: postgres_pgvector_runtime_store
+  required_environment:
+    - PRIMORDIAL_DATABASE_URL
+  records:
+    - targets
+    - scope_assets
+    - sessions
+    - tasks
+    - task_runs
+    - evidence
+    - notes
+    - interests
+    - findings
+    - memory_entries
+    - policy_decisions
+    - traces
+    - artifacts
+    - notifications
+    - external_sync_jobs
+    - model_settings_state
+  boundaries:
+    - database_is_operational_source_of_truth
+    - runtime_directory_is_for_local_output_files_artifacts_checkpoints_exports_and_secrets
+    - ui_panels_notion_exports_chat_logs_and_markdown_guidance_are_derived_or_auxiliary
+scope_and_targets:
+  entrypoints:
+    - PrimordialRuntime.register_target
+    - PrimordialRuntime.import_scope
+    - PrimordialRuntime.import_scope_payload
+  target_fields:
+    - handle
+    - display_name
+    - profile
+    - in_scope_flag
+    - assets
+    - metadata
+  input_surfaces:
+    - cli
+    - gui_scope_management
+    - web_scope_section
+    - json_scope_files
+    - line_based_scope_files
+  rules:
+    - workflow_planner_needs_targets_and_assets_before_useful_work
+execution_model:
+  tick_pipeline:
+    - operator_ui_or_continuous_loop
+    - PrimordialRuntime.run_tick
+    - WorkflowOrchestrator.tick
+  tick_steps:
+    - resume_due_waiting_tasks
+    - inspect_targets
+    - plan_missing_methodology_tasks
+    - run_behavior_verifier_checks
+    - execute_ready_tasks_up_to_max_executions
+    - process_external_queues
+  modes:
+    - tick_mode_operator_triggered
+    - continuous_mode_repeated_bounded_policy_gated_ticks
+workflow_planning:
+  files:
+    - primordial/core/orchestration/workflow.py
+    - primordial/modes/security/methodology.py
+  rules:
+    - orchestrator_plans_based_on_target_state_and_evidence
+    - if_no_evidence_plan_recon
+    - if_dns_exposed_plan_dns_enumeration
+    - if_ldap_kerberos_smb_exposed_plan_ad_or_kerberos_tasks
+    - if_http_live_plan_web_content_discovery
+    - if_evidence_density_justifies_plan_analysis_or_exploit_research
+    - if_behavior_suspicious_plan_behavior_verification
+    - avoid_repeating_completed_work_unless_evidence_changes_or_retry_resume_rule_applies
+policy_and_safety:
+  file: primordial/core/orchestration/policy.py
+  evaluates_against:
+    - scope
+    - risk_tier
+    - methodology_phase
+    - autonomy_mode
+    - approval_requirements
+    - exploitative_action_settings
+    - bounded_timeout_request_constraints
+    - agent_safety_approval_metadata
+  rules:
+    - ai_suggestion_is_not_sufficient_for_risky_exploitation_or_poc_execution
+    - risky_work_requires_explicit_scope_task_metadata_policy_pass_and_usually_approval
+workers_and_primitives:
+  files:
+    - primordial/modes/security/execution.py
+  task_handlers:
+    - recon
+    - service_discovery
+    - dns_enumeration
+    - ad_enumeration
+    - kerberos_discovery
+    - searchsploit_research
+    - memory_compaction
+    - behavior_review
+  manifest_paths:
+    - manifests/*.json
+  outputs:
+    - normalized_evidence
+    - interests
+    - notes
+    - findings
+    - artifacts
+    - notifications
+  rules:
+    - model_reasons_over_capability_and_metadata_not_arbitrary_shell_commands
+    - outputs_become_structured_runtime_records_or_artifacts
+ai_model_use:
+  files:
+    - primordial/core/providers/router.py
+    - primordial/core/providers/scheduler.py
+    - primordial/core/providers/ollama.py
+    - primordial/app/runtime.py
+  roles:
+    - id: local_fast
+      purpose: hot_path_orchestration_and_broad_analysis
+    - id: local_deep
+      purpose: harder_reasoning_and_operator_q_and_a
+    - id: local_code
+      purpose: mission_critical_code_exploit_research_and_poc_adaptation
+    - id: local_compact
+      purpose: memory_compaction_lightweight_verification_and_background_classification
+  uses:
+    - operator_questions
+    - bounded_worker_reviews
+    - analysis_summaries
+    - exploit_research_summaries
+    - behavior_review
+    - memory_compaction_and_guidance
+  boundaries:
+    - ai_is_not_permanent_full_context_chatbot
+    - persistent_knowledge_stored_as_structured_records_and_per_target_guidance
+operator_chat_and_ai_thinking:
+  entrypoints:
+    - PrimordialRuntime.ask_operator_ai
+    - gui_operator_chat_tab
+    - web_operator_ai_section
+  storage:
+    - runtime_database
+    - chat_log/YYYY-MM-DD/*.json
+  display_rules:
+    - ai_thinking_tab_shows_model_reasoning_artifacts_worker_review_notes_ai_traces_and_non_deterministic_operator_answers
+    - deterministic_status_replies_excluded_from_ai_thinking
+auxiliary_views:
+  findings_paths:
+    - findings/workspace.yaml
+    - findings/targets/<target>/guidance.md
+    - findings/targets/<target>/findings.md
+    - findings/targets/<target>/evidence.md
+    - findings/notion/<target>/notion-export.md
+  integration_files:
+    - primordial/core/findings_context.py
+    - primordial/adapters/notion.py
+    - primordial/adapters/discord.py
+    - primordial/adapters/caido.py
+  rules:
+    - findings_guidance_is_bounded_per_target_context_not_raw_scanner_dump
+    - guidance_markdown_is_runtime_auxiliary_not_repo_source_truth
+    - notion_exports_are_external_views_not_source_of_truth
+    - notion_exports_mirror_local_canonical_records
+    - discord_is_not_an_audit_log
+    - caido_remains_web_testing_backbone_where_applicable
+interfaces:
+  - id: cli
+    files:
+      - primordial/cli.py
+    uses:
+      - automation
+      - smoke_tests
+      - debugging
+      - simple_operator_workflows
+    rules:
+      - call_primordial_runtime
+      - do_not_implement_separate_business_logic
+  - id: gui
+    files:
+      - primordial/gui/launcher.py
+    uses:
+      - local_desktop_control
+      - web_server_start_stop
+      - scope_management
+      - guidance_editing
+      - model_controls
+      - credentials
+      - agent_monitor
+      - ai_thinking_stream
+      - operator_chat
+    rules:
+      - use_background_threads_and_queue_to_avoid_blocking_tk
+      - do_not_update_tk_widgets_directly_from_background_threads
+  - id: web_app
+    files:
+      - primordial/core/web/app.py
+      - primordial/core/web/static/index.html
+      - primordial/core/web/static/app.js
+      - primordial/core/web/static/styles.css
+    uses:
+      - browser_based_control
+      - target_scope_import
+      - credentials
+      - model_role_selection
+      - operator_chat
+      - guidance_editing
+      - task_inspection
+      - records_and_audit_review
+    rules:
+      - intentionally_local_and_simple
+      - local_no_auth_no_multi_user_no_server_sent_updates
+ui_sync:
+  shared_store_items:
+    - app_settings_execution_mode
+    - app_settings_model_roles
+    - credential_store
+    - target_and_scope_asset_tables
+    - per_target_guidance_payloads
+    - postgres_tasks_traces_and_evidence
+  rules:
+    - gui_and_web_share_runtime_and_storage
+    - gui_and_web_do_not_directly_talk_to_each_other
+critical_data_flow:
+  - operator_imports_target
+  - runtime_registers_target_and_assets
+  - tick_plans_recon_or_service_tasks
+  - policy_validates_task
+  - provider_router_chooses_model_route
+  - worker_executes_primitive
+  - evidence_artifacts_notes_interests_written
+  - memory_guidance_export_notification_queues_update
+  - gui_web_cli_render_refreshed_state
+current_strengths:
+  - real_durable_state_model_instead_of_mock_ui_state
+  - separation_between_runtime_facade_workflow_storage_policy_providers_and_adapters
+  - useful_test_coverage_for_web_workflow_policy_credentials_target_import_and_primitives
+  - explicit_model_role_routing
+  - bounded_tick_architecture_safer_than_persistent_autonomous_prompt
+  - findings_guidance_workspace_bridges_human_notes_and_agent_context
+current_weak_points:
+  - primordial_runtime_is_becoming_god_object
+  - primordial_gui_launcher_is_too_large
+  - web_static_app_js_is_too_large
+  - security_execution_mixes_many_primitive_families
+  - web_dispatch_is_long_if_else_chain
+  - continuous_mode_ui_driven_not_durable_server_scheduler
+  - v1_runtime_storage_is_postgres_pgvector_only_sqlite_is_historical
+  - no_web_authentication_layer
+  - no_formal_api_schema
+  - n8n_reference_tree_pollutes_searches_unless_excluded
+safe_development_rules:
+  - do_not_bypass_policy_engine_for_risky_work
+  - do_not_write_secrets_to_logs_chat_dashboard_payloads_or_tests
+  - do_not_make_notion_or_discord_canonical_storage
+  - do_not_load_whole_findings_folder_into_prompts
+  - do_not_turn_continuous_mode_into_unbounded_loop
+  - do_not_expose_arbitrary_shell_execution_to_ai_workers
+  - add_tests_for_new_runtime_web_workflow_policy_behavior

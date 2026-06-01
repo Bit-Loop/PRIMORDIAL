@@ -1,0 +1,146 @@
+version: 1
+phases:
+  - number: 0
+    id: phase_0_harness_first
+    name: Phase 0 Harness First
+    status: ready_for_review
+    target_families:
+      - deterministic_local_fixtures
+      - fake_ctfd
+      - closed_book_package
+    allowed_profiles:
+      - co_internal_lab
+    environment_proof_required: false
+    deterministic_fixture_required: true
+    exit_gates:
+      - ctf_target_manifest_contracts_pass
+      - closed_book_package_contracts_pass
+      - fake_ctfd_scoreboard_contracts_pass
+      - solve_session_contracts_pass
+      - hidden_material_and_hardcode_gates_pass
+    validation_commands:
+      - python3 -m unittest tests.test_ctf_harness_targets tests.test_ctf_harness_closed_book tests.test_ctf_harness_ctfd_client tests.test_ctf_harness_sessions tests.test_ctf_harness_hardcode_scan -q
+      - python3 -m primordial.core.quality.hardcode
+  - number: 1
+    id: phase_1_juice_shop
+    name: Phase 1 Juice Shop
+    status: not_started
+    target_families:
+      - owasp_juice_shop
+    allowed_profiles:
+      - co_internal_lab
+    environment_proof_required: true
+    deterministic_fixture_required: true
+    exit_gates:
+      - local_container_environment_verified
+      - closed_book_ctfd_export_loaded_without_flags
+      - solve_attempts_scored_without_writeup_access
+    validation_commands: []
+  - number: 2
+    id: phase_2_vulhub_cve_labs
+    name: Phase 2 Vulhub CVE Labs
+    status: not_started
+    target_families:
+      - vulhub_cve_labs
+    allowed_profiles:
+      - co_internal_lab
+    environment_proof_required: true
+    deterministic_fixture_required: true
+    exit_gates:
+      - local_container_environment_verified
+      - cve_target_manifests_include_versions_and_scope
+      - exploit_applicability_checked_against_observed_evidence
+    validation_commands: []
+  - number: 3
+    id: phase_3_mbptl
+    name: Phase 3 MBPTL
+    status: not_started
+    target_families:
+      - mbptl
+    allowed_profiles:
+      - co_internal_lab
+    environment_proof_required: true
+    deterministic_fixture_required: true
+    exit_gates:
+      - local_lab_environment_verified
+      - phase_targets_loaded_from_manifests
+      - scoring_results_include_evidence_refs
+    validation_commands: []
+  - number: 4
+    id: phase_4_ci_cd_goat
+    name: Phase 4 CI/CD Goat
+    status: not_started
+    target_families:
+      - ci_cd_goat
+    allowed_profiles:
+      - co_internal_lab
+    environment_proof_required: true
+    deterministic_fixture_required: true
+    exit_gates:
+      - local_container_environment_verified
+      - ci_cd_attack_paths_bound_to_lab_scope
+      - no_external_pipeline_mutation_without_verified_lab
+    validation_commands: []
+  - number: 5
+    id: phase_5_kubernetes_goat
+    name: Phase 5 Kubernetes Goat
+    status: not_started
+    target_families:
+      - kubernetes_goat
+    allowed_profiles:
+      - co_internal_lab
+    environment_proof_required: true
+    deterministic_fixture_required: true
+    exit_gates:
+      - local_cluster_environment_verified
+      - namespace_scope_enforced
+      - cluster_mutations_reset_between_runs
+    validation_commands: []
+  - number: 6
+    id: phase_6_goad_light_goad
+    name: Phase 6 GOAD-Light/GOAD
+    status: not_started
+    target_families:
+      - goad_light
+      - goad
+    allowed_profiles:
+      - co_internal_lab
+    environment_proof_required: true
+    deterministic_fixture_required: true
+    exit_gates:
+      - local_ad_lab_environment_verified
+      - kerberos_and_smb_actions_policy_gated
+      - credential_use_requires_operator_supplied_material
+    validation_commands: []
+  - number: 7
+    id: phase_7_cloudgoat
+    name: Phase 7 CloudGoat
+    status: not_started
+    target_families:
+      - cloudgoat
+    allowed_profiles:
+      - co_internal_lab
+    environment_proof_required: true
+    deterministic_fixture_required: true
+    exit_gates:
+      - sandbox_cloud_account_verified
+      - account_boundary_and_region_scope_enforced
+      - teardown_evidence_recorded
+    validation_commands: []
+  - number: 8
+    id: phase_8_dreadgoad_ctf_dojo_nyu_ctf_bench
+    name: Phase 8 DreadGOAD/CTF-Dojo/NYU CTF Bench
+    status: not_started
+    target_families:
+      - dreadgoad
+      - ctf_dojo
+      - nyu_ctf_bench
+    allowed_profiles:
+      - co_internal_lab
+    environment_proof_required: true
+    deterministic_fixture_required: true
+    exit_gates:
+      - benchmark_environment_verified
+      - target_rotation_and_reset_verified
+      - aggregate_scoring_uses_evidence_backed_results
+    validation_commands: []

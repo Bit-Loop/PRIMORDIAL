@@ -1,0 +1,421 @@
+id: conflicting_methodologies_decision_pressure_map
+source_path: docs/CONFLICTING_METHODOLOGIES.md
+status: migrated_design_pressure_context
+authority: advisory_design_context_not_runtime_policy
+reading_frame:
+  - control_plane_first_runtime_for_authorized_security_work
+  - safety_speed_structure_flexibility_durable_state_and_transient_operator_thought_are_persistent_tensions
+  - layer_ownership_must_be_explicit
+  - decisions_may_inform_design_but_do_not_override_runtime_policy_or_operator_intent
+conflicts:
+  - id: source_of_truth
+    title: Durable Control Plane vs Conversational Speed
+    source_of_difference: operator_experience_vs_safety_and_auditability
+    side_a:
+      label: durable_control_plane
+      snippet: chat_is_not_the_source_of_truth_durable_runtime_state_is
+      pros:
+        - clear_state_lineage_for_scope_tasks_evidence_approvals_and_intent
+        - safer_recovery_after_crashes_or_long_sessions
+        - easier_to_test_and_explain
+      cons:
+        - more_ceremony_for_simple_operator_corrections
+        - requires_explicit_ui_api_affordances
+        - can_feel_slower_than_pure_chat_loop
+    side_b:
+      label: conversational_speed
+      snippet: operator_said_it_in_chat_system_should_adapt_immediately
+      pros:
+        - faster_target_correction_and_workflow_steering
+        - natural_operator_experience
+        - lower_friction_for_exploratory_work
+      cons:
+        - harder_to_audit_why_task_was_planned
+        - easy_to_mix_old_context_with_current_target_state
+        - risky_when_chat_implies_unsafe_capability_escalation
+    grand_scheme_importance: decides_whether_primordial_is_prompt_driven_assistant_or_workflow_runtime_that_uses_ai
+    default_resolution: durable_state_wins_for_behavior_chat_remains_context
+    resolution_idea: chat_may_propose_changes_guidance_or_next_actions_but_runtime_state_persists_actual_decisions
+    resolution_guards:
+      - per_target_guidance_active_operator_intent_scope_evidence_and_approvals_are_durable
+      - chat_influences_but_does_not_authorize_behavior
+  - id: autonomy
+    title: recon_only Default vs Capable Security Runtime
+    source_of_difference: safety_default_vs_useful_authorized_security_capability
+    side_a:
+      label: recon_only_by_default
+      snippet: default_generic_sessions_to_recon_only_and_make_lab_authorization_explicit
+      pros:
+        - fails_closed
+        - protects_against_accidental_unsafe_work
+        - keeps_baseline_autonomy_simple_and_defensible
+      cons:
+        - can_block_legitimate_lab_workflows_until_intent_is_configured
+        - may_frustrate_users_expecting_profile_specific_behavior
+        - requires_clear_ui_surfacing_for_why_blocked
+    side_b:
+      label: capable_security_workflow
+      snippet: security_runtime_that_cannot_advance_beyond_recon_is_not_operationally_useful
+      pros:
+        - supports_end_to_end_authorized_workflows
+        - makes_lab_mode_useful
+        - enables_evidence_backed_progression_through_methodology_phases
+      cons:
+        - higher_safety_and_policy_burden
+        - more_edge_cases_around_credentials_pocs_and_replay_actions
+        - more_tests_required_for_gating_behavior
+    grand_scheme_importance: long_term_value_is_controlled_capability_with_explicit_intent_scope_evidence_and_approval
+    default_resolution: intent_gates_capability_escalation
+    resolution_idea: keep_recon_only_as_generic_default_and_route_stronger_behavior_through_active_intent_scope_evidence_approval_and_task_policy
+    resolution_guards:
+      - recon_only_generic_durable_default
+      - environment_proof_required_for_lab_default_intent
+      - missing_intent_or_evidence_explains_blocked_work
+  - id: methodology_structure
+    title: Explicit State Machines vs Evidence-Driven Methodology Planning
+    source_of_difference: formal_state_correctness_vs_adaptive_planning
+    side_a:
+      label: explicit_state_machines
+      snippet: make_task_session_methodology_state_machines_explicit_with_tables
+      pros:
+        - invalid_transitions_become_testable
+        - easier_recovery_semantics
+        - better_audit_trail_for_status_changes
+      cons:
+        - can_overfit_methodology_into_rigid_graph
+        - risk_of_rewriting_planner_behavior_accidentally
+        - transition_tables_can_hide_guards_elsewhere
+    side_b:
+      label: evidence_driven_planning
+      snippet: methodology_is_planner_snapshot_derived_from_evidence
+      pros:
+        - responds_to_new_evidence_and_generation_changes
+        - avoids_hardcoded_linear_methodology_paths
+        - handles_blockers_and_no_progress_states
+      cons:
+        - harder_to_predict_all_paths
+        - guard_logic_can_sprawl
+        - complex_behavior_hides_inside_helpers
+    grand_scheme_importance: separates_deterministic_workflow_engine_from_rule_based_reasoning_planner
+    default_resolution: explicit_task_run_fsms_planner_remains_evidence_derived
+    resolution_idea: make_task_run_and_session_status_explicit_first_and_treat_methodology_state_as_derived_planning_model
+    resolution_guards:
+      - planner_decision_records_explain_evidence_and_guards
+      - methodology_transitions_must_not_bypass_task_or_run_state_validation
+  - id: modularity
+    title: Modular Services vs Behavior Preservation
+    source_of_difference: maintainability_pressure_vs_regression_risk
+    side_a:
+      label: split_services
+      snippet: split_large_orchestration_files_now_they_carry_too_much
+      pros:
+        - smaller_files_with_clearer_ownership
+        - easier_tests_for_planner_guards_persistence_and_policy
+        - lower_cognitive_load_for_future_contributors
+      cons:
+        - requires_careful_dependency_boundaries
+        - may_add_indirection_before_behavior_is_understood
+        - can_split_code_physically_while_coupling_remains
+    side_b:
+      label: preserve_known_behavior
+      snippet: large_files_encode_working_behavior_and_broad_splits_can_silently_change_semantics
+      pros:
+        - lower_immediate_risk
+        - existing_tests_and_call_paths_remain_stable
+        - faster_small_feature_work
+      cons:
+        - complexity_compounds
+        - harder_review_and_debugging
+        - new_features_encourage_mixed_responsibilities
+    grand_scheme_importance: project_must_scale_without_architecture_cleanup_changing_runtime_behavior_without_proof
+    default_resolution: extract_behind_tests_no_semantic_rewrite
+    resolution_idea: extract_by_behavior_not_aesthetics_with_behavior_preserving_tests_before_feature_expansion
+    resolution_guards:
+      - preserve_inputs_outputs_and_policy_semantics
+      - refactor_tests_must_cover_status_transitions_persistence_planner_guards_and_decision_explanations
+  - id: policy_gates
+    title: Centralized Policy Gates vs Local Feature Logic
+    source_of_difference: consistency_vs_implementation_convenience
+    side_a:
+      label: centralized_policy
+      snippet: policy_must_remain_centralized_enough_to_be_trusted
+      pros:
+        - single_explainable_admission_layer
+        - consistent_behavior_across_surfaces
+        - easier_to_test_against_dangerous_actions
+      cons:
+        - can_become_dumping_ground
+        - may_require_richer_metadata_contracts
+        - might_slow_feature_iteration
+    side_b:
+      label: local_feature_logic
+      snippet: put_gate_where_feature_is_built_local_code_has_context
+      pros:
+        - faster_feature_delivery
+        - uses_domain_specific_context_directly
+        - avoids_overly_generic_policy_abstractions
+      cons:
+        - duplicated_safety_checks
+        - harder_to_audit
+        - higher_bypass_risk_between_cli_web_gui_and_worker_paths
+    grand_scheme_importance: reviewers_must_answer_what_actions_are_allowed_what_needs_approval_and_why
+    default_resolution: centralized_policy_decides_feature_code_describes_action
+    resolution_idea: feature_code_produces_structured_metadata_and_policy_evaluates_whether_action_is_allowed
+    resolution_guards:
+      - admission_layer_remains_explainable
+      - cli_web_gui_and_worker_paths_share_policy_decisions
+  - id: evidence_handling
+    title: Selected Evidence Import vs Automatic Ingestion
+    source_of_difference: operator_curation_vs_completeness
+    side_a:
+      label: selected_import
+      snippet: search_results_stay_transient_until_operator_imports_them
+      pros:
+        - keeps_evidence_high_signal
+        - preserves_operator_control
+        - reduces_accidental_storage_of_sensitive_raw_traffic
+      cons:
+        - requires_extra_operator_action
+        - may_miss_useful_context
+        - makes_automation_less_complete
+    side_b:
+      label: automatic_ingestion
+      snippet: automatic_ingestion_captures_more_context_and_avoids_missed_evidence
+      pros:
+        - better_coverage
+        - less_manual_workflow_friction
+        - more_context_for_analysis_and_replay_linkage
+      cons:
+        - can_pollute_durable_evidence
+        - harder_to_explain_task_planning_from_noisy_data
+        - higher_storage_and_redaction_burden
+    grand_scheme_importance: evidence_store_quality_controls_planning_quality_and_trust
+    default_resolution: explicit_import_for_external_traffic
+    resolution_idea: use_transient_search_by_default_and_selected_import_for_durability_with_future_batch_import_explicit_and_auditable
+    resolution_guards:
+      - store_references_hashes_metadata_and_snippets_before_bodies
+      - external_traffic_does_not_become_active_evidence_without_import
+  - id: replay_approval
+    title: Same-Session Replay Confirmation vs Durable Raw-Request Approval Artifacts
+    source_of_difference: safety_audit_trail_vs_secret_and_raw_data_minimization
+    side_a:
+      label: same_session_confirmation
+      snippet: confirm_raw_replay_bytes_in_session_and_store_metadata_only
+      pros:
+        - lower_durable_sensitive_data_footprint
+        - operator_still_approves_before_send
+        - simpler_first_implementation
+      cons:
+        - weaker_historical_replay_of_exact_operator_decision
+        - harder_for_asynchronous_review
+        - requires_ui_session_clarity
+    side_b:
+      label: durable_replay_approval_artifacts
+      snippet: replay_sends_should_be_confirmed_and_auditable
+      pros:
+        - strong_audit_trail
+        - easier_review_after_the_fact
+        - supports_asynchronous_approval_workflows
+      cons:
+        - raw_request_persistence_risk
+        - redaction_complexity
+        - more_sensitive_data_in_database_or_files
+    grand_scheme_importance: replay_crosses_from_passive_analysis_into_active_http_behavior
+    default_resolution: same_session_for_raw_bytes_durable_metadata_only
+    resolution_idea: record_request_id_target_timestamp_intent_result_hashes_and_safe_snippets_after_same_session_confirmation
+    resolution_guards:
+      - raw_replay_persistence_requires_secure_storage_and_redaction_policy
+      - replay_actions_require_operator_control
+  - id: model_evaluation
+    title: Recommend-Only Model Evaluation vs Automatic Model Role Mutation
+    source_of_difference: inspectable_optimization_vs_live_runtime_mutation
+    side_a:
+      label: recommend_only
+      snippet: evaluate_models_and_recommend_best_roles
+      pros:
+        - operator_reviews_before_runtime_behavior_changes
+        - produces_inspectable_csv_json_artifacts
+        - easier_to_compare_benchmark_runs
+      cons:
+        - requires_manual_follow_up
+        - runtime_may_keep_weaker_defaults
+        - more_cli_and_reporting_work
+    side_b:
+      label: automatic_role_mutation
+      snippet: benchmark_knows_best_model_so_update_model_roles_automatically
+      pros:
+        - faster_adaptation
+        - reduces_operator_burden
+        - can_keep_roles_fresh_as_local_inventory_changes
+      cons:
+        - surprising_behavior_changes
+        - harder_to_debug_regressions
+        - benchmark_noise_can_alter_live_routing
+    grand_scheme_importance: model_routing_affects_ai_assisted_planning_code_reasoning_and_compaction
+    default_resolution: recommendations_first_operator_apply_required
+    resolution_idea: allow_future_apply_action_with_before_after_diff_rollback_data_and_explicit_operator_confirmation
+    resolution_guards:
+      - operator_action_required_for_model_role_mutation
+      - before_after_diff_and_rollback_required_for_apply_action
+  - id: benchmarking
+    title: Exhaustive Benchmarking vs Fast Iteration
+    source_of_difference: confidence_vs_feedback_speed
+    side_a:
+      label: exhaustive_coverage
+      snippet: run_full_exhaustive_coverage_across_local_models
+      pros:
+        - more_reliable_recommendations
+        - better_comparison_across_ollama_and_lmstudio
+        - captures_slow_or_refusal_prone_models
+      cons:
+        - long_runtime
+        - more_resource_pressure
+        - more_complex_lifecycle_handling_for_unloaded_models
+    side_b:
+      label: fast_smoke_iteration
+      snippet: use_fast_smoke_test_for_development_practicality
+      pros:
+        - fast_development_feedback
+        - easier_ci_option
+        - good_for_harness_regressions
+      cons:
+        - weak_role_fit_confidence
+        - can_miss_hallucination_or_refusal_issues
+        - poor_basis_for_model_routing_changes
+    grand_scheme_importance: local_model_quality_affects_safety_and_usefulness_but_slow_benchmarks_will_not_be_run_often
+    default_resolution: exhaustive_scheduled_path_smoke_path_for_development
+    resolution_idea: keep_exhaustive_as_recommendation_default_and_name_smoke_mode_only_for_harness_development_or_ci_sanity
+    resolution_guards:
+      - smoke_results_do_not_drive_final_role_recommendations
+      - exhaustive_runs_may_use_runtime_head_skip_policy
+  - id: ai_reasoning
+    title: AI Proposals vs Deterministic Authority
+    source_of_difference: ai_usefulness_vs_control_plane_trust
+    side_a:
+      label: proposal_engine
+      snippet: let_model_propose_methodology_steps_and_next_actions
+      pros:
+        - more_adaptive_planning
+        - better_use_of_context_and_nuance
+        - can_surface_hypotheses_static_rules_miss
+      cons:
+        - hallucination_risk
+        - may_invent_unsupported_primitives
+        - can_overreach_scope_or_intent
+    side_b:
+      label: deterministic_authority
+      snippet: do_not_let_ai_output_become_durable_truth_without_deterministic_checks
+      pros:
+        - testable
+        - auditable
+        - safer_under_adversarial_or_ambiguous_context
+      cons:
+        - less_adaptive
+        - more_engineering_work_to_encode_useful_behavior
+        - can_under_plan_in_novel_situations
+    grand_scheme_importance: defines_ai_as_reasoning_amplifier_not_replacement_for_policy_evidence_and_intent
+    default_resolution: ai_proposes_policy_state_decide
+    resolution_idea: store_ai_proposals_as_metadata_until_primitives_policy_evidence_linkage_and_intent_allow_conversion_to_tasks_or_findings
+    resolution_guards:
+      - ai_may_propose_deterministic_systems_admit
+      - primitives_policy_evidence_and_intent_required_before_tasks
+  - id: local_execution
+    title: Local-First Execution vs Remote Premium Review
+    source_of_difference: privacy_cost_control_vs_higher_quality_external_reasoning
+    side_a:
+      label: local_first_control
+      snippet: keep_execution_and_reasoning_local_first
+      pros:
+        - better_privacy
+        - predictable_cost
+        - works_offline_or_in_lab_environments
+      cons:
+        - model_quality_limits
+        - slower_or_weaker_hard_reasoning
+        - more_burden_on_local_hardware
+    side_b:
+      label: remote_premium_review
+      snippet: hard_analysis_deserves_premium_or_remote_review
+      pros:
+        - better_deep_reasoning_for_selected_cases
+        - useful_for_high_value_finding_review
+        - can_reduce_false_positives
+      cons:
+        - cost_and_privacy_concerns
+        - requires_stricter_evidence_packaging
+        - needs_explicit_operator_approval
+    grand_scheme_importance: local_first_posture_is_strategic_but_total_local_isolation_can_cap_reasoning_quality
+    default_resolution: local_default_explicit_remote_escalation
+    resolution_idea: use_remote_review_only_through_escalation_packages_policy_checks_and_operator_controlled_settings
+    resolution_guards:
+      - remote_review_requires_explicit_escalation_package
+      - local_execution_remains_default
+  - id: ui_design
+    title: Fast UI Feature Growth vs Domain/API Boundaries
+    source_of_difference: interface_velocity_vs_maintainable_control_plane_layering
+    side_a:
+      label: fast_integrated_panels
+      snippet: add_panel_and_wire_state_directly
+      pros:
+        - rapid_operator_feedback
+        - easier_workflow_discovery
+        - useful_for_shaping_product_direction
+      cons:
+        - large_panels_accumulate_hidden_logic
+        - duplicate_behavior_across_surfaces
+        - harder_test_coverage
+    side_b:
+      label: clean_domain_api_boundaries
+      snippet: ui_must_not_invent_business_logic
+      pros:
+        - ui_renders_canonical_state
+        - runtime_api_contracts_stay_testable
+        - consistent_behavior_across_cli_gui_and_web
+      cons:
+        - more_upfront_api_design
+        - slower_visual_iteration
+        - requires_better_fixtures_and_payload_contracts
+    grand_scheme_importance: operator_dashboard_must_show_runtime_truth_not_comforting_divergent_semantics
+    default_resolution: ui_consumes_state_runtime_owns_logic
+    resolution_idea: ui_optimizes_presentation_and_interaction_while_runtime_api_owns_state_changes_and_policy_sensitive_decisions
+    resolution_guards:
+      - new_ui_behavior_requires_runtime_or_api_contract
+      - ui_must_not_duplicate_policy_sensitive_logic
+  - id: runtime_artifacts
+    title: Runtime Artifacts In Repo vs Clean Source Hygiene
+    source_of_difference: inspectability_vs_repository_clarity
+    side_a:
+      label: inspectable_artifacts
+      snippet: keep_artifacts_visible_so_humans_can_inspect_what_happened
+      pros:
+        - easy_inspection
+        - good_debugging_trail
+        - useful_for_demos_and_operator_review
+      cons:
+        - dirty_worktrees
+        - accidental_sensitive_data_commits
+        - distorts_complexity_and_repository_health_metrics
+    side_b:
+      label: clean_repo_hygiene
+      snippet: do_not_let_generated_runtime_data_become_source_code_noise
+      pros:
+        - easier_review
+        - lower_secret_and_data_leakage_risk
+        - better_automated_analysis
+      cons:
+        - requires_explicit_artifact_paths_and_ignore_rules
+        - useful_context_may_be_less_visible
+        - needs_export_import_conventions_for_sharing_evidence
+    grand_scheme_importance: primordial_produces_durable_artifacts_but_source_control_must_not_become_runtime_database
+    default_resolution: runtime_artifacts_outside_source_control_by_default
+    resolution_idea: keep_runtime_artifacts_inspectable_but_track_only_intentional_examples_schemas_docs_fixtures_and_sanitized_test_data
+    resolution_guards:
+      - generated_runtime_data_must_not_become_source_truth
+      - source_control_tracks_sanitized_intentional_artifacts_only
+cross_cutting_principles:
+  - authority_belongs_to_durable_state_not_prose
+  - ai_proposes_deterministic_systems_admit
+  - safety_defaults_fail_closed
+  - escalation_must_be_explicit
+  - refactors_preserve_semantics_first
+  - artifacts_inspectable_but_intentionally_durable

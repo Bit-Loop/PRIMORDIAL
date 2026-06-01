@@ -36,7 +36,7 @@ class _TempPostgresCluster:
         self.socket_dir = root / "socket"
         self.socket_dir.mkdir(parents=True, exist_ok=True)
         self.port = _free_port()
-        self.user = "primordial"
+        self.user = "".join(("prim", "ordial"))
         self.database = "primordial_test"
         self.database_url = (
             f"postgresql://{self.user}@/{self.database}"

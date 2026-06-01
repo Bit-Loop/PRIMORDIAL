@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import platform
 import sys
 import time
@@ -75,6 +76,19 @@ class MarkdownTestRunner(unittest.TextTestRunner):
     resultclass = MarkdownTestResult
 
 
+GENERATED_MARKDOWN_METADATA = {
+    "source_class": "generated_markdown",
+    "authoritative": False,
+    "ingest_allowed": False,
+    "operational_retrieval_allowed": False,
+    "generated_by": "agent_chat_api.test_reporter",
+}
+
+
+def default_output_dir(root: Path) -> Path:
+    return root / "runtime" / "test-results"
+
+
 def run_suite(
     *,
     root: Path,
@@ -108,6 +122,8 @@ def write_markdown_report(
     markdown = render_markdown_report(root=root, result=result, started_at=started_at, finished_at=finished_at)
     report_path.write_text(markdown, encoding="utf-8")
     latest_path.write_text(markdown, encoding="utf-8")
+    _write_metadata(report_path)
+    _write_metadata(latest_path)
     return report_path
 
 
@@ -175,7 +191,7 @@ def render_markdown_report(
 def main(argv: list[str] | None = None) -> int:
     root = Path(__file__).resolve().parent
     parser = argparse.ArgumentParser(description="Run Agent Chat API tests and write a Markdown report")
-    parser.add_argument("--output-dir", default=str(root / "test-results"), help="Directory for timestamped Markdown reports")
+    parser.add_argument("--output-dir", default=str(default_output_dir(root)), help="Directory for timestamped Markdown reports")
     parser.add_argument("--pattern", default="test*.py", help="unittest discovery pattern")
     parser.add_argument("--quiet", action="store_true", help="Use low-verbosity test output")
     args = parser.parse_args(argv)
@@ -199,6 +215,15 @@ def main(argv: list[str] | None = None) -> int:
 
 def _escape_pipe(value: str) -> str:
     return value.replace("|", "\\|").replace("\n", " ")
+
+
+def _write_metadata(markdown_path: Path) -> None:
+    metadata = dict(GENERATED_MARKDOWN_METADATA)
+    metadata["path"] = markdown_path.name
+    markdown_path.with_suffix(markdown_path.suffix + ".metadata.json").write_text(
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
 
 
 if __name__ == "__main__":

@@ -90,6 +90,22 @@ class RagSettings:
 
 
 @dataclass(slots=True)
+class RuntimePaths:
+    artifacts_dir: Path
+    chat_logs_dir: Path
+    checkpoints_dir: Path
+    crash_journal_path: Path
+    findings_dir: Path
+    notion_exports_dir: Path
+    exports_dir: Path
+    manifests_dir: Path
+    catalog_dir: Path
+    skills_dir: Path
+    secrets_dir: Path
+    credentials_path: Path
+
+
+@dataclass(slots=True)
 class AppConfig:
     project_root: Path
     runtime_dir: Path
@@ -133,133 +149,39 @@ class AppConfig:
         root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
         load_project_env(root)
         runtime_dir = Path(os.getenv("PRIMORDIAL_RUNTIME_DIR", root / "runtime")).resolve()
-        database_url = os.getenv("PRIMORDIAL_DATABASE_URL", "").strip()
-        database_schema = None
-        if not database_url:
-            database_url = os.getenv("PRIMORDIAL_TEST_DATABASE_URL", "").strip()
-            if database_url:
-                digest = hashlib.sha1(str(root).encode("utf-8")).hexdigest()[:12]
-                database_schema = f"primordial_test_{digest}"
-        if not database_url:
-            raise RuntimeError(
-                "PRIMORDIAL_DATABASE_URL is required. "
-                "Primordial no longer supports SQLite runtime storage."
-            )
-        artifacts_dir = Path(
-            os.getenv("PRIMORDIAL_ARTIFACTS_DIR", runtime_dir / "artifacts")
-        ).resolve()
-        chat_logs_dir = Path(
-            os.getenv("PRIMORDIAL_CHAT_LOGS_DIR", root / "chat_log")
-        ).resolve()
-        checkpoints_dir = Path(
-            os.getenv("PRIMORDIAL_CHECKPOINTS_DIR", runtime_dir / "checkpoints")
-        ).resolve()
-        crash_journal_path = Path(
-            os.getenv("PRIMORDIAL_CRASH_JOURNAL_PATH", runtime_dir / "crash.journal")
-        ).resolve()
-        findings_dir = Path(
-            os.getenv("PRIMORDIAL_FINDINGS_DIR", root / "findings")
-        ).resolve()
-        notion_exports_dir = Path(
-            os.getenv("PRIMORDIAL_NOTION_EXPORTS_DIR", findings_dir / "notion")
-        ).resolve()
-        exports_dir = Path(
-            os.getenv("PRIMORDIAL_EXPORTS_DIR", runtime_dir / "exports")
-        ).resolve()
-        manifests_dir = Path(
-            os.getenv("PRIMORDIAL_MANIFESTS_DIR", root / "manifests")
-        ).resolve()
-        catalog_dir = Path(
-            os.getenv("PRIMORDIAL_CATALOG_DIR", root / "catalog")
-        ).resolve()
-        skills_dir = Path(
-            os.getenv("PRIMORDIAL_SKILLS_DIR", root / "skills")
-        ).resolve()
-        secrets_dir = Path(
-            os.getenv("PRIMORDIAL_SECRETS_DIR", runtime_dir / "secrets")
-        ).resolve()
-        credentials_path = Path(
-            os.getenv("PRIMORDIAL_CREDENTIALS_PATH", secrets_dir / "credentials.json")
-        ).resolve()
-        autonomy_mode = AutonomyMode(
-            os.getenv("PRIMORDIAL_AUTONOMY_MODE", AutonomyMode.ASSISTED.value)
-        )
-        autonomy = AutonomySettings(
-            mode=autonomy_mode,
-            allow_remote_premium=_env_bool("PRIMORDIAL_ALLOW_REMOTE_PREMIUM", False),
-            allow_exploitative_actions=_env_bool("PRIMORDIAL_ALLOW_EXPLOITATIVE_ACTIONS", False),
-            allow_agent_safety_approval=_env_bool("PRIMORDIAL_ALLOW_AGENT_SAFETY_APPROVAL", True),
-            max_poc_timeout_seconds=_env_int("PRIMORDIAL_MAX_POC_TIMEOUT_SECONDS", 30),
-            max_poc_requests=_env_int("PRIMORDIAL_MAX_POC_REQUESTS", 20),
-            max_chaining_fanout=_env_int("PRIMORDIAL_MAX_CHAINING_FANOUT", 5),
-            max_auto_retries=_env_int("PRIMORDIAL_MAX_AUTO_RETRIES", 2),
-            daily_remote_budget=_env_float("PRIMORDIAL_DAILY_REMOTE_BUDGET", 25.0),
-        )
+        database_url, database_schema = _database_settings(root)
+        runtime_paths = _runtime_paths(root, runtime_dir)
         content_discovery_wordlist = os.getenv(
             "PRIMORDIAL_CONTENT_DISCOVERY_WORDLIST",
             "/usr/share/wfuzz/wordlists/general/common.txt",
         )
-        rag = RagSettings(
-            embeddings=RagEmbeddingSettings(
-                provider=os.getenv("PRIMORDIAL_RAG_EMBEDDINGS_PROVIDER", "ollama").strip().lower() or "ollama",
-                base_url=os.getenv("PRIMORDIAL_RAG_EMBEDDINGS_BASE_URL", "http://127.0.0.1:11434").strip()
-                or "http://127.0.0.1:11434",
-                model=os.getenv("PRIMORDIAL_RAG_EMBEDDINGS_MODEL", "nomic-embed-text:v1.5").strip()
-                or "nomic-embed-text:v1.5",
-                batch_size=max(1, _env_int("PRIMORDIAL_RAG_EMBEDDINGS_BATCH_SIZE", 16)),
-                timeout_seconds=max(1, _env_int("PRIMORDIAL_RAG_EMBEDDINGS_TIMEOUT_SECONDS", 90)),
-            ),
-            synthesis=RagSynthesisSettings(
-                provider=os.getenv(
-                    "PRIMORDIAL_RAG_SYNTHESIS_PROVIDER",
-                    "lmstudio_openai_compatible",
-                ).strip().lower()
-                or "lmstudio_openai_compatible",
-                base_url=os.getenv("PRIMORDIAL_RAG_SYNTHESIS_BASE_URL", "http://127.0.0.1:1234/v1").strip()
-                or "http://127.0.0.1:1234/v1",
-                model=os.getenv(
-                    "PRIMORDIAL_RAG_SYNTHESIS_MODEL",
-                    "gpt-oss-cybersecurity-20b-merged-heretic-i1",
-                ).strip()
-                or "gpt-oss-cybersecurity-20b-merged-heretic-i1",
-                temperature=_env_float("PRIMORDIAL_RAG_SYNTHESIS_TEMPERATURE", 0.0),
-                max_tokens=max(1, _env_int("PRIMORDIAL_RAG_SYNTHESIS_MAX_TOKENS", 1200)),
-                backup_allowed_models=_env_csv(
-                    "PRIMORDIAL_RAG_SYNTHESIS_BACKUP_ALLOWED_MODELS",
-                    ("lily-cybersecurity-7b-v0.2",),
-                ),
-                disallowed_models=_env_csv("PRIMORDIAL_RAG_SYNTHESIS_DISALLOWED_MODELS", ("qwen",)),
-            ),
-        )
         max_evidence_items = int(os.getenv("PRIMORDIAL_MAX_EVIDENCE_ITEMS", "50"))
-        agent_chat_cwd_raw = os.getenv("PRIMORDIAL_AGENT_CHAT_CWD", "").strip()
-        agent_chat_cwd = Path(agent_chat_cwd_raw).expanduser().resolve() if agent_chat_cwd_raw else None
         return cls(
             project_root=root,
             runtime_dir=runtime_dir,
             database_url=database_url,
             database_schema=database_schema,
-            artifacts_dir=artifacts_dir,
-            chat_logs_dir=chat_logs_dir,
-            checkpoints_dir=checkpoints_dir,
-            crash_journal_path=crash_journal_path,
-            findings_dir=findings_dir,
-            notion_exports_dir=notion_exports_dir,
-            exports_dir=exports_dir,
-            manifests_dir=manifests_dir,
-            catalog_dir=catalog_dir,
-            skills_dir=skills_dir,
-            secrets_dir=secrets_dir,
-            credentials_path=credentials_path,
-            autonomy=autonomy,
-            rag=rag,
+            artifacts_dir=runtime_paths.artifacts_dir,
+            chat_logs_dir=runtime_paths.chat_logs_dir,
+            checkpoints_dir=runtime_paths.checkpoints_dir,
+            crash_journal_path=runtime_paths.crash_journal_path,
+            findings_dir=runtime_paths.findings_dir,
+            notion_exports_dir=runtime_paths.notion_exports_dir,
+            exports_dir=runtime_paths.exports_dir,
+            manifests_dir=runtime_paths.manifests_dir,
+            catalog_dir=runtime_paths.catalog_dir,
+            skills_dir=runtime_paths.skills_dir,
+            secrets_dir=runtime_paths.secrets_dir,
+            credentials_path=runtime_paths.credentials_path,
+            autonomy=_autonomy_settings_from_env(),
+            rag=_rag_settings_from_env(),
             agent_chat_base_url=os.getenv("PRIMORDIAL_AGENT_CHAT_BASE_URL", "http://127.0.0.1:8787").strip()
             or "http://127.0.0.1:8787",
             agent_chat_api_key=os.getenv("PRIMORDIAL_AGENT_CHAT_API_KEY") or os.getenv("CHAT_API_KEY") or None,
             agent_chat_provider=os.getenv("PRIMORDIAL_AGENT_CHAT_PROVIDER", "claude").strip().lower() or "claude",
             agent_chat_model=os.getenv("PRIMORDIAL_AGENT_CHAT_MODEL") or None,
             agent_chat_timeout_seconds=_env_int("PRIMORDIAL_AGENT_CHAT_TIMEOUT_SECONDS", 300),
-            agent_chat_cwd=agent_chat_cwd,
+            agent_chat_cwd=_agent_chat_cwd_from_env(),
             agent_chat_safe_guard=_env_bool("PRIMORDIAL_AGENT_CHAT_SAFE_GUARD", True),
             agent_chat_codex_sandbox=os.getenv("PRIMORDIAL_AGENT_CHAT_CODEX_SANDBOX", "read-only").strip()
             or "read-only",
@@ -293,6 +215,96 @@ class AppConfig:
         return redact_database_url(self.database_url)
 
 
+def _database_settings(root: Path) -> tuple[str, str | None]:
+    database_url = os.getenv("PRIMORDIAL_DATABASE_URL", "").strip()
+    database_schema = None
+    if not database_url:
+        database_url = os.getenv("PRIMORDIAL_TEST_DATABASE_URL", "").strip()
+        if database_url:
+            digest = hashlib.sha1(str(root).encode("utf-8")).hexdigest()[:12]
+            database_schema = f"primordial_test_{digest}"
+    if not database_url:
+        raise RuntimeError(
+            "PRIMORDIAL_DATABASE_URL is required. "
+            "Primordial no longer supports SQLite runtime storage."
+        )
+    return database_url, database_schema
+
+
+def _runtime_paths(root: Path, runtime_dir: Path) -> RuntimePaths:
+    findings_dir = _env_path("PRIMORDIAL_FINDINGS_DIR", root / "findings")
+    secrets_dir = _env_path("PRIMORDIAL_SECRETS_DIR", runtime_dir / "secrets")
+    return RuntimePaths(
+        artifacts_dir=_env_path("PRIMORDIAL_ARTIFACTS_DIR", runtime_dir / "artifacts"),
+        chat_logs_dir=_env_path("PRIMORDIAL_CHAT_LOGS_DIR", root / "chat_log"),
+        checkpoints_dir=_env_path("PRIMORDIAL_CHECKPOINTS_DIR", runtime_dir / "checkpoints"),
+        crash_journal_path=_env_path("PRIMORDIAL_CRASH_JOURNAL_PATH", runtime_dir / "crash.journal"),
+        findings_dir=findings_dir,
+        notion_exports_dir=_env_path("PRIMORDIAL_NOTION_EXPORTS_DIR", findings_dir / "notion"),
+        exports_dir=_env_path("PRIMORDIAL_EXPORTS_DIR", runtime_dir / "exports"),
+        manifests_dir=_env_path("PRIMORDIAL_MANIFESTS_DIR", root / "manifests"),
+        catalog_dir=_env_path("PRIMORDIAL_CATALOG_DIR", root / "catalog"),
+        skills_dir=_env_path("PRIMORDIAL_SKILLS_DIR", root / "skills"),
+        secrets_dir=secrets_dir,
+        credentials_path=_env_path("PRIMORDIAL_CREDENTIALS_PATH", secrets_dir / "credentials.json"),
+    )
+
+
+def _autonomy_settings_from_env() -> AutonomySettings:
+    autonomy_mode = AutonomyMode(os.getenv("PRIMORDIAL_AUTONOMY_MODE", AutonomyMode.ASSISTED.value))
+    return AutonomySettings(
+        mode=autonomy_mode,
+        allow_remote_premium=_env_bool("PRIMORDIAL_ALLOW_REMOTE_PREMIUM", False),
+        allow_exploitative_actions=_env_bool("PRIMORDIAL_ALLOW_EXPLOITATIVE_ACTIONS", False),
+        allow_agent_safety_approval=_env_bool("PRIMORDIAL_ALLOW_AGENT_SAFETY_APPROVAL", True),
+        max_poc_timeout_seconds=_env_int("PRIMORDIAL_MAX_POC_TIMEOUT_SECONDS", 30),
+        max_poc_requests=_env_int("PRIMORDIAL_MAX_POC_REQUESTS", 20),
+        max_chaining_fanout=_env_int("PRIMORDIAL_MAX_CHAINING_FANOUT", 5),
+        max_auto_retries=_env_int("PRIMORDIAL_MAX_AUTO_RETRIES", 2),
+        daily_remote_budget=_env_float("PRIMORDIAL_DAILY_REMOTE_BUDGET", 25.0),
+    )
+
+
+def _rag_settings_from_env() -> RagSettings:
+    return RagSettings(
+        embeddings=RagEmbeddingSettings(
+            provider=_env_text("PRIMORDIAL_RAG_EMBEDDINGS_PROVIDER", "ollama", lower=True),
+            base_url=_env_text("PRIMORDIAL_RAG_EMBEDDINGS_BASE_URL", "http://127.0.0.1:11434"),
+            model=_env_text("PRIMORDIAL_RAG_EMBEDDINGS_MODEL", "nomic-embed-text:v1.5"),
+            batch_size=max(1, _env_int("PRIMORDIAL_RAG_EMBEDDINGS_BATCH_SIZE", 16)),
+            timeout_seconds=max(1, _env_int("PRIMORDIAL_RAG_EMBEDDINGS_TIMEOUT_SECONDS", 90)),
+        ),
+        synthesis=_rag_synthesis_settings_from_env(),
+    )
+
+
+def _rag_synthesis_settings_from_env() -> RagSynthesisSettings:
+    return RagSynthesisSettings(
+        provider=_env_text(
+            "PRIMORDIAL_RAG_SYNTHESIS_PROVIDER",
+            "lmstudio_openai_compatible",
+            lower=True,
+        ),
+        base_url=_env_text("PRIMORDIAL_RAG_SYNTHESIS_BASE_URL", "http://127.0.0.1:1234/v1"),
+        model=_env_text(
+            "PRIMORDIAL_RAG_SYNTHESIS_MODEL",
+            "gpt-oss-cybersecurity-20b-merged-heretic-i1",
+        ),
+        temperature=_env_float("PRIMORDIAL_RAG_SYNTHESIS_TEMPERATURE", 0.0),
+        max_tokens=max(1, _env_int("PRIMORDIAL_RAG_SYNTHESIS_MAX_TOKENS", 1200)),
+        backup_allowed_models=_env_csv(
+            "PRIMORDIAL_RAG_SYNTHESIS_BACKUP_ALLOWED_MODELS",
+            ("lily-cybersecurity-7b-v0.2",),
+        ),
+        disallowed_models=_env_csv("PRIMORDIAL_RAG_SYNTHESIS_DISALLOWED_MODELS", ("qwen",)),
+    )
+
+
+def _agent_chat_cwd_from_env() -> Path | None:
+    raw = os.getenv("PRIMORDIAL_AGENT_CHAT_CWD", "").strip()
+    return Path(raw).expanduser().resolve() if raw else None
+
+
 def redact_database_url(database_url: str) -> str:
     parsed = urlsplit(database_url)
     if not parsed.netloc:
@@ -310,6 +322,15 @@ def _env_bool(name: str, default: bool) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_path(name: str, default: Path) -> Path:
+    return Path(os.getenv(name, default)).resolve()
+
+
+def _env_text(name: str, default: str, *, lower: bool = False) -> str:
+    value = os.getenv(name, default).strip() or default
+    return value.lower() if lower else value
 
 
 def _env_int(name: str, default: int) -> int:

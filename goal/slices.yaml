@@ -1,0 +1,120 @@
+version: 1
+source: goal/slices.yaml
+slice_packs:
+  - id: compiler-bootstrap
+    title: Compact goal compiler bootstrap
+    subsystem: goal_compiler
+    run_profile: goal_compiler
+    validation_tier: V2
+    max_slices_per_run: 6
+    milestones:
+      - M0
+      - M4
+      - M8
+    slices:
+      - id: typed_goal_sources
+        subsystem: goal_compiler
+        validation_tier: V2
+      - id: goal_compile_tool
+        subsystem: goal_compiler
+        validation_tier: V2
+      - id: goal_lint_checks
+        subsystem: goal_compiler
+        validation_tier: V2
+      - id: current_task_pointer
+        subsystem: goal_compiler
+        validation_tier: V2
+    expected_files:
+      - goal/fragments/authority.yaml
+      - goal/fragments/environments.yaml
+      - goal/fragments/milestones.yaml
+      - goal/fragments/run_profiles.yaml
+      - goal/fragments/validation_tiers.yaml
+      - goal/fragments/report_contract.yaml
+      - goal/slices.yaml
+      - tools/goal_compile.py
+      - tools/goal_pack.py
+      - tests/test_goal_compile.py
+      - tests/test_goal_pack.py
+    source_refs:
+      - /home/bitloop/Desktop/goal-instruct-idea.md
+      - goal/fragments/authority.yaml
+      - goal/fragments/environments.yaml
+      - goal/fragments/milestones.yaml
+      - goal/fragments/run_profiles.yaml
+      - goal/fragments/validation_tiers.yaml
+      - goal/fragments/report_contract.yaml
+    next_action: Continue with context-boundaries after EnvironmentClassifier runtime integration.
+  - id: context-boundaries
+    title: Context authority and export boundaries
+    subsystem: context
+    run_profile: context_slice
+    validation_tier: V2
+    max_slices_per_run: 6
+    milestones:
+      - M1
+      - M2
+      - M3
+      - M7
+    slices:
+      - id: context_boundary_hardening
+        subsystem: context
+        validation_tier: V2
+      - id: export_cleanup_boundaries
+        subsystem: context
+        validation_tier: V2
+      - id: sync_architecture_boundaries
+        subsystem: context
+        validation_tier: V2
+      - id: modular_context_refactor
+        subsystem: context
+        validation_tier: V2
+    expected_files:
+      - primordial/core/context/assembler.py
+      - primordial/core/context/envelopes.py
+      - primordial/core/context/source_refs.py
+      - primordial/core/context/sinks.py
+      - primordial/core/context/rag_index.py
+      - primordial/core/rag/context.py
+      - primordial/core/rag/import_validation.py
+      - tests/test_context_assembler.py
+      - tests/test_context_sinks.py
+      - tests/test_rag.py
+      - tests/test_rag_import_validation.py
+    source_refs:
+      - codex-goal.instruct
+      - goal/fragments/authority.yaml
+      - goal/fragments/milestones.yaml
+    next_action: Validate context-boundary hardening against authoritative source lanes.
+  - id: ctf-harness-controls
+    title: CTF harness contracts and anti-cheating controls
+    subsystem: ctf_harness
+    run_profile: ctf_harness
+    validation_tier: V2
+    max_slices_per_run: 6
+    milestones:
+      - M5
+      - M6
+    slices:
+      - id: ctf_harness_contracts
+        subsystem: ctf_harness
+        validation_tier: V2
+      - id: anti_cheating_controls
+        subsystem: ctf_harness
+        validation_tier: V2
+    expected_files:
+      - primordial/labs/ctf/targets.py
+      - primordial/labs/ctf/sessions.py
+      - primordial/labs/ctf/closed_book.py
+      - primordial/labs/ctf/hardcode.py
+      - primordial/labs/ctf/postmortem.py
+      - tests/test_ctf_harness_targets.py
+      - tests/test_ctf_harness_sessions.py
+      - tests/test_ctf_harness_closed_book.py
+      - tests/test_ctf_harness_hardcode_scan.py
+      - tests/test_ctf_harness_postmortem.py
+    source_refs:
+      - codex-goal.instruct
+      - goal/fragments/environments.yaml
+      - goal/fragments/milestones.yaml
+    next_action: Validate CTF harness and anti-cheating controls against closed-book policy.

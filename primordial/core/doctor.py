@@ -87,42 +87,61 @@ def _effective_database_url() -> str:
     return os.getenv("PRIMORDIAL_DATABASE_URL", "").strip() or os.getenv("PRIMORDIAL_TEST_DATABASE_URL", "").strip()
 
 
+def _database_not_checked_check(check_id: str, label: str) -> DoctorCheck:
+    return DoctorCheck(check_id, label, "fail", {"error": "database was not checked"})
+
+
+def _append_database_unchecked_checks(checks: list[DoctorCheck], db_reachable: DoctorCheck) -> None:
+    checks.extend(
+        [
+            db_reachable,
+            _database_not_checked_check("pgvector_installed", "pgvector installed"),
+            _database_not_checked_check("schema_version", "Schema version"),
+        ]
+    )
+
+
+def _check_schema_version(checks: list[DoctorCheck], connection: Any) -> None:
+    relation = connection.execute("SELECT to_regclass('schema_version') AS relation").fetchone()
+    if not relation or not relation["relation"]:
+        checks.append(DoctorCheck("schema_version", "Schema version", "fail", {"error": "schema_version table is missing"}))
+        return
+
+    row = connection.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1").fetchone()
+    if row is None:
+        checks.append(DoctorCheck("schema_version", "Schema version", "fail", {"error": "schema_version is empty"}))
+        return
+
+    version = int(row["version"])
+    checks.append(
+        DoctorCheck(
+            "schema_version",
+            "Schema version",
+            "pass" if version == _SCHEMA_VERSION else "fail",
+            {"value": version, "expected": _SCHEMA_VERSION},
+        )
+    )
+
+
 def _check_database(checks: list[DoctorCheck], database_url: str, database_schema: str | None) -> None:
     if not database_url:
-        checks.extend(
-            [
-                DoctorCheck(
-                    id="db_reachable",
-                    label="DB reachable",
-                    status="fail",
-                    details={"error": "PRIMORDIAL_DATABASE_URL is not set"},
-                ),
-                DoctorCheck(
-                    id="pgvector_installed",
-                    label="pgvector installed",
-                    status="fail",
-                    details={"error": "database was not checked"},
-                ),
-                DoctorCheck(
-                    id="schema_version",
-                    label="Schema version",
-                    status="fail",
-                    details={"error": "database was not checked"},
-                ),
-            ]
+        _append_database_unchecked_checks(
+            checks,
+            DoctorCheck(
+                id="db_reachable",
+                label="DB reachable",
+                status="fail",
+                details={"error": "PRIMORDIAL_DATABASE_URL is not set"},
+            ),
         )
         return
     try:
         psycopg = importlib.import_module("psycopg")
         dict_row = importlib.import_module("psycopg.rows").dict_row
     except ModuleNotFoundError as exc:
-        details = {"error": f"psycopg v3 is not installed: {exc}"}
-        checks.extend(
-            [
-                DoctorCheck("db_reachable", "DB reachable", "fail", details),
-                DoctorCheck("pgvector_installed", "pgvector installed", "fail", {"error": "database was not checked"}),
-                DoctorCheck("schema_version", "Schema version", "fail", {"error": "database was not checked"}),
-            ]
+        _append_database_unchecked_checks(
+            checks,
+            DoctorCheck("db_reachable", "DB reachable", "fail", {"error": f"psycopg v3 is not installed: {exc}"}),
         )
         return
 
@@ -143,32 +162,11 @@ def _check_database(checks: list[DoctorCheck], database_url: str, database_schem
                     {"value": "vector" if vector else "missing"},
                 )
             )
-            relation = connection.execute("SELECT to_regclass('schema_version') AS relation").fetchone()
-            if not relation or not relation["relation"]:
-                checks.append(
-                    DoctorCheck("schema_version", "Schema version", "fail", {"error": "schema_version table is missing"})
-                )
-                return
-            row = connection.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1").fetchone()
-            if row is None:
-                checks.append(DoctorCheck("schema_version", "Schema version", "fail", {"error": "schema_version is empty"}))
-                return
-            version = int(row["version"])
-            checks.append(
-                DoctorCheck(
-                    "schema_version",
-                    "Schema version",
-                    "pass" if version == _SCHEMA_VERSION else "fail",
-                    {"value": version, "expected": _SCHEMA_VERSION},
-                )
-            )
+            _check_schema_version(checks, connection)
     except Exception as exc:  # noqa: BLE001 - surfaced as a doctor check
-        checks.extend(
-            [
-                DoctorCheck("db_reachable", "DB reachable", "fail", {"url": redacted, "error": str(exc)}),
-                DoctorCheck("pgvector_installed", "pgvector installed", "fail", {"error": "database was not checked"}),
-                DoctorCheck("schema_version", "Schema version", "fail", {"error": "database was not checked"}),
-            ]
+        _append_database_unchecked_checks(
+            checks,
+            DoctorCheck("db_reachable", "DB reachable", "fail", {"url": redacted, "error": str(exc)}),
         )
 
 

@@ -75,6 +75,137 @@ class RagVulnRuntimeTests(unittest.TestCase):
         self.assertFalse(hints["hints"][0]["creates_executable_task"])
         self.assertFalse(hints["hints"][0]["can_expand_scope"])
 
+    def test_vulnerability_hints_do_not_advertise_executable_output_modes(self) -> None:
+        hints = vulnerability_hints_from_results(
+            [
+                {
+                    "citation_id": "rag:vuln_card_exploit_mode",
+                    "title": "CVE-2026-9001 summary",
+                    "metadata": {
+                        "domain": "vuln_intel",
+                        "vuln_id": "CVE-2026-9001",
+                        "cve_id": "CVE-2026-9001",
+                        "output_mode": ["vuln_triage", "exploit_execution", "action_selection"],
+                        "blocked_output_modes": ["exploit_execution", "action_selection", "scope_expansion"],
+                    },
+                }
+            ]
+        )
+
+        self.assertTrue(hints["hints"])
+        hint = hints["hints"][0]
+        self.assertEqual(hint["allowed_output_modes"], ["vuln_triage"])
+        self.assertFalse(hint["creates_executable_task"])
+        self.assertFalse(hint["can_expand_scope"])
+
+    def test_vulnerability_hints_preserve_human_readable_metadata_as_hints_only(self) -> None:
+        hints = vulnerability_hints_from_results(
+            [
+                {
+                    "citation_id": "rag:vuln_card_display_metadata",
+                    "title": "CVE-2026-9010 summary",
+                    "metadata": {
+                        "Domain": "vuln_intel",
+                        "Vuln ID": "CVE-2026-9010",
+                        "CVE ID": "CVE-2026-9010",
+                        "Aliases": ("CVE-2026-9010", "GHSA-display-meta-test"),
+                        "Source refs": ("https://example.invalid/advisory",),
+                        "KEV": "true",
+                        "CVSS Severity": "CRITICAL",
+                        "EPSS Percentile": "0.91",
+                        "Fixed version known": "yes",
+                        "Output mode": ("vuln_triage", "action_selection"),
+                        "Blocked output modes": (
+                            "exploit_execution",
+                            "action_selection",
+                            "scope_expansion",
+                        ),
+                    },
+                }
+            ]
+        )
+
+        self.assertEqual(hints["rejected"], [])
+        self.assertTrue(hints["hints"])
+        hint = hints["hints"][0]
+        self.assertEqual(hint["hint_type"], "known_exploited_vulnerability_context")
+        self.assertEqual(hint["vuln_id"], "CVE-2026-9010")
+        self.assertEqual(hint["cve_id"], "CVE-2026-9010")
+        self.assertEqual(hint["aliases"], ["CVE-2026-9010", "GHSA-display-meta-test"])
+        self.assertEqual(hint["source_refs"], ["https://example.invalid/advisory"])
+        self.assertEqual(hint["allowed_output_modes"], ["vuln_triage"])
+        self.assertFalse(hint["creates_executable_task"])
+        self.assertFalse(hint["can_expand_scope"])
+
+    def test_vulnerability_hints_reject_uncited_cards(self) -> None:
+        hints = vulnerability_hints_from_results(
+            [
+                {
+                    "title": "CVE-2026-9002 summary",
+                    "metadata": {
+                        "domain": "vuln_intel",
+                        "vuln_id": "CVE-2026-9002",
+                        "cve_id": "CVE-2026-9002",
+                        "output_mode": ["vuln_triage"],
+                        "blocked_output_modes": ["exploit_execution", "action_selection", "scope_expansion"],
+                    },
+                }
+            ]
+        )
+
+        self.assertEqual(hints["hints"], [])
+        self.assertEqual(hints["rejected"], [{"citation_id": None, "reason": "missing rag citation"}])
+
+    def test_vulnerability_hints_require_core_safety_blocks(self) -> None:
+        hints = vulnerability_hints_from_results(
+            [
+                {
+                    "citation_id": "rag:vuln_card_partial_blocks",
+                    "title": "CVE-2026-9003 summary",
+                    "metadata": {
+                        "domain": "vuln_intel",
+                        "vuln_id": "CVE-2026-9003",
+                        "cve_id": "CVE-2026-9003",
+                        "output_mode": ["vuln_triage"],
+                        "blocked_output_modes": ["scope_expansion"],
+                    },
+                }
+            ]
+        )
+
+        self.assertEqual(hints["hints"], [])
+        self.assertEqual(
+            hints["rejected"],
+            [
+                {
+                    "citation_id": "rag:vuln_card_partial_blocks",
+                    "reason": "missing required safety block metadata",
+                }
+            ],
+        )
+
+    def test_vulnerability_hint_rejection_normalizes_curated_citation_id(self) -> None:
+        hints = vulnerability_hints_from_results(
+            [
+                {
+                    "citation_id": "vuln-card-unprefixed",
+                    "title": "CVE-2026-9004 summary",
+                    "metadata": {
+                        "domain": "vuln_intel",
+                        "vuln_id": "CVE-2026-9004",
+                        "cve_id": "CVE-2026-9004",
+                        "output_mode": ["vuln_triage"],
+                    },
+                }
+            ]
+        )
+
+        self.assertEqual(hints["hints"], [])
+        self.assertEqual(
+            hints["rejected"],
+            [{"citation_id": "rag:vuln-card-unprefixed", "reason": "missing safety block metadata"}],
+        )
+
     def test_vuln_feed_syncer_writes_raw_feeds_and_preprocesses_cards(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
 

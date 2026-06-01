@@ -1,0 +1,26 @@
+id: model_eval_artifact_cleanup_20260601
+status: generated_artifact_cleanup_manifest
+scope:
+  milestone: P2_export_cleanup
+  artifact_class: model_eval_generated_json
+  authority: typed_catalog_cleanup_manifest
+removed_artifacts:
+  - path: artifacts/model_eval/lmstudio_512_probe_20260508T204938Z/lily-cybersecurity-7b-v0.2/model_eval_20260508T204958Z.json
+    sha256: 63a914a3881e9a7846af96a0e57b2215deb26f3f407498b51367d94f5c3e7400
+    bytes: 76371
+    reason: generated_model_eval_json_not_used_as_completion_or_catalog_authority
+    retained_refs:
+      - artifacts/model_eval/lmstudio_512_probe_20260508T204938Z/lily-cybersecurity-7b-v0.2/model_eval_20260508T204958Z.csv
+      - catalog/project/lmstudio_tuning.yaml
+  - path: artifacts/model_eval/lmstudio_role_eval_20260509T001954Z/model_eval_20260509T002846Z.json
+    sha256: d5801df286edd12fe7dbb4a291d83942490a5c5fd00385401f80b6fdc647088f
+    bytes: 676349
+    reason: generated_role_eval_json_removed_from_saved_artifacts_after_typed_catalog_migration
+    retained_refs:
+      - artifacts/model_eval/lmstudio_role_eval_20260509T001954Z/model_eval_20260509T002846Z.csv
+      - catalog/project/lmstudio_tuning.yaml
+catalog_updates:
+  - path: catalog/project/lmstudio_tuning.yaml
+    change: removed_deleted_role_eval_json_from_runtime_guard_saved_artifacts
+verification_refs:
+  - tests/test_model_tuning_catalog.py
