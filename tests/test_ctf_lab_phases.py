@@ -105,7 +105,7 @@ class CTFLabPhaseCatalogTests(unittest.TestCase):
     def test_remaining_lab_phases_require_verified_environment_proof_before_completion(self) -> None:
         catalog = load_ctf_lab_phase_catalog(CATALOG_PATH)
 
-        for phase in catalog.phases[4:]:
+        for phase in catalog.phases[5:]:
             self.assertTrue(phase.environment_proof_required)
             self.assertTrue(phase.deterministic_fixture_required)
             self.assertNotEqual(phase.status, "complete")
@@ -120,6 +120,7 @@ class CTFLabPhaseCatalogTests(unittest.TestCase):
         self.assertIn("local_container_environment_verified", phase.exit_gates)
         self.assertIn("ci_cd_attack_paths_bound_to_lab_scope", phase.exit_gates)
         self.assertIn("no_external_pipeline_mutation_without_verified_lab", phase.exit_gates)
+        self.assertIn("github_pr:37", phase.evidence_refs)
         self.assertIn("tests.test_ctf_harness_cicd_goat", commands)
         self.assertIn("tests.test_ctf_lab_phases", commands)
 

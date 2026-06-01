@@ -116,6 +116,8 @@ phases:
       - no_external_pipeline_mutation_without_verified_lab
     validation_commands:
       - python3 -m unittest tests.test_ctf_harness_cicd_goat tests.test_ctf_lab_phases -q
+    evidence_refs:
+      - github_pr:37
   - number: 5
     id: phase_5_kubernetes_goat
     name: Phase 5 Kubernetes Goat
