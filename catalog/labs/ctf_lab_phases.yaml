@@ -166,7 +166,7 @@ phases:
   - number: 7
     id: phase_7_cloudgoat
     name: Phase 7 CloudGoat
-    status: not_started
+    status: in_progress
     target_families:
       - cloudgoat
     allowed_profiles:
@@ -177,7 +177,9 @@ phases:
       - sandbox_cloud_account_verified
       - account_boundary_and_region_scope_enforced
       - teardown_evidence_recorded
-    validation_commands: []
+    validation_commands:
+      - python3 -m unittest tests.test_ctf_harness_cloudgoat tests.test_ctf_lab_phases -q
+      - python3 -m primordial.core.quality.hardcode
   - number: 8
     id: phase_8_dreadgoad_ctf_dojo_nyu_ctf_bench
     name: Phase 8 DreadGOAD/CTF-Dojo/NYU CTF Bench

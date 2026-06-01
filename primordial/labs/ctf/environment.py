@@ -16,9 +16,11 @@ from primordial.labs.ctf.targets import CTFTarget
 LOCAL_CONTAINER_MODES = frozenset({"container", "docker", "podman"})
 LOCAL_CLUSTER_MODES = frozenset({"kubernetes", "kind", "k3d", "minikube", "local_cluster"})
 LOCAL_AD_LAB_MODES = frozenset({"active_directory", "ad_lab", "goad", "goad_light"})
+SANDBOX_CLOUD_MODES = frozenset({"cloud", "sandbox_cloud", "terraform"})
 LOCAL_CONTAINER_EXIT_GATES = ("local_container_environment_verified",)
 LOCAL_CLUSTER_EXIT_GATES = ("local_cluster_environment_verified",)
 LOCAL_AD_LAB_EXIT_GATES = ("local_ad_lab_environment_verified",)
+SANDBOX_CLOUD_EXIT_GATES = ("sandbox_cloud_account_verified",)
 PHASE_LOCAL_LAB_EXIT_GATES = ("local_lab_environment_verified",)
 _SERVER_PRODUCT_VERSION = re.compile(r"(?P<product>[A-Za-z][A-Za-z0-9_.-]*)/(?P<version>[0-9][A-Za-z0-9_.-]*)")
 
@@ -226,6 +228,54 @@ def verify_local_ad_lab_environment(
     )
 
 
+def verify_sandbox_cloud_environment(
+    target: CTFTarget,
+    *,
+    account_id: str,
+    regions: list[str] | tuple[str, ...],
+    observed_assets: list[str] | tuple[str, ...],
+    evidence_refs: list[str] | tuple[str, ...],
+    reset_evidence_ref: str,
+    profile: str,
+    observations: Mapping[str, Any] | None = None,
+) -> EnvironmentProof:
+    payload = {
+        "target_id": target.id,
+        "account_id": account_id,
+        "regions": regions,
+        "observed_assets": observed_assets,
+        "evidence_refs": evidence_refs,
+        "reset_evidence_ref": reset_evidence_ref,
+        "profile": profile,
+        "observations": dict(observations or {}),
+    }
+    reject_hidden_flag_material(payload, path="ctf_sandbox_cloud_environment_proof", label="EnvironmentProof")
+    _validate_sandbox_cloud_target(target)
+    checked_account_id = _account_id(account_id)
+    checked_regions = _regions(regions)
+    checked_profile = _profile(target, profile)
+    checked_assets = _observed_assets(target, observed_assets)
+    checked_refs = _evidence_ref_tuple(evidence_refs)
+    checked_reset_ref = _evidence_ref(reset_evidence_ref, "reset_evidence_ref")
+    if checked_reset_ref not in checked_refs:
+        raise ValueError("EnvironmentProof reset_evidence_ref must be included in evidence_refs")
+    provisioning = _provisioning_payload(target)
+    provisioning["account_id"] = checked_account_id
+    provisioning["regions"] = list(checked_regions)
+    return EnvironmentProof(
+        target_id=target.id,
+        status="verified",
+        profile=checked_profile,
+        environment_kind="sandbox_cloud_account",
+        observed_assets=checked_assets,
+        evidence_refs=checked_refs,
+        reset_evidence_ref=checked_reset_ref,
+        exit_gates=SANDBOX_CLOUD_EXIT_GATES,
+        provisioning=provisioning,
+        observations=dict(observations or {}),
+    )
+
+
 def probe_local_container_environment(
     target: CTFTarget,
     *,
@@ -361,6 +411,16 @@ def _validate_local_ad_lab_target(target: CTFTarget) -> None:
         raise ValueError("EnvironmentProof local AD lab target requires domain metadata")
 
 
+def _validate_sandbox_cloud_target(target: CTFTarget) -> None:
+    mode = _token(target.reset.mode or target.platform)
+    if mode not in SANDBOX_CLOUD_MODES:
+        raise ValueError("EnvironmentProof target must use sandbox cloud provisioning")
+    if not target.scope.assets:
+        raise ValueError("EnvironmentProof sandbox cloud target requires scoped assets")
+    if not (target.scope.network or target.reset.network):
+        raise ValueError("EnvironmentProof sandbox cloud target requires account boundary metadata")
+
+
 def _namespace(value: str) -> str:
     namespace = str(value or "").strip()
     if not namespace:
@@ -375,6 +435,24 @@ def _domain(value: str) -> str:
     if not domain or "." not in domain:
         raise ValueError("EnvironmentProof requires local AD domain")
     return domain
+
+
+def _account_id(value: str) -> str:
+    account_id = str(value or "").strip()
+    if len(account_id) != 12 or not account_id.isdigit():
+        raise ValueError("EnvironmentProof requires 12-digit sandbox cloud account_id")
+    return account_id
+
+
+def _regions(value: list[str] | tuple[str, ...]) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("EnvironmentProof regions must be a list or tuple")
+    regions = tuple(str(item or "").strip() for item in value if str(item or "").strip())
+    if not regions:
+        raise ValueError("EnvironmentProof requires at least one sandbox cloud region")
+    if len(set(regions)) != len(regions):
+        raise ValueError("EnvironmentProof duplicate sandbox cloud region")
+    return regions
 
 
 def _profile(target: CTFTarget, profile: str) -> str:
