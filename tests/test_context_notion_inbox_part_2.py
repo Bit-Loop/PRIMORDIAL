@@ -105,4 +105,25 @@ class NotionInboxSinkTestsPart2(NotionInboxSinkTestsBase):
         self.assertTrue(any("source_type=github" in error for error in result.errors))
         self.assertTrue(any("source_type=ctfd" in error for error in result.errors))
 
+    def test_notion_inbox_rejects_source_markdown_path(self) -> None:
+        envelope = ContextEnvelope(
+            ref="notion:source-markdown-note",
+            kind="operator_note",
+            authority="asserted",
+            source_type="notion",
+            target_id="target-a",
+            purpose="notion_inbox",
+            sink="notion_inbox",
+            content="Quarantined Markdown must not enter through Notion inbox.",
+            citations=["notion:source-markdown-note"],
+            metadata={"source_file": "runtime/quarantine/markdown/docs/RAG_SRC/0x11-t10.md"},
+        )
+
+        result = ContextSinkValidator().validate("notion_inbox", [envelope])
+
+        self.assertFalse(result.valid)
+        self.assertEqual(result.accepted_refs, [])
+        self.assertEqual(result.rejected_refs, ["notion:source-markdown-note"])
+        self.assertTrue(any("source_markdown" in error for error in result.errors))
+
 __all__ = ["NotionInboxSinkTestsPart2"]

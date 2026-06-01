@@ -81,6 +81,34 @@ class ContextCollaborationSinkTestsPart1(ContextCollaborationSinkTestsBase):
         self.assertEqual(result.rejected_refs, ["rag:uncited-cve-notice"])
         self.assertTrue(any("must cite its own rag ref" in error for error in result.errors))
 
+    def test_discord_notification_rejects_source_markdown_path(self) -> None:
+        envelope = ContextEnvelope(
+            ref="rag:source-markdown-notice",
+            kind="rag",
+            authority="advisory",
+            source_type="vuln_intel",
+            target_id="target-a",
+            purpose="discord_notification",
+            sink="discord_notification",
+            content="Quarantined Markdown must not become Discord advisory context.",
+            citations=["rag:source-markdown-notice"],
+            metadata={
+                "labels": ["advisory"],
+                "source_file": "runtime/quarantine/markdown/docs/RAG_SRC/0x11-t10.md",
+            },
+        )
+
+        result = ContextSinkValidator().validate(
+            "discord_notification",
+            [envelope],
+            known_rag_refs={"rag:source-markdown-notice"},
+        )
+
+        self.assertFalse(result.valid)
+        self.assertEqual(result.accepted_refs, [])
+        self.assertEqual(result.rejected_refs, ["rag:source-markdown-notice"])
+        self.assertTrue(any("source_markdown" in error for error in result.errors))
+
     def test_discord_notification_quarantines_unlabeled_external_collaboration_refs(self) -> None:
         envelopes = [
             ContextEnvelope(
@@ -250,5 +278,29 @@ class ContextCollaborationSinkTestsPart1(ContextCollaborationSinkTestsBase):
         self.assertEqual(result.accepted_refs, [])
         self.assertEqual(result.rejected_refs, ["github:issue-candidate-action"])
         self.assertTrue(any("unsupported engineering issue kind" in error for error in result.errors))
+
+    def test_github_issue_sink_rejects_source_markdown_path(self) -> None:
+        envelope = ContextEnvelope(
+            ref="github:source-markdown-issue",
+            kind="github_ref",
+            authority="asserted",
+            source_type="github",
+            target_id="target-a",
+            purpose="patch_planning",
+            sink="github_issue",
+            content="Quarantined Markdown must not become GitHub issue material.",
+            citations=["github:source-markdown-issue"],
+            metadata={
+                "context_type": "engineering_context",
+                "source_file": "runtime/quarantine/markdown/docs/RAG_SRC/0x11-t10.md",
+            },
+        )
+
+        result = ContextSinkValidator().validate("github_issue", [envelope])
+
+        self.assertFalse(result.valid)
+        self.assertEqual(result.accepted_refs, [])
+        self.assertEqual(result.rejected_refs, ["github:source-markdown-issue"])
+        self.assertTrue(any("source_markdown" in error for error in result.errors))
 
 __all__ = ["ContextCollaborationSinkTestsPart1"]

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from primordial.core.context.envelopes import ContextEnvelope
 from primordial.core.context.normalization import normalized_context_key, normalized_context_keys
 from primordial.core.context.poison import has_context_flag
+from primordial.core.context.source_markdown import is_source_markdown_context
 from primordial.core.context.source_types import TRUTH_LIKE_AUTHORITIES
 
 
@@ -50,6 +51,11 @@ def validate_notion_inbox_envelope(envelope: ContextEnvelope) -> NotionInboxDeci
         return NotionInboxDecision(
             "reject",
             f"notion_inbox rejects {envelope.ref}: unsupported source_type={unsupported_source_type}",
+        )
+    if is_source_markdown_context(envelope):
+        return NotionInboxDecision(
+            "reject",
+            f"notion_inbox rejects {envelope.ref}: source_markdown",
         )
     mutation = _authority_mutation(envelope)
     if mutation:

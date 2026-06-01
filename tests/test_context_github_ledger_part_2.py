@@ -149,4 +149,28 @@ class GitHubLedgerSinkTestsPart2(GitHubLedgerSinkTestsBase):
         self.assertEqual(result.rejected_refs, ["github:raw-evidence-link"])
         self.assertTrue(any("evidence refs require redaction" in error for error in result.errors))
 
+    def test_github_ledger_rejects_source_markdown_path(self) -> None:
+        envelope = ContextEnvelope(
+            ref="github:source-markdown-ledger",
+            kind="github_ref",
+            authority="asserted",
+            source_type="github",
+            target_id="target-a",
+            purpose="patch_planning",
+            sink="github_ledger",
+            content="Quarantined Markdown must not become engineering ledger context.",
+            citations=["github:source-markdown-ledger"],
+            metadata={
+                "context_type": "engineering_context",
+                "source_file": "runtime/quarantine/markdown/docs/RAG_SRC/0x11-t10.md",
+            },
+        )
+
+        result = ContextSinkValidator().validate("github_ledger", [envelope])
+
+        self.assertFalse(result.valid)
+        self.assertEqual(result.accepted_refs, [])
+        self.assertEqual(result.rejected_refs, ["github:source-markdown-ledger"])
+        self.assertTrue(any("source_markdown" in error for error in result.errors))
+
 __all__ = ["GitHubLedgerSinkTestsPart2"]
