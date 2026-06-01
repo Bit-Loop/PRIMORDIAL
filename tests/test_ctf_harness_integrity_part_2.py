@@ -24,6 +24,7 @@ class CTFHarnessIntegrityContractTestsPart2(CTFHarnessIntegrityContractTestsBase
             evidence_ids=["evidence:http-title"],
             policy_decision_ids=["policy:allow-recon"],
             hardcode_scan_result={"status": "pass"},
+            source_refs=["ctfd:challenge-juice", "rag:web-methodology"],
         )
         run = run.record_solve_result(
             solve_session_id="solve:session-2",

@@ -135,4 +135,80 @@ class BenchmarkRunContractTestsPart3(BenchmarkRunContractTestsBase):
         self.assertFalse(is_scoring_counter("3"))
         self.assertFalse(is_scoring_counter(True))
 
+    def test_benchmark_run_scores_solved_result_with_non_writeup_source_refs(self) -> None:
+        run = BenchmarkRun.start(
+            id="benchmark-scored-no-writeups",
+            target_set=["juice-shop-foundation"],
+            benchmark_mode="closed_book",
+            mutation_seed="seed:2026-05-23",
+            code_version="git:abc123",
+            policy_version="policy:v1",
+            model_versions={},
+            hidden_solution_access_status="not_available_to_agent",
+            hardcode_scan_result={"status": "not_run"},
+        )
+
+        run = run.record_solve_result(
+            solve_session_id="solve-juice-1",
+            target_id="juice-shop-foundation",
+            solve_status="solved",
+            result="solved",
+            evidence_ids=["evidence:http-title", "evidence:captured-flag-redacted"],
+            policy_decision_ids=["policy:allow-solve"],
+            hardcode_scan_result={"status": "pass"},
+            source_refs=["ctfd:juice-shop-foundation", "rag:web-methodology"],
+        ).with_scoring_summary({"targets_total": 1})
+
+        self.assertEqual(run.solve_results[0]["source_refs"], ("ctfd:juice-shop-foundation", "rag:web-methodology"))
+        self.assertEqual(run.scoring_summary["solved"], 1)
+
+    def test_benchmark_run_rejects_solved_closed_book_result_without_source_refs(self) -> None:
+        run = BenchmarkRun.start(
+            id="benchmark-missing-source-refs",
+            target_set=["juice-shop-foundation"],
+            benchmark_mode="closed_book",
+            mutation_seed="seed:2026-05-23",
+            code_version="git:abc123",
+            policy_version="policy:v1",
+            model_versions={},
+            hidden_solution_access_status="not_available_to_agent",
+            hardcode_scan_result={"status": "not_run"},
+        )
+
+        with self.assertRaisesRegex(ValueError, "source_refs"):
+            run.record_solve_result(
+                solve_session_id="solve-juice-1",
+                target_id="juice-shop-foundation",
+                solve_status="solved",
+                result="solved",
+                evidence_ids=["evidence:http-title", "evidence:captured-flag-redacted"],
+                policy_decision_ids=["policy:allow-solve"],
+                hardcode_scan_result={"status": "pass"},
+            )
+
+    def test_benchmark_run_rejects_closed_book_writeup_source_refs(self) -> None:
+        run = BenchmarkRun.start(
+            id="benchmark-writeup-source-refs",
+            target_set=["juice-shop-foundation"],
+            benchmark_mode="closed_book",
+            mutation_seed="seed:2026-05-23",
+            code_version="git:abc123",
+            policy_version="policy:v1",
+            model_versions={},
+            hidden_solution_access_status="not_available_to_agent",
+            hardcode_scan_result={"status": "not_run"},
+        )
+
+        with self.assertRaisesRegex(ValueError, "writeup"):
+            run.record_solve_result(
+                solve_session_id="solve-juice-1",
+                target_id="juice-shop-foundation",
+                solve_status="blocked",
+                result="no_solve",
+                evidence_ids=["evidence:http-title"],
+                policy_decision_ids=["policy:allow-recon"],
+                hardcode_scan_result={"status": "pass"},
+                source_refs=["writeup:juice-shop-foundation"],
+            )
+
 __all__ = ["BenchmarkRunContractTestsPart3"]

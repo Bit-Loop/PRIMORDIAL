@@ -16,6 +16,7 @@ from primordial.labs.ctf.scoring import (
 
 CLOSED_BOOK_MODES = frozenset({"closed_book", "closed-book", "closed book"})
 HIDDEN_SOLUTION_AVAILABLE = frozenset({"available_to_agent", "agent_access", "available", "exposed"})
+FORBIDDEN_ACTIVE_SOURCE_REF_MARKERS = ("writeup", "solution", "postmortem")
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +91,7 @@ class BenchmarkRun:
         evidence_ids: list[str] | tuple[str, ...],
         policy_decision_ids: list[str] | tuple[str, ...],
         hardcode_scan_result: Mapping[str, Any],
+        source_refs: list[str] | tuple[str, ...] = (),
     ) -> BenchmarkRun:
         if self.ended_at:
             raise ValueError("BenchmarkRun finalized runs cannot record additional solve results")
@@ -105,14 +107,19 @@ class BenchmarkRun:
             raise ValueError(f"BenchmarkRun target_id must be in target_set: {target_ref}")
         if target_ref in _recorded_target_ids(self.solve_results):
             raise ValueError(f"BenchmarkRun duplicate target result: {target_ref}")
-        if _normalized(solve_status) in SOLVED_STATUSES and not evidence_refs:
+        normalized_status = _normalized(solve_status)
+        source_ref_tuple = _ref_tuple(source_refs, "source_refs", allow_empty=True, reject_duplicates=True)
+        if normalized_status in SOLVED_STATUSES and not evidence_refs:
             raise ValueError("solved BenchmarkRun result requires supporting evidence")
+        if _normalized(self.benchmark_mode) in CLOSED_BOOK_MODES:
+            _validate_closed_book_source_refs(source_ref_tuple, require_refs=normalized_status in SOLVED_STATUSES)
         solve_result = {
             "solve_session_id": _required(solve_session_id, "solve_session_id"),
             "target_id": target_ref,
             "solve_status": _required(solve_status, "solve_status"),
             "result": _required(result, "result"),
             "evidence_ids": evidence_refs,
+            "source_refs": source_ref_tuple,
             "policy_decision_ids": _ref_tuple(
                 policy_decision_ids,
                 "policy_decision_ids",
@@ -211,6 +218,19 @@ def _recorded_target_ids(solve_results: tuple[dict[str, Any], ...]) -> set[str]:
         for solve_result in solve_results
         if str(solve_result.get("target_id", "")).strip()
     }
+
+
+def _validate_closed_book_source_refs(source_refs: tuple[str, ...], *, require_refs: bool) -> None:
+    if require_refs and not source_refs:
+        raise ValueError("closed-book solved BenchmarkRun result requires source_refs")
+    for source_ref in source_refs:
+        if _is_forbidden_active_source_ref(source_ref):
+            raise ValueError("closed-book BenchmarkRun result must not use writeup/postmortem source_refs")
+
+
+def _is_forbidden_active_source_ref(source_ref: str) -> bool:
+    normalized = _normalized(source_ref).replace(":", "_").replace("/", "_")
+    return any(marker in normalized for marker in FORBIDDEN_ACTIVE_SOURCE_REF_MARKERS)
 
 
 def _mapping_dict(value: Mapping[str, Any], name: str) -> dict[str, Any]:
