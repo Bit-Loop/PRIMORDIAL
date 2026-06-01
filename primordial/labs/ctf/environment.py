@@ -14,7 +14,9 @@ from primordial.labs.ctf.targets import CTFTarget
 
 
 LOCAL_CONTAINER_MODES = frozenset({"container", "docker", "podman"})
+LOCAL_CLUSTER_MODES = frozenset({"kubernetes", "kind", "k3d", "minikube", "local_cluster"})
 LOCAL_CONTAINER_EXIT_GATES = ("local_container_environment_verified",)
+LOCAL_CLUSTER_EXIT_GATES = ("local_cluster_environment_verified",)
 PHASE_LOCAL_LAB_EXIT_GATES = ("local_lab_environment_verified",)
 _SERVER_PRODUCT_VERSION = re.compile(r"(?P<product>[A-Za-z][A-Za-z0-9_.-]*)/(?P<version>[0-9][A-Za-z0-9_.-]*)")
 
@@ -134,6 +136,50 @@ def verify_local_container_environment(
     )
 
 
+def verify_local_cluster_environment(
+    target: CTFTarget,
+    *,
+    namespace: str,
+    observed_assets: list[str] | tuple[str, ...],
+    evidence_refs: list[str] | tuple[str, ...],
+    reset_evidence_ref: str,
+    profile: str,
+    observations: Mapping[str, Any] | None = None,
+) -> EnvironmentProof:
+    payload = {
+        "target_id": target.id,
+        "namespace": namespace,
+        "observed_assets": observed_assets,
+        "evidence_refs": evidence_refs,
+        "reset_evidence_ref": reset_evidence_ref,
+        "profile": profile,
+        "observations": dict(observations or {}),
+    }
+    reject_hidden_flag_material(payload, path="ctf_cluster_environment_proof", label="EnvironmentProof")
+    _validate_local_cluster_target(target)
+    checked_namespace = _namespace(namespace)
+    checked_profile = _profile(target, profile)
+    checked_assets = _observed_assets(target, observed_assets)
+    checked_refs = _evidence_ref_tuple(evidence_refs)
+    checked_reset_ref = _evidence_ref(reset_evidence_ref, "reset_evidence_ref")
+    if checked_reset_ref not in checked_refs:
+        raise ValueError("EnvironmentProof reset_evidence_ref must be included in evidence_refs")
+    provisioning = _provisioning_payload(target)
+    provisioning["namespace"] = checked_namespace
+    return EnvironmentProof(
+        target_id=target.id,
+        status="verified",
+        profile=checked_profile,
+        environment_kind="local_cluster",
+        observed_assets=checked_assets,
+        evidence_refs=checked_refs,
+        reset_evidence_ref=checked_reset_ref,
+        exit_gates=LOCAL_CLUSTER_EXIT_GATES,
+        provisioning=provisioning,
+        observations=dict(observations or {}),
+    )
+
+
 def probe_local_container_environment(
     target: CTFTarget,
     *,
@@ -247,6 +293,25 @@ def _validate_local_container_target(target: CTFTarget) -> None:
         raise ValueError("EnvironmentProof local container target requires scoped assets")
     if not any((target.reset.network, target.reset.compose_project, target.reset.published_ports)):
         raise ValueError("EnvironmentProof local container target requires reset metadata")
+
+
+def _validate_local_cluster_target(target: CTFTarget) -> None:
+    mode = _token(target.reset.mode or target.platform)
+    if mode not in LOCAL_CLUSTER_MODES:
+        raise ValueError("EnvironmentProof target must use local cluster provisioning")
+    if not target.scope.assets:
+        raise ValueError("EnvironmentProof local cluster target requires scoped assets")
+    if not (target.scope.network or target.reset.network):
+        raise ValueError("EnvironmentProof local cluster target requires cluster or network metadata")
+
+
+def _namespace(value: str) -> str:
+    namespace = str(value or "").strip()
+    if not namespace:
+        raise ValueError("EnvironmentProof requires namespace")
+    if namespace in {"*", "all", "default", "kube-node-lease", "kube-public", "kube-system"}:
+        raise ValueError("EnvironmentProof namespace must be dedicated to the local lab")
+    return namespace
 
 
 def _profile(target: CTFTarget, profile: str) -> str:

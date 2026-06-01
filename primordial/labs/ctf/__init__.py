@@ -16,11 +16,13 @@ from primordial.labs.ctf.environment import (
     probe_local_container_environment,
     probe_vulhub_cve_environment,
     verify_phase_local_lab_environment,
+    verify_local_cluster_environment,
     verify_local_container_environment,
 )
 from primordial.labs.ctf.failures import FailureAnalysis
 from primordial.labs.ctf.hardcode import HardcodeFinding, HardcodeScanResult, HardcodeScanner
 from primordial.labs.ctf.integrity import CTFHarnessIntegrity, CTFIntegrityResult
+from primordial.labs.ctf.kubernetes import KubernetesGoatPhaseControlResult, verify_kubernetes_goat_phase_controls
 from primordial.labs.ctf.mutation import MutationPlan, MutationPlanner
 from primordial.labs.ctf.patches import PatchProposal
 from primordial.labs.ctf.phase_targets import CTFPhaseTargetSet, load_ctf_phase_target_manifests
@@ -63,6 +65,7 @@ __all__ = [
     "HardcodeFinding",
     "HardcodeScanResult",
     "HardcodeScanner",
+    "KubernetesGoatPhaseControlResult",
     "MutationPlan",
     "MutationPlanner",
     "PatchProposal",
@@ -79,6 +82,7 @@ __all__ = [
     "compute_scoring_summary",
     "validate_scoring_results_evidence_refs",
     "verify_cicd_goat_phase_controls",
+    "verify_kubernetes_goat_phase_controls",
     "load_ctf_target_manifest",
     "load_ctf_target_manifest_file",
     "load_ctf_lab_phase_catalog",
@@ -88,5 +92,6 @@ __all__ = [
     "probe_vulhub_cve_environment",
     "validate_vulhub_exploit_applicability",
     "verify_phase_local_lab_environment",
+    "verify_local_cluster_environment",
     "verify_local_container_environment",
 ]
