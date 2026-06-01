@@ -148,7 +148,7 @@ phases:
   - number: 6
     id: phase_6_goad_light_goad
     name: Phase 6 GOAD-Light/GOAD
-    status: not_started
+    status: in_progress
     target_families:
       - goad_light
       - goad
@@ -160,7 +160,9 @@ phases:
       - local_ad_lab_environment_verified
       - kerberos_and_smb_actions_policy_gated
       - credential_use_requires_operator_supplied_material
-    validation_commands: []
+    validation_commands:
+      - python3 -m unittest tests.test_ctf_harness_goad tests.test_ctf_lab_phases -q
+      - python3 -m primordial.core.quality.hardcode
   - number: 7
     id: phase_7_cloudgoat
     name: Phase 7 CloudGoat
