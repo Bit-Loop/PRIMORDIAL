@@ -79,6 +79,45 @@ from primordial.core.domain.models import (
     utc_now,
 )
 from primordial.core.storage.schema import SCHEMA_SQL
+from primordial.core.storage.target_scope import replace_target_scope_assets_in_connection
+
+
+_DOCUMENT_CHUNK_METADATA_FILTER_KEYS = {
+    "domain": ["domain", "corpus_type"],
+    "source_file": ["source_file", "source_name"],
+    "doc_id": ["doc_id"],
+    "citation_id": ["citation_id"],
+    "chunk_type": ["chunk_type"],
+    "card_type": ["card_type"],
+    "risk_family": ["risk_family"],
+    "output_mode": ["output_mode"],
+    "source_priority": ["source_priority"],
+    "requires_authorized_scope": ["requires_authorized_scope"],
+    "vuln_id": ["vuln_id"],
+    "cve_id": ["cve_id"],
+    "ghsa_id": ["ghsa_ids", "aliases", "alias"],
+    "osv_id": ["osv_ids", "aliases", "alias"],
+    "alias": ["aliases", "alias", "cve_id", "ghsa_ids", "osv_ids"],
+    "ecosystem": ["ecosystem"],
+    "package": ["package"],
+    "vendor": ["affected_vendors"],
+    "product": ["affected_products"],
+    "cpe": ["cpe", "affected_cpes"],
+    "purl": ["purl", "affected_purls"],
+    "cwe": ["cwe", "cwe_ids"],
+    "cvss_severity": ["cvss_severity"],
+    "kev": ["kev"],
+    "fixed_version_known": ["fixed_version_known"],
+    "asset_match": ["asset_match"],
+    "watchlist_match": ["watchlist_match"],
+    "source_kind": ["source_kind"],
+    "safety_level": ["safety_level"],
+}
+
+_DOCUMENT_CHUNK_NUMERIC_FILTER_KEYS = {
+    "epss_probability": "epss_probability",
+    "epss_percentile": "epss_percentile",
+}
 
 
 def _dump(value: Any) -> Any:
@@ -504,197 +543,21 @@ class RuntimeStore:
     ) -> dict[str, Any]:
         now = utc_now()
         with closing(self.connect()) as connection:
-            existing_row = connection.execute(
-                """
-                SELECT * FROM targets
-                WHERE handle = %s AND profile = %s
-                ORDER BY created_at DESC
-                LIMIT 1
-                FOR UPDATE
-                """,
-                (handle, profile.value),
-            ).fetchone()
-            existing = self._target_from_row(existing_row) if existing_row else None
-            metadata = dict(existing.metadata) if existing else {}
-            previous_ip = str(metadata.get("active_ip") or "").strip()
-            ip_changed = bool(active_ip) and previous_ip != str(active_ip)
-            generation = int(metadata.get("active_ip_generation", 0) or 0)
-            if active_ip:
-                generation += 1 if ip_changed else 0
-                metadata.update(
-                    {
-                        "active_ip": active_ip,
-                        "operator_confirmed_ip": active_ip,
-                        "operator_confirmed_ip_at": now.isoformat(),
-                        "active_ip_generation": generation,
-                        "stale_evidence_before": now.isoformat()
-                        if ip_changed
-                        else metadata.get("stale_evidence_before", now.isoformat()),
-                        "active_ip_source": "scope_editor",
-                    }
-                )
-
-            if existing is None:
-                target = Target(
-                    handle=handle,
-                    display_name=display_name,
-                    profile=profile,
-                    in_scope=in_scope,
-                    metadata=metadata,
-                )
-                target.created_at = now
-                target.updated_at = now
-                target_row = connection.execute(
-                    """
-                    INSERT INTO targets
-                    (id, handle, display_name, profile, in_scope, metadata, created_at, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    RETURNING *
-                    """,
-                    (
-                        target.id,
-                        target.handle,
-                        target.display_name,
-                        target.profile.value,
-                        target.in_scope,
-                        _dump(target.metadata),
-                        target.created_at.isoformat(),
-                        target.updated_at.isoformat(),
-                    ),
-                ).fetchone()
-            else:
-                target_row = connection.execute(
-                    """
-                    UPDATE targets
-                    SET display_name = %s, in_scope = %s, metadata = %s, updated_at = %s
-                    WHERE id = %s
-                    RETURNING *
-                    """,
-                    (display_name, in_scope, _dump(metadata), now.isoformat(), existing.id),
-                ).fetchone()
-            target = self._target_from_row(target_row)
-            invalidated_task_count = 0
-            if not target.in_scope:
-                invalidated_task_count = self._block_active_tasks_for_target_in_connection(
-                    connection,
-                    target_id=target.id,
-                    reason="target was marked out of scope",
-                    source="scope_editor",
-                    now=now,
-                )
-
-            connection.execute("DELETE FROM scope_assets WHERE target_id = %s", (target.id,))
-            inserted_assets = 0
-            for row in asset_rows:
-                raw_asset = str(row["asset"]).strip()
-                if not raw_asset:
-                    continue
-                asset = ScopeAsset(
-                    target_id=target.id,
-                    asset=raw_asset,
-                    asset_type=str(row.get("asset_type") or "domain"),
-                    metadata=dict(row.get("metadata", {})) if isinstance(row.get("metadata", {}), dict) else {},
-                )
-                connection.execute(
-                    """
-                    INSERT INTO scope_assets
-                    (id, target_id, asset, asset_type, metadata, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        asset.id,
-                        asset.target_id,
-                        asset.asset,
-                        asset.asset_type,
-                        _dump(asset.metadata),
-                        asset.created_at.isoformat(),
-                    ),
-                )
-                inserted_assets += 1
-
-            if active_ip and ip_changed:
-                note = Note(
-                    target_id=target.id,
-                    title="Operator-confirmed active target IP",
-                    body=(
-                        f"Active IP for `{target.handle}` is `{active_ip}`. "
-                        "Prior recon evidence may still reference older IPs and should be treated as historical "
-                        "until refreshed recon tasks complete."
-                    ),
-                    confidence=1.0,
-                    freshness=1.0,
-                    metadata={
-                        "class": "operator_correction",
-                        "active_ip": active_ip,
-                        "previous_ip": previous_ip,
-                        "active_ip_generation": generation,
-                        "source": "scope_editor",
-                    },
-                )
-                connection.execute(
-                    """
-                    INSERT INTO notes
-                    (id, target_id, task_id, title, body, confidence, freshness, metadata, created_at, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        note.id,
-                        note.target_id,
-                        note.task_id,
-                        note.title,
-                        note.body,
-                        note.confidence,
-                        note.freshness,
-                        _dump(note.metadata),
-                        note.created_at.isoformat(),
-                        note.updated_at.isoformat(),
-                    ),
-                )
-
-            summary = (
-                f"Active IP set for {target.handle}: {active_ip}"
-                if active_ip and ip_changed
-                else f"Scope assets replaced for {target.handle}: {inserted_assets} asset(s)"
-            )
-            event = EventRecord(
-                type=EventType.SCOPE_UPDATED,
-                summary=summary,
-                target_id=target.id,
-                metadata={
-                    "asset_count": inserted_assets,
-                    "profile": profile.value,
-                    "active_ip": active_ip,
-                    "previous_ip": previous_ip,
-                    "active_ip_generation": generation if active_ip else metadata.get("active_ip_generation"),
-                    "source": "scope_editor",
-                },
-            )
-            connection.execute(
-                """
-                INSERT INTO events
-                (id, event_type, target_id, task_id, summary, metadata, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    event.id,
-                    event.type.value,
-                    event.target_id,
-                    event.task_id,
-                    event.summary,
-                    _dump(event.metadata),
-                    event.created_at.isoformat(),
-                ),
+            outcome = replace_target_scope_assets_in_connection(
+                connection,
+                handle=handle,
+                display_name=display_name,
+                profile=profile,
+                in_scope=in_scope,
+                active_ip=active_ip,
+                asset_rows=asset_rows,
+                now=now,
+                dump=_dump,
+                target_from_row=self._target_from_row,
+                block_active_tasks=self._block_active_tasks_for_target_in_connection,
             )
             connection.commit()
-        return {
-            "target": target,
-            "asset_count": inserted_assets,
-            "active_ip": active_ip,
-            "previous_ip": previous_ip,
-            "active_ip_generation": generation if active_ip else None,
-            "ip_changed": ip_changed,
-            "invalidated_task_count": invalidated_task_count,
-        }
+        return outcome
 
     def _block_active_tasks_for_target_in_connection(
         self,
@@ -760,29 +623,46 @@ class RuntimeStore:
                     TaskRunStatus.RUNNING.value,
                 ),
             )
-            event = EventRecord(
-                type=EventType.TASK_BLOCKED,
-                summary=f"Blocked {len(rows)} active task(s): {reason}",
+            self._insert_scope_blocked_tasks_event(
+                connection,
                 target_id=target_id,
-                metadata={**metadata_patch, "task_ids": task_ids, "blocked_count": len(rows)},
-            )
-            connection.execute(
-                """
-                INSERT INTO events
-                (id, event_type, target_id, task_id, summary, metadata, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    event.id,
-                    event.type.value,
-                    event.target_id,
-                    event.task_id,
-                    event.summary,
-                    _dump(event.metadata),
-                    event.created_at.isoformat(),
-                ),
+                reason=reason,
+                metadata_patch=metadata_patch,
+                task_ids=task_ids,
             )
         return len(rows)
+
+    def _insert_scope_blocked_tasks_event(
+        self,
+        connection: _PostgresConnection,
+        *,
+        target_id: str,
+        reason: str,
+        metadata_patch: dict[str, Any],
+        task_ids: list[str],
+    ) -> None:
+        event = EventRecord(
+            type=EventType.TASK_BLOCKED,
+            summary=f"Blocked {len(task_ids)} active task(s): {reason}",
+            target_id=target_id,
+            metadata={**metadata_patch, "task_ids": task_ids, "blocked_count": len(task_ids)},
+        )
+        connection.execute(
+            """
+            INSERT INTO events
+            (id, event_type, target_id, task_id, summary, metadata, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                event.id,
+                event.type.value,
+                event.target_id,
+                event.task_id,
+                event.summary,
+                _dump(event.metadata),
+                event.created_at.isoformat(),
+            ),
+        )
 
     def list_scope_assets(self, target_id: str | None = None) -> list[ScopeAsset]:
         if target_id:
@@ -1164,6 +1044,8 @@ class RuntimeStore:
         event: EventRecord,
     ) -> bool:
         now = utc_now()
+        now_iso = now.isoformat()
+        recovery_metadata = {"recovered_stale_execution": True, "recovery_reason": reason}
         with closing(self.connect()) as connection:
             connection.execute("BEGIN")
             run_row = connection.execute(
@@ -1177,9 +1059,9 @@ class RuntimeStore:
                 (
                     TaskRunStatus.CANCELLED.value,
                     f"recovered stale execution state: {reason}",
-                    now.isoformat(),
-                    now.isoformat(),
-                    _dump({"recovered_stale_execution": True, "recovery_reason": reason}),
+                    now_iso,
+                    now_iso,
+                    _dump(recovery_metadata),
                     run.id,
                     TaskRunStatus.CLAIMED.value,
                     TaskRunStatus.RUNNING.value,
@@ -1188,21 +1070,13 @@ class RuntimeStore:
             if run_row is None:
                 connection.rollback()
                 return False
-            if task is not None and task_status is not None:
-                connection.execute(
-                    """
-                    UPDATE tasks
-                    SET status = %s, updated_at = %s, metadata = metadata || %s
-                    WHERE id = %s AND status = %s
-                    """,
-                    (
-                        task_status.value,
-                        now.isoformat(),
-                        _dump({"recovered_stale_execution": True, "recovery_reason": reason}),
-                        task.id,
-                        TaskStatus.RUNNING.value,
-                    ),
-                )
+            self._mark_recovered_stale_task(
+                connection,
+                task=task,
+                task_status=task_status,
+                recovery_metadata=recovery_metadata,
+                now_iso=now_iso,
+            )
             connection.execute(
                 """
                 INSERT INTO agent_traces
@@ -1237,6 +1111,32 @@ class RuntimeStore:
             )
             connection.commit()
         return True
+
+    def _mark_recovered_stale_task(
+        self,
+        connection: Any,
+        *,
+        task: Task | None,
+        task_status: TaskStatus | None,
+        recovery_metadata: dict[str, Any],
+        now_iso: str,
+    ) -> None:
+        if task is None or task_status is None:
+            return
+        connection.execute(
+            """
+            UPDATE tasks
+            SET status = %s, updated_at = %s, metadata = metadata || %s
+            WHERE id = %s AND status = %s
+            """,
+            (
+                task_status.value,
+                now_iso,
+                _dump(recovery_metadata),
+                task.id,
+                TaskStatus.RUNNING.value,
+            ),
+        )
 
     def insert_handoff(self, handoff: TaskHandoff) -> None:
         self._execute(
@@ -1875,38 +1775,7 @@ class RuntimeStore:
         metadata_filters = {
             self._document_chunk_metadata_filter_key(key): value for key, value in metadata_filters.items()
         }
-        mapping = {
-            "domain": ["domain", "corpus_type"],
-            "source_file": ["source_file", "source_name"],
-            "doc_id": ["doc_id"],
-            "citation_id": ["citation_id"],
-            "chunk_type": ["chunk_type"],
-            "card_type": ["card_type"],
-            "risk_family": ["risk_family"],
-            "output_mode": ["output_mode"],
-            "source_priority": ["source_priority"],
-            "requires_authorized_scope": ["requires_authorized_scope"],
-            "vuln_id": ["vuln_id"],
-            "cve_id": ["cve_id"],
-            "ghsa_id": ["ghsa_ids", "aliases", "alias"],
-            "osv_id": ["osv_ids", "aliases", "alias"],
-            "alias": ["aliases", "alias", "cve_id", "ghsa_ids", "osv_ids"],
-            "ecosystem": ["ecosystem"],
-            "package": ["package"],
-            "vendor": ["affected_vendors"],
-            "product": ["affected_products"],
-            "cpe": ["cpe", "affected_cpes"],
-            "purl": ["purl", "affected_purls"],
-            "cwe": ["cwe", "cwe_ids"],
-            "cvss_severity": ["cvss_severity"],
-            "kev": ["kev"],
-            "fixed_version_known": ["fixed_version_known"],
-            "asset_match": ["asset_match"],
-            "watchlist_match": ["watchlist_match"],
-            "source_kind": ["source_kind"],
-            "safety_level": ["safety_level"],
-        }
-        for key, json_keys in mapping.items():
+        for key, json_keys in _DOCUMENT_CHUNK_METADATA_FILTER_KEYS.items():
             if key not in metadata_filters:
                 continue
             value = metadata_filters[key]
@@ -1927,11 +1796,7 @@ class RuntimeStore:
             where.append("(" + " OR ".join(clauses) + ")")
             for item in json_keys:
                 params.extend([item, values, item, values])
-        numeric_thresholds = {
-            "epss_probability": "epss_probability",
-            "epss_percentile": "epss_percentile",
-        }
-        for key, json_key in numeric_thresholds.items():
+        for key, json_key in _DOCUMENT_CHUNK_NUMERIC_FILTER_KEYS.items():
             if key not in metadata_filters:
                 continue
             value = metadata_filters[key]
@@ -2321,48 +2186,72 @@ class RuntimeStore:
                     created_at,
                 ),
             )
+            suggestions = summary.get("role_suggestions", [])
             for role, model_id in sorted((str(k), str(v)) for k, v in recommendations.items() if str(v).strip()):
-                aggregate = self._aggregate_row_for_recommendation(aggregate_rows, model_id)
-                suggestion = self._role_suggestion_for_recommendation(summary.get("role_suggestions", []), role, model_id)
-                role_results = self._eval_results_for_role_model(results, role, model_id)
-                metrics = self._role_eval_metrics(role_results)
-                connection.execute(
-                    """
-                    INSERT INTO model_eval_role_metrics
-                    (
-                        id, run_id, role, provider, model, aggregate_score, pass_rate, fail_rate,
-                        hallucination_count, hallucination_rate, over_refusal_rate, correct_refusal_rate,
-                        unsafe_compliance_failures, top_failure_modes, avg_latency_sec, avg_tokens_sec,
-                        best_context_length, quantization, params, metadata, created_at
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        _new_id("mrole"),
-                        run_id,
-                        role,
-                        str(aggregate.get("provider") or self._provider_from_model_id(model_id)),
-                        str(aggregate.get("model") or self._model_from_model_id(model_id)),
-                        float(aggregate.get("aggregate_score") or metrics["aggregate_score"] or 0.0),
-                        float(metrics["pass_rate"]),
-                        float(metrics["fail_rate"]),
-                        int(metrics["hallucination_count"]),
-                        float(aggregate.get("hallucination_rate") or metrics["hallucination_rate"]),
-                        float(aggregate.get("over_refusal_rate") or metrics["over_refusal_rate"]),
-                        float(aggregate.get("correct_refusal_rate") or metrics["correct_refusal_rate"]),
-                        int(metrics["unsafe_compliance_failures"]),
-                        _dump(metrics["top_failure_modes"]),
-                        self._optional_float(aggregate.get("avg_latency_sec")),
-                        self._optional_float(aggregate.get("avg_tokens_sec")),
-                        self._optional_int_value(aggregate.get("best_context_length")),
-                        str(aggregate.get("quantization") or ""),
-                        str(aggregate.get("params") or ""),
-                        _dump({"aggregate": aggregate, "model_id": model_id, "suggestion": suggestion}),
-                        created_at,
-                    ),
+                self._insert_model_eval_role_metric(
+                    connection,
+                    run_id=run_id,
+                    role=role,
+                    model_id=model_id,
+                    aggregate_rows=aggregate_rows,
+                    results=results,
+                    suggestions=suggestions,
+                    created_at=created_at,
                 )
             connection.commit()
         return run_id
+
+    def _insert_model_eval_role_metric(
+        self,
+        connection: Any,
+        *,
+        run_id: str,
+        role: str,
+        model_id: str,
+        aggregate_rows: list[Any],
+        results: list[Any],
+        suggestions: Any,
+        created_at: str,
+    ) -> None:
+        aggregate = self._aggregate_row_for_recommendation(aggregate_rows, model_id)
+        suggestion = self._role_suggestion_for_recommendation(suggestions, role, model_id)
+        role_results = self._eval_results_for_role_model(results, role, model_id)
+        metrics = self._role_eval_metrics(role_results)
+        connection.execute(
+            """
+            INSERT INTO model_eval_role_metrics
+            (
+                id, run_id, role, provider, model, aggregate_score, pass_rate, fail_rate,
+                hallucination_count, hallucination_rate, over_refusal_rate, correct_refusal_rate,
+                unsafe_compliance_failures, top_failure_modes, avg_latency_sec, avg_tokens_sec,
+                best_context_length, quantization, params, metadata, created_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                _new_id("mrole"),
+                run_id,
+                role,
+                str(aggregate.get("provider") or self._provider_from_model_id(model_id)),
+                str(aggregate.get("model") or self._model_from_model_id(model_id)),
+                float(aggregate.get("aggregate_score") or metrics["aggregate_score"] or 0.0),
+                float(metrics["pass_rate"]),
+                float(metrics["fail_rate"]),
+                int(metrics["hallucination_count"]),
+                float(aggregate.get("hallucination_rate") or metrics["hallucination_rate"]),
+                float(aggregate.get("over_refusal_rate") or metrics["over_refusal_rate"]),
+                float(aggregate.get("correct_refusal_rate") or metrics["correct_refusal_rate"]),
+                int(metrics["unsafe_compliance_failures"]),
+                _dump(metrics["top_failure_modes"]),
+                self._optional_float(aggregate.get("avg_latency_sec")),
+                self._optional_float(aggregate.get("avg_tokens_sec")),
+                self._optional_int_value(aggregate.get("best_context_length")),
+                str(aggregate.get("quantization") or ""),
+                str(aggregate.get("params") or ""),
+                _dump({"aggregate": aggregate, "model_id": model_id, "suggestion": suggestion}),
+                created_at,
+            ),
+        )
 
     def latest_model_eval_role_metrics(self) -> dict[str, dict[str, Any]]:
         rows = self._query(
@@ -2667,7 +2556,6 @@ class RuntimeStore:
             blocking_record_counts = self._target_blocking_runtime_record_counts(
                 connection,
                 target_id=target_id,
-                task_ids=task_ids,
                 notification_ids=notification_ids,
             )
             if any(blocking_record_counts.values()) and not allow_runtime_record_deletion:
@@ -2757,7 +2645,6 @@ class RuntimeStore:
         connection: Any,
         *,
         target_id: str,
-        task_ids: list[str],
         notification_ids: list[str],
     ) -> dict[str, int]:
         return {
@@ -2815,13 +2702,11 @@ class RuntimeStore:
                 "SELECT COUNT(*) AS count FROM notifications WHERE target_id = %s AND task_id IS NULL",
                 (target_id,),
             ),
-            "discord_deliveries": self._count_ids(connection, "discord_deliveries", "notification_id", notification_ids)
-            if notification_ids and self._count_query(
+            "discord_deliveries": self._target_blocking_discord_delivery_count(
                 connection,
-                "SELECT COUNT(*) AS count FROM notifications WHERE target_id = %s AND task_id IS NULL",
-                (target_id,),
-            )
-            else 0,
+                target_id=target_id,
+                notification_ids=notification_ids,
+            ),
             "external_sync_jobs": self._count_query(
                 connection,
                 """
@@ -2834,6 +2719,24 @@ class RuntimeStore:
             "notion_pages": self._count_target_rows(connection, "notion_pages", target_id),
             "operator_messages": self._count_target_rows(connection, "operator_messages", target_id),
         }
+
+    def _target_blocking_discord_delivery_count(
+        self,
+        connection: Any,
+        *,
+        target_id: str,
+        notification_ids: list[str],
+    ) -> int:
+        if not notification_ids:
+            return 0
+        target_notification_count = self._count_query(
+            connection,
+            "SELECT COUNT(*) AS count FROM notifications WHERE target_id = %s AND task_id IS NULL",
+            (target_id,),
+        )
+        if not target_notification_count:
+            return 0
+        return self._count_ids(connection, "discord_deliveries", "notification_id", notification_ids)
 
     def _select_ids(
         self,
