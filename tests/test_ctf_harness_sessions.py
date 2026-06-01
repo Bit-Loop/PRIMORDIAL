@@ -62,6 +62,44 @@ class SolveSessionContractTests(unittest.TestCase):
                 policy_decision_id="policy:allow-submit",
             )
 
+    def test_solve_session_flag_submission_records_captured_flag_evidence(self) -> None:
+        session = SolveSession.start(
+            id="solve-juice-1",
+            target_id="juice-shop-foundation",
+            engagement_profile="co_internal_lab",
+            active_intent="ctf_solve_assisted",
+            policy_version="policy:v1",
+            code_version="git:abc123",
+            model_versions={},
+        )
+
+        session = session.record_flag_submission(
+            challenge_id="juice-shop-foundation",
+            captured_flag_ref="evidence:captured-flag-redacted",
+            policy_decision_id="policy:allow-submit",
+        )
+
+        self.assertEqual(session.evidence_ids, ("evidence:captured-flag-redacted",))
+        self.assertEqual(session.actions[0]["evidence_ids"], ("evidence:captured-flag-redacted",))
+
+    def test_solve_session_flag_submission_requires_captured_flag_evidence_ref(self) -> None:
+        session = SolveSession.start(
+            id="solve-juice-1",
+            target_id="juice-shop-foundation",
+            engagement_profile="co_internal_lab",
+            active_intent="ctf_solve_assisted",
+            policy_version="policy:v1",
+            code_version="git:abc123",
+            model_versions={},
+        )
+
+        with self.assertRaisesRegex(ValueError, "captured_flag_ref"):
+            session.record_flag_submission(
+                challenge_id="juice-shop-foundation",
+                captured_flag_ref="secret_ref:captured-flag-redacted",
+                policy_decision_id="policy:allow-submit",
+            )
+
     def test_solve_session_rejects_raw_flag_material_in_flag_submission_payload_before_intent_gate(self) -> None:
         session = SolveSession.start(
             id="solve-juice-1",

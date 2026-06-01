@@ -54,7 +54,7 @@ class FakeCTFdClient:
             raise ValueError("CTFd submission requires active intent that allows CTF solving")
         submission = {
             "challenge_id": _required(challenge_id, "challenge_id"),
-            "captured_flag_ref": _required(captured_flag_ref, "captured_flag_ref"),
+            "captured_flag_ref": _evidence_ref(captured_flag_ref, "captured_flag_ref"),
             "status": "submitted",
         }
         return FakeCTFdClient(
@@ -91,6 +91,13 @@ def _required(value: str, name: str) -> str:
     text = str(value).strip()
     if not text:
         raise ValueError(f"FakeCTFdClient requires {name}")
+    return text
+
+
+def _evidence_ref(value: str, name: str) -> str:
+    text = _required(value, name)
+    if not text.startswith("evidence:"):
+        raise ValueError(f"FakeCTFdClient {name} must use evidence:<id>")
     return text
 
 

@@ -79,6 +79,47 @@ class FakeCTFdClientContractTests(unittest.TestCase):
                 active_intent="recon_only",
             )
 
+    def test_fake_ctfd_client_submission_requires_captured_flag_evidence_ref(self) -> None:
+        client = FakeCTFdClient.from_records(
+            challenges=[
+                {
+                    "id": "juice-shop-foundation",
+                    "title": "Juice Shop Foundation",
+                    "category": "web",
+                    "value": 100,
+                }
+            ],
+            scoreboard={},
+        )
+
+        with self.assertRaisesRegex(ValueError, "captured_flag_ref"):
+            client.submit_flag(
+                challenge_id="juice-shop-foundation",
+                captured_flag_ref="secret_ref:captured-flag-redacted",
+                active_intent="ctf_solve_assisted",
+            )
+
+    def test_fake_ctfd_client_records_evidence_backed_submission(self) -> None:
+        client = FakeCTFdClient.from_records(
+            challenges=[
+                {
+                    "id": "juice-shop-foundation",
+                    "title": "Juice Shop Foundation",
+                    "category": "web",
+                    "value": 100,
+                }
+            ],
+            scoreboard={},
+        )
+
+        updated = client.submit_flag(
+            challenge_id="juice-shop-foundation",
+            captured_flag_ref="evidence:captured-flag-redacted",
+            active_intent="ctf_solve_assisted",
+        )
+
+        self.assertEqual(updated.submissions[0]["captured_flag_ref"], "evidence:captured-flag-redacted")
+
 
 if __name__ == "__main__":
     unittest.main()

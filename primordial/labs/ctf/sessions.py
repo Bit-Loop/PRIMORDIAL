@@ -132,12 +132,14 @@ class SolveSession:
         reject_hidden_flag_material(submission, path="solve_session.flag_submission", label="SolveSession")
         if self.active_intent not in CTF_SOLVE_INTENTS:
             raise ValueError("flag submission requires active intent that allows CTF solving")
+        captured_evidence_ref = _evidence_ref(submission["captured_flag_ref"], "captured_flag_ref")
         return self.record_action(
             action_id=f"ctfd_submit:{submission['challenge_id']}",
             action_type="ctfd_flag_submission",
             status="submitted",
+            evidence_ids=[captured_evidence_ref],
             metadata={
-                "captured_flag_ref": submission["captured_flag_ref"],
+                "captured_flag_ref": captured_evidence_ref,
                 "policy_decision_id": submission["policy_decision_id"],
             },
         )
@@ -181,6 +183,13 @@ def _evidence_ref_tuple(value: list[str] | tuple[str, ...]) -> tuple[str, ...]:
             raise ValueError("SolveSession duplicate evidence_ids entry")
         refs.append(ref)
     return tuple(refs)
+
+
+def _evidence_ref(value: str, name: str) -> str:
+    text = _required(value, name)
+    if not text.startswith("evidence:"):
+        raise ValueError(f"SolveSession {name} must use evidence:<id>")
+    return text
 
 
 def _merge_refs(existing: tuple[str, ...], incoming: tuple[str, ...]) -> tuple[str, ...]:
