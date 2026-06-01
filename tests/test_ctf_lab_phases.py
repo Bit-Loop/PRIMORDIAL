@@ -34,10 +34,55 @@ class CTFLabPhaseCatalogTests(unittest.TestCase):
         self.assertIn("tests.test_ctf_harness_targets", commands)
         self.assertIn("primordial.core.quality.hardcode", commands)
 
-    def test_lab_phases_after_zero_require_verified_environment_proof_before_completion(self) -> None:
+    def test_phase_one_juice_shop_tracks_ready_for_review_evidence(self) -> None:
+        phase = load_ctf_lab_phase_catalog(CATALOG_PATH).phase(1)
+        commands = "\n".join(phase.validation_commands)
+
+        self.assertEqual(phase.status, "ready_for_review")
+        self.assertTrue(phase.environment_proof_required)
+        self.assertTrue(phase.deterministic_fixture_required)
+        self.assertIn("local_container_environment_verified", phase.exit_gates)
+        self.assertIn("closed_book_ctfd_export_loaded_without_flags", phase.exit_gates)
+        self.assertIn("solve_attempts_scored_without_writeup_access", phase.exit_gates)
+        self.assertEqual(
+            phase.verified_environment_refs,
+            ("evidence:local-container:14fdf1d29253565a", "evidence:docker-run-reset-teardown"),
+        )
+        self.assertIn("github_pr:32", phase.evidence_refs)
+        self.assertIn("github_pr:31", phase.evidence_refs)
+        self.assertIn("github_pr:30", phase.evidence_refs)
+        self.assertIn("github_pr:29", phase.evidence_refs)
+        self.assertIn("tests.test_ctf_harness_environment", commands)
+        self.assertIn("tests.test_ctf_harness_benchmark", commands)
+        self.assertIn("primordial.core.quality.hardcode", commands)
+
+    def test_phase_two_vulhub_tracks_ready_for_review_live_lab_evidence(self) -> None:
+        phase = load_ctf_lab_phase_catalog(CATALOG_PATH).phase(2)
+        commands = "\n".join(phase.validation_commands)
+
+        self.assertEqual(phase.status, "ready_for_review")
+        self.assertTrue(phase.environment_proof_required)
+        self.assertTrue(phase.deterministic_fixture_required)
+        self.assertIn("local_container_environment_verified", phase.exit_gates)
+        self.assertIn("cve_target_manifests_include_versions_and_scope", phase.exit_gates)
+        self.assertIn("exploit_applicability_checked_against_observed_evidence", phase.exit_gates)
+        self.assertEqual(
+            phase.verified_environment_refs,
+            ("evidence:local-container:a7baaf34f20aba58", "evidence:docker-run-reset-teardown"),
+        )
+        self.assertIn("github_pr:33", phase.evidence_refs)
+        self.assertIn("github_pr:34", phase.evidence_refs)
+        self.assertIn("github_pr:35", phase.evidence_refs)
+        self.assertIn("evidence:local-container:a7baaf34f20aba58", phase.evidence_refs)
+        self.assertIn("evidence:docker-run-reset-teardown", phase.evidence_refs)
+        self.assertIn("tests.test_ctf_harness_environment", commands)
+        self.assertIn("tests.test_ctf_harness_applicability", commands)
+        self.assertIn("tests.test_ctf_harness_targets", commands)
+
+    def test_remaining_lab_phases_require_verified_environment_proof_before_completion(self) -> None:
         catalog = load_ctf_lab_phase_catalog(CATALOG_PATH)
 
-        for phase in catalog.phases[1:]:
+        for phase in catalog.phases[3:]:
             self.assertTrue(phase.environment_proof_required)
             self.assertTrue(phase.deterministic_fixture_required)
             self.assertNotEqual(phase.status, "complete")
@@ -59,6 +104,8 @@ class CTFLabPhaseCatalogTests(unittest.TestCase):
         payload = load_yaml_file(CATALOG_PATH)
         payload["phases"][1]["status"] = "complete"
         payload["phases"][1]["validation_commands"] = ["python3 -m unittest tests.test_ctf_harness_targets -q"]
+        payload["phases"][1]["verified_environment_refs"] = []
+        payload["phases"][1]["evidence_refs"] = []
 
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "ctf_lab_phases.yaml"

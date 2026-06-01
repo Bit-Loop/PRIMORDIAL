@@ -40,6 +40,15 @@ class EvidenceExpectations:
 
 
 @dataclass(frozen=True, slots=True)
+class VulnerabilityMetadata:
+    cve_id: str = ""
+    product: str = ""
+    affected_versions: tuple[str, ...] = ()
+    fixed_versions: tuple[str, ...] = ()
+    observed_version_evidence_required: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class CTFTarget:
     id: str
     name: str
@@ -48,6 +57,7 @@ class CTFTarget:
     difficulty: str
     scope: TargetScope
     reset: ResetMetadata
+    target_family: str = ""
     source_repo: str = ""
     success_condition: Mapping[str, Any] = field(default_factory=dict)
     writeup_access_policy: str = "closed_book"
@@ -56,6 +66,7 @@ class CTFTarget:
     mutation_policy: Mapping[str, Any] = field(default_factory=dict)
     scoreboard_ref: Mapping[str, Any] = field(default_factory=dict)
     evidence_expectations: EvidenceExpectations = field(default_factory=EvidenceExpectations)
+    vulnerability: VulnerabilityMetadata = field(default_factory=VulnerabilityMetadata)
     default_intent: str = "recon_only"
 
 
@@ -67,8 +78,10 @@ def load_ctf_target_manifest(manifest: Mapping[str, Any]) -> CTFTarget:
     evidence = _mapping(manifest.get("evidence"))
     policy = _mapping(manifest.get("policy"))
     source = _mapping(manifest.get("source"))
+    target_family = str(manifest.get("target_family", "")).strip()
     scope_assets = _text_tuple(scope.get("assets"))
     _validate_local_scope_assets(scope_assets)
+    vulnerability = _vulnerability_metadata(manifest, target_family=target_family)
     default_intent = _default_intent(manifest=manifest, policy=policy)
     writeup_access_policy = _writeup_access_policy(closed_book)
 
@@ -78,6 +91,7 @@ def load_ctf_target_manifest(manifest: Mapping[str, Any]) -> CTFTarget:
         platform=_required_text(manifest, "platform"),
         category=_required_text(manifest, "category"),
         difficulty=_required_text(manifest, "difficulty"),
+        target_family=target_family,
         source_repo=str(source.get("repo_url", "")).strip(),
         scope=TargetScope(
             network=str(scope.get("network", "")).strip(),
@@ -99,6 +113,7 @@ def load_ctf_target_manifest(manifest: Mapping[str, Any]) -> CTFTarget:
         mutation_policy=_mapping(manifest.get("mutation")),
         scoreboard_ref=_mapping(manifest.get("ctfd")),
         evidence_expectations=EvidenceExpectations(required=_text_tuple(evidence.get("required"))),
+        vulnerability=vulnerability,
         default_intent=default_intent,
     )
 
@@ -154,6 +169,34 @@ def _writeup_access_policy(closed_book: Mapping[str, Any]) -> str:
     return policy
 
 
+def _vulnerability_metadata(manifest: Mapping[str, Any], *, target_family: str) -> VulnerabilityMetadata:
+    vulnerability = _mapping(manifest.get("vulnerability"))
+    if not vulnerability and target_family != "vulhub_cve_labs":
+        return VulnerabilityMetadata()
+    cve_id = str(vulnerability.get("cve_id", "")).strip().upper()
+    product = str(vulnerability.get("product", "")).strip()
+    affected_versions = _text_tuple(vulnerability.get("affected_versions"))
+    fixed_versions = _text_tuple(vulnerability.get("fixed_versions"))
+    if not cve_id.startswith("CVE-"):
+        raise ValueError("CTF target manifest vulnerability requires cve_id")
+    if not product:
+        raise ValueError("CTF target manifest vulnerability requires product")
+    if not affected_versions:
+        raise ValueError("CTF target manifest vulnerability requires affected_versions")
+    if not fixed_versions:
+        raise ValueError("CTF target manifest vulnerability requires fixed_versions")
+    return VulnerabilityMetadata(
+        cve_id=cve_id,
+        product=product,
+        affected_versions=affected_versions,
+        fixed_versions=fixed_versions,
+        observed_version_evidence_required=_bool(
+            vulnerability.get("observed_version_evidence_required"),
+            default=target_family == "vulhub_cve_labs",
+        ),
+    )
+
+
 def _normalized_token(value: str) -> str:
     return normalized_hidden_material_key(value)
 
@@ -202,6 +245,14 @@ def _dict_tuple(value: Any) -> tuple[dict[str, Any], ...]:
             raise ValueError("CTF target manifest published_ports entries must be mappings")
         ports.append(dict(item))
     return tuple(ports)
+
+
+def _bool(value: Any, *, default: bool) -> bool:
+    if value is None:
+        return default
+    if not isinstance(value, bool):
+        raise ValueError("CTF target manifest boolean fields must be booleans")
+    return value
 
 
 def _is_local_ctf_container_manifest(manifest: Mapping[str, Any]) -> bool:

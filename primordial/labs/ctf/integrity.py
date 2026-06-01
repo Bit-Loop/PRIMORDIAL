@@ -13,6 +13,8 @@ from primordial.labs.ctf.scoring import SCORING_KEYS, compute_scoring_summary, i
 PASS_HARDCODE_SCAN_STATUSES = frozenset({"pass", "passed", "not_run", "not run"})
 REVIEW_HARDCODE_SEVERITIES = frozenset({"review"})
 HARD_FAIL_HARDCODE_SEVERITIES = frozenset({"hard_fail", "hard fail", "hard-fail"})
+CLOSED_BOOK_MODES = frozenset({"closed_book", "closed-book", "closed book"})
+FORBIDDEN_ACTIVE_SOURCE_REF_MARKERS = ("writeup", "solution", "postmortem")
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +79,7 @@ class CTFHarnessIntegrity:
         errors.extend(_duplicate_target_set_errors(run.target_set))
         errors.extend(_scored_finalization_errors(run))
         errors.extend(_scoring_summary_errors(run))
+        errors.extend(_closed_book_source_ref_errors(run))
         errors.extend(_duplicate_target_result_errors(run.solve_results))
         errors.extend(_target_set_membership_errors(run))
         errors.extend(_scored_target_coverage_errors(run))
@@ -153,6 +156,21 @@ def _scored_finalization_errors(run: BenchmarkRun) -> list[str]:
     return []
 
 
+def _closed_book_source_ref_errors(run: BenchmarkRun) -> list[str]:
+    if not run.scoring_summary or _normalized(run.benchmark_mode) not in CLOSED_BOOK_MODES:
+        return []
+    errors: list[str] = []
+    for solve_result in run.solve_results:
+        target_id = str(solve_result.get("target_id", "")).strip()
+        source_refs = solve_result.get("source_refs", ())
+        if _normalized(str(solve_result.get("solve_status", ""))) in {"solved", "complete", "completed"} and not source_refs:
+            errors.append(f"closed-book solved result missing source_refs: {target_id}")
+        for source_ref in _source_ref_tuple(source_refs):
+            if _is_forbidden_active_source_ref(source_ref):
+                errors.append(f"closed-book solve result uses forbidden source_ref: {source_ref}")
+    return errors
+
+
 def _duplicate_target_result_errors(solve_results: tuple[dict[str, Any], ...]) -> list[str]:
     seen: set[str] = set()
     duplicates: list[str] = []
@@ -211,6 +229,17 @@ def _finding_severity(finding: Any) -> str:
     if isinstance(finding, Mapping):
         return _normalized(finding.get("severity", ""))
     return _normalized(getattr(finding, "severity", ""))
+
+
+def _source_ref_tuple(value: Any) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(str(item).strip() for item in value if str(item).strip())
+
+
+def _is_forbidden_active_source_ref(source_ref: str) -> bool:
+    normalized = _normalized(source_ref).replace(":", "_").replace("/", "_")
+    return any(marker in normalized for marker in FORBIDDEN_ACTIVE_SOURCE_REF_MARKERS)
 
 
 def _normalized(value: Any) -> str:

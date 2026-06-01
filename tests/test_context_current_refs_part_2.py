@@ -116,6 +116,63 @@ class ContextCurrentRefsTestsPart2(ContextCurrentRefsTestsBase):
 
         self.assertEqual(refs, set())
 
+    def test_current_refs_exclude_legacy_source_markdown_paths(self) -> None:
+        envelopes = [
+            ContextEnvelope(
+                ref="evidence:legacy-rag-src",
+                kind="evidence",
+                authority="observed",
+                source_type="tool_output",
+                target_id="target-a",
+                active_generation_id="generation:2",
+                purpose="planner",
+                sink="prompt",
+                content="Legacy advisory Markdown must not support evidence current refs.",
+                citations=["evidence:legacy-rag-src"],
+                metadata={"source_file": "docs/RAG_SRC/0x11-t10.md"},
+            ),
+            ContextEnvelope(
+                ref="rag:legacy-rag-src",
+                kind="rag",
+                authority="advisory",
+                source_type="validated_external",
+                target_id="target-a",
+                active_generation_id="generation:2",
+                purpose="planner",
+                sink="prompt",
+                content="Legacy advisory Markdown must not support RAG current refs.",
+                citations=["rag:legacy-rag-src"],
+                metadata={"source_file": "docs/RAG_SRC/0x11-t10.md"},
+            ),
+            ContextEnvelope(
+                ref="note:legacy-rag-src",
+                kind="operator_note",
+                authority="asserted",
+                source_type="manual_artifact",
+                target_id="target-a",
+                active_generation_id="generation:2",
+                purpose="planner",
+                sink="prompt",
+                content="Legacy advisory Markdown must not support note current refs.",
+                citations=["note:legacy-rag-src"],
+                metadata={"source_file": "docs/RAG_SRC/0x11-t10.md"},
+            ),
+        ]
+        context = {
+            "target_id": "target-a",
+            "active_generation_id": "generation:2",
+            "purpose": "planner",
+            "role": "methodology_advisor",
+        }
+
+        self.assertEqual(current_evidence_refs(envelopes, **context), set())
+        self.assertEqual(current_rag_refs(envelopes, **context), set())
+        self.assertEqual(current_note_refs(envelopes, **context), set())
+        self.assertEqual(
+            prompt_context_omission_reason(envelopes[0], purpose="planner", role="methodology_advisor"),
+            "source_markdown",
+        )
+
     def test_prompt_context_omission_reason_centralizes_prompt_safety(self) -> None:
         valid = ContextEnvelope(
             ref="note:current",
