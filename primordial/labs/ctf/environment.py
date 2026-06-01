@@ -9,11 +9,13 @@ from urllib.request import Request, urlopen
 
 from primordial.labs.ctf.applicability import ExploitApplicabilityResult, validate_vulhub_exploit_applicability
 from primordial.labs.ctf.hidden_material import normalized_hidden_material_key, reject_hidden_flag_material
+from primordial.labs.ctf.phases import CTFLabPhase
 from primordial.labs.ctf.targets import CTFTarget
 
 
 LOCAL_CONTAINER_MODES = frozenset({"container", "docker", "podman"})
 LOCAL_CONTAINER_EXIT_GATES = ("local_container_environment_verified",)
+PHASE_LOCAL_LAB_EXIT_GATES = ("local_lab_environment_verified",)
 _SERVER_PRODUCT_VERSION = re.compile(r"(?P<product>[A-Za-z][A-Za-z0-9_.-]*)/(?P<version>[0-9][A-Za-z0-9_.-]*)")
 
 
@@ -64,6 +66,32 @@ class VulhubEnvironmentProof:
             "exit_gates": list(self.exit_gates),
             "environment_proof": self.environment_proof.as_payload(),
             "applicability": self.applicability.as_payload(),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class PhaseEnvironmentProof:
+    phase_number: int
+    phase_id: str
+    target_id: str
+    target_family: str
+    status: str
+    evidence_refs: tuple[str, ...]
+    reset_evidence_ref: str
+    exit_gates: tuple[str, ...]
+    environment_proof: EnvironmentProof
+
+    def as_payload(self) -> dict[str, Any]:
+        return {
+            "phase_number": self.phase_number,
+            "phase_id": self.phase_id,
+            "target_id": self.target_id,
+            "target_family": self.target_family,
+            "status": self.status,
+            "evidence_refs": list(self.evidence_refs),
+            "reset_evidence_ref": self.reset_evidence_ref,
+            "exit_gates": list(self.exit_gates),
+            "environment_proof": self.environment_proof.as_payload(),
         }
 
 
@@ -169,6 +197,48 @@ def probe_vulhub_cve_environment(
     )
 
 
+def verify_phase_local_lab_environment(
+    phase: CTFLabPhase,
+    target: CTFTarget,
+    *,
+    observed_assets: list[str] | tuple[str, ...],
+    evidence_refs: list[str] | tuple[str, ...],
+    reset_evidence_ref: str,
+    profile: str,
+    observations: Mapping[str, Any] | None = None,
+) -> PhaseEnvironmentProof:
+    _validate_phase_local_lab_target(phase, target)
+    proof = verify_local_container_environment(
+        target,
+        observed_assets=observed_assets,
+        evidence_refs=evidence_refs,
+        reset_evidence_ref=reset_evidence_ref,
+        profile=profile,
+        observations=observations,
+    )
+    return _phase_environment_proof(phase, target, proof)
+
+
+def probe_phase_local_lab_environment(
+    phase: CTFLabPhase,
+    target: CTFTarget,
+    *,
+    reset_evidence_ref: str,
+    profile: str,
+    timeout_seconds: float = 5.0,
+    body_limit_bytes: int = 4096,
+) -> PhaseEnvironmentProof:
+    _validate_phase_local_lab_target(phase, target)
+    proof = probe_local_container_environment(
+        target,
+        reset_evidence_ref=reset_evidence_ref,
+        profile=profile,
+        timeout_seconds=timeout_seconds,
+        body_limit_bytes=body_limit_bytes,
+    )
+    return _phase_environment_proof(phase, target, proof)
+
+
 def _validate_local_container_target(target: CTFTarget) -> None:
     mode = _token(target.reset.mode or target.platform)
     if mode not in LOCAL_CONTAINER_MODES:
@@ -186,6 +256,29 @@ def _profile(target: CTFTarget, profile: str) -> str:
     if checked not in target.allowed_engagement_profiles:
         raise ValueError("EnvironmentProof profile must be allowed by target manifest")
     return checked
+
+
+def _validate_phase_local_lab_target(phase: CTFLabPhase, target: CTFTarget) -> None:
+    if "local_lab_environment_verified" not in phase.exit_gates:
+        raise ValueError("Phase environment proof requires local_lab_environment_verified exit gate")
+    if target.target_family not in phase.target_families:
+        raise ValueError("Phase environment proof target_family must be allowed by phase")
+    if not phase.environment_proof_required:
+        raise ValueError("Phase environment proof requires environment_proof_required phase")
+
+
+def _phase_environment_proof(phase: CTFLabPhase, target: CTFTarget, proof: EnvironmentProof) -> PhaseEnvironmentProof:
+    return PhaseEnvironmentProof(
+        phase_number=phase.number,
+        phase_id=phase.id,
+        target_id=target.id,
+        target_family=target.target_family,
+        status=proof.status,
+        evidence_refs=proof.evidence_refs,
+        reset_evidence_ref=proof.reset_evidence_ref,
+        exit_gates=PHASE_LOCAL_LAB_EXIT_GATES,
+        environment_proof=proof,
+    )
 
 
 def _observed_assets(target: CTFTarget, value: list[str] | tuple[str, ...]) -> tuple[str, ...]:

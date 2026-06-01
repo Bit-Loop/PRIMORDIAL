@@ -1,16 +1,24 @@
 from __future__ import annotations
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 import threading
 import unittest
 
 from primordial.labs.ctf import (
+    load_ctf_lab_phase_catalog,
     load_ctf_target_manifest,
+    probe_phase_local_lab_environment,
     probe_local_container_environment,
     probe_vulhub_cve_environment,
+    verify_phase_local_lab_environment,
     verify_local_container_environment,
 )
 from tests.support import fixture_flag
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+CATALOG_PATH = REPO_ROOT / "catalog" / "labs" / "ctf_lab_phases.yaml"
 
 
 class CTFHarnessEnvironmentProofTests(unittest.TestCase):
@@ -190,6 +198,54 @@ class CTFHarnessEnvironmentProofTests(unittest.TestCase):
                     profile="co_internal_lab",
                 )
 
+    def test_phase_local_lab_probe_records_mbptl_phase_gate(self) -> None:
+        phase = load_ctf_lab_phase_catalog(CATALOG_PATH).phase(3)
+        with _local_http_server(body=b"MBPTL lab ready") as base_url:
+            target = _mbptl_target(asset=base_url)
+
+            proof = probe_phase_local_lab_environment(
+                phase,
+                target,
+                reset_evidence_ref="evidence:mbptl-reset-teardown",
+                profile="co_internal_lab",
+            )
+
+        self.assertEqual(proof.phase_id, "phase_3_mbptl")
+        self.assertEqual(proof.target_id, "mbptl-web-cache")
+        self.assertEqual(proof.target_family, "mbptl")
+        self.assertEqual(proof.status, "verified")
+        self.assertEqual(proof.exit_gates, ("local_lab_environment_verified",))
+        self.assertIn("evidence:mbptl-reset-teardown", proof.evidence_refs)
+        self.assertEqual(proof.environment_proof.environment_kind, "local_container")
+
+    def test_phase_local_lab_environment_rejects_target_family_outside_phase_scope(self) -> None:
+        phase = load_ctf_lab_phase_catalog(CATALOG_PATH).phase(3)
+        target = _juice_shop_target()
+
+        with self.assertRaisesRegex(ValueError, "target_family"):
+            verify_phase_local_lab_environment(
+                phase,
+                target,
+                observed_assets=["http://127.0.0.1:3100"],
+                evidence_refs=["evidence:container-health", "evidence:reset-ready"],
+                reset_evidence_ref="evidence:reset-ready",
+                profile="co_internal_lab",
+            )
+
+    def test_phase_local_lab_environment_requires_phase_gate(self) -> None:
+        phase = load_ctf_lab_phase_catalog(CATALOG_PATH).phase(2)
+        target = _vulhub_target()
+
+        with self.assertRaisesRegex(ValueError, "local_lab_environment_verified"):
+            verify_phase_local_lab_environment(
+                phase,
+                target,
+                observed_assets=["http://127.0.0.1:3180"],
+                evidence_refs=["evidence:container-health", "evidence:reset-ready"],
+                reset_evidence_ref="evidence:reset-ready",
+                profile="co_internal_lab",
+            )
+
 
 def _juice_shop_target(*, asset: str = "http://127.0.0.1:3100"):
     return load_ctf_target_manifest(
@@ -259,6 +315,35 @@ def _vulhub_target(*, asset: str = "http://127.0.0.1:3180"):
                 "observed_version_evidence_required": True,
             },
             "evidence": {"required": ["http_request", "http_response", "observed_version"]},
+            "policy": {"default_intent": "recon_only"},
+        }
+    )
+
+
+def _mbptl_target(*, asset: str = "http://127.0.0.1:3190"):
+    return load_ctf_target_manifest(
+        {
+            "lab_id": "mbptl-web-cache",
+            "title": "MBPTL Web Cache Target",
+            "platform": "docker",
+            "category": "web",
+            "difficulty": "intermediate",
+            "target_family": "mbptl",
+            "source": {
+                "repo_url": "https://github.com/PortSwigger/web-security-academy",
+                "path": "labs/web-cache",
+            },
+            "scope": {
+                "network": "lab_mbptl_web_cache",
+                "assets": [asset],
+            },
+            "provisioning": {
+                "mode": "docker",
+                "compose_project": "mbptl_web_cache",
+                "network": "lab_mbptl_web_cache",
+                "published_ports": [{"host": 3190, "container": 80}],
+            },
+            "evidence": {"required": ["http_request", "http_response", "scoring_result"]},
             "policy": {"default_intent": "recon_only"},
         }
     )

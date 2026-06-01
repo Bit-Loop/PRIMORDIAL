@@ -9,9 +9,12 @@ from primordial.labs.ctf.closed_book import ClosedBookPackage
 from primordial.labs.ctf.ctfd import FakeCTFdClient
 from primordial.labs.ctf.environment import (
     EnvironmentProof,
+    PhaseEnvironmentProof,
     VulhubEnvironmentProof,
+    probe_phase_local_lab_environment,
     probe_local_container_environment,
     probe_vulhub_cve_environment,
+    verify_phase_local_lab_environment,
     verify_local_container_environment,
 )
 from primordial.labs.ctf.failures import FailureAnalysis
@@ -19,9 +22,14 @@ from primordial.labs.ctf.hardcode import HardcodeFinding, HardcodeScanResult, Ha
 from primordial.labs.ctf.integrity import CTFHarnessIntegrity, CTFIntegrityResult
 from primordial.labs.ctf.mutation import MutationPlan, MutationPlanner
 from primordial.labs.ctf.patches import PatchProposal
+from primordial.labs.ctf.phase_targets import CTFPhaseTargetSet, load_ctf_phase_target_manifests
 from primordial.labs.ctf.phases import CTFLabPhase, CTFLabPhaseCatalog, load_ctf_lab_phase_catalog
 from primordial.labs.ctf.postmortem import PostmortemRecord
-from primordial.labs.ctf.scoring import compute_scoring_summary
+from primordial.labs.ctf.scoring import (
+    ScoringEvidenceResult,
+    compute_scoring_summary,
+    validate_scoring_results_evidence_refs,
+)
 from primordial.labs.ctf.sessions import SolveSession
 from primordial.labs.ctf.targets import (
     CTFTarget,
@@ -42,6 +50,7 @@ __all__ = [
     "CTFIntegrityResult",
     "CTFLabPhase",
     "CTFLabPhaseCatalog",
+    "CTFPhaseTargetSet",
     "ClosedBookPackage",
     "ClosedBookPolicy",
     "EvidenceExpectations",
@@ -55,8 +64,10 @@ __all__ = [
     "MutationPlan",
     "MutationPlanner",
     "PatchProposal",
+    "PhaseEnvironmentProof",
     "PostmortemRecord",
     "ResetMetadata",
+    "ScoringEvidenceResult",
     "SolveSession",
     "SolveVerificationResult",
     "SolveVerifier",
@@ -64,11 +75,15 @@ __all__ = [
     "VulnerabilityMetadata",
     "VulhubEnvironmentProof",
     "compute_scoring_summary",
+    "validate_scoring_results_evidence_refs",
     "load_ctf_target_manifest",
     "load_ctf_target_manifest_file",
     "load_ctf_lab_phase_catalog",
+    "load_ctf_phase_target_manifests",
+    "probe_phase_local_lab_environment",
     "probe_local_container_environment",
     "probe_vulhub_cve_environment",
     "validate_vulhub_exploit_applicability",
+    "verify_phase_local_lab_environment",
     "verify_local_container_environment",
 ]
