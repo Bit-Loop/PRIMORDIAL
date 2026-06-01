@@ -92,6 +92,7 @@ class CTFLabPhaseCatalogTests(unittest.TestCase):
         self.assertIn("github_pr:36", phase.evidence_refs)
         self.assertIn("tests.test_ctf_harness_phase_targets", commands)
         self.assertIn("tests.test_ctf_harness_phase_scoring", commands)
+        self.assertIn("tests.test_ctf_harness_environment", commands)
 
     def test_remaining_lab_phases_require_verified_environment_proof_before_completion(self) -> None:
         catalog = load_ctf_lab_phase_catalog(CATALOG_PATH)

@@ -9,9 +9,12 @@ from primordial.labs.ctf.closed_book import ClosedBookPackage
 from primordial.labs.ctf.ctfd import FakeCTFdClient
 from primordial.labs.ctf.environment import (
     EnvironmentProof,
+    PhaseEnvironmentProof,
     VulhubEnvironmentProof,
+    probe_phase_local_lab_environment,
     probe_local_container_environment,
     probe_vulhub_cve_environment,
+    verify_phase_local_lab_environment,
     verify_local_container_environment,
 )
 from primordial.labs.ctf.failures import FailureAnalysis
@@ -61,6 +64,7 @@ __all__ = [
     "MutationPlan",
     "MutationPlanner",
     "PatchProposal",
+    "PhaseEnvironmentProof",
     "PostmortemRecord",
     "ResetMetadata",
     "ScoringEvidenceResult",
@@ -76,8 +80,10 @@ __all__ = [
     "load_ctf_target_manifest_file",
     "load_ctf_lab_phase_catalog",
     "load_ctf_phase_target_manifests",
+    "probe_phase_local_lab_environment",
     "probe_local_container_environment",
     "probe_vulhub_cve_environment",
     "validate_vulhub_exploit_applicability",
+    "verify_phase_local_lab_environment",
     "verify_local_container_environment",
 ]
