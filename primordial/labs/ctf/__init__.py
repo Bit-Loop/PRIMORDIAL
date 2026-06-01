@@ -1,5 +1,9 @@
 """CTF harness contracts."""
 
+from primordial.labs.ctf.applicability import (
+    ExploitApplicabilityResult,
+    validate_vulhub_exploit_applicability,
+)
 from primordial.labs.ctf.benchmark import BenchmarkRun
 from primordial.labs.ctf.closed_book import ClosedBookPackage
 from primordial.labs.ctf.ctfd import FakeCTFdClient
@@ -40,6 +44,7 @@ __all__ = [
     "ClosedBookPolicy",
     "EvidenceExpectations",
     "EnvironmentProof",
+    "ExploitApplicabilityResult",
     "FailureAnalysis",
     "FakeCTFdClient",
     "HardcodeFinding",
@@ -60,5 +65,6 @@ __all__ = [
     "load_ctf_target_manifest_file",
     "load_ctf_lab_phase_catalog",
     "probe_local_container_environment",
+    "validate_vulhub_exploit_applicability",
     "verify_local_container_environment",
 ]
