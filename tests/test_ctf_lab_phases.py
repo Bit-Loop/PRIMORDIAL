@@ -79,10 +79,21 @@ class CTFLabPhaseCatalogTests(unittest.TestCase):
         self.assertIn("tests.test_ctf_harness_applicability", commands)
         self.assertIn("tests.test_ctf_harness_targets", commands)
 
+    def test_phase_three_mbptl_tracks_manifest_loading_progress_without_live_lab_claim(self) -> None:
+        phase = load_ctf_lab_phase_catalog(CATALOG_PATH).phase(3)
+        commands = "\n".join(phase.validation_commands)
+
+        self.assertEqual(phase.status, "in_progress")
+        self.assertTrue(phase.environment_proof_required)
+        self.assertTrue(phase.deterministic_fixture_required)
+        self.assertIn("phase_targets_loaded_from_manifests", phase.exit_gates)
+        self.assertEqual(phase.verified_environment_refs, ())
+        self.assertIn("tests.test_ctf_harness_phase_targets", commands)
+
     def test_remaining_lab_phases_require_verified_environment_proof_before_completion(self) -> None:
         catalog = load_ctf_lab_phase_catalog(CATALOG_PATH)
 
-        for phase in catalog.phases[3:]:
+        for phase in catalog.phases[4:]:
             self.assertTrue(phase.environment_proof_required)
             self.assertTrue(phase.deterministic_fixture_required)
             self.assertNotEqual(phase.status, "complete")

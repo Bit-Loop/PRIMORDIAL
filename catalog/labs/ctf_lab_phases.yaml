@@ -78,7 +78,7 @@ phases:
   - number: 3
     id: phase_3_mbptl
     name: Phase 3 MBPTL
-    status: not_started
+    status: in_progress
     target_families:
       - mbptl
     allowed_profiles:
@@ -89,7 +89,8 @@ phases:
       - local_lab_environment_verified
       - phase_targets_loaded_from_manifests
       - scoring_results_include_evidence_refs
-    validation_commands: []
+    validation_commands:
+      - python3 -m unittest tests.test_ctf_harness_phase_targets tests.test_ctf_lab_phases -q
   - number: 4
     id: phase_4_ci_cd_goat
     name: Phase 4 CI/CD Goat

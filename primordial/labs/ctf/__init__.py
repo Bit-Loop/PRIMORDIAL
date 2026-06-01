@@ -19,6 +19,7 @@ from primordial.labs.ctf.hardcode import HardcodeFinding, HardcodeScanResult, Ha
 from primordial.labs.ctf.integrity import CTFHarnessIntegrity, CTFIntegrityResult
 from primordial.labs.ctf.mutation import MutationPlan, MutationPlanner
 from primordial.labs.ctf.patches import PatchProposal
+from primordial.labs.ctf.phase_targets import CTFPhaseTargetSet, load_ctf_phase_target_manifests
 from primordial.labs.ctf.phases import CTFLabPhase, CTFLabPhaseCatalog, load_ctf_lab_phase_catalog
 from primordial.labs.ctf.postmortem import PostmortemRecord
 from primordial.labs.ctf.scoring import compute_scoring_summary
@@ -42,6 +43,7 @@ __all__ = [
     "CTFIntegrityResult",
     "CTFLabPhase",
     "CTFLabPhaseCatalog",
+    "CTFPhaseTargetSet",
     "ClosedBookPackage",
     "ClosedBookPolicy",
     "EvidenceExpectations",
@@ -67,6 +69,7 @@ __all__ = [
     "load_ctf_target_manifest",
     "load_ctf_target_manifest_file",
     "load_ctf_lab_phase_catalog",
+    "load_ctf_phase_target_manifests",
     "probe_local_container_environment",
     "probe_vulhub_cve_environment",
     "validate_vulhub_exploit_applicability",
