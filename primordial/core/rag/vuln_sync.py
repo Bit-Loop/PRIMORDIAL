@@ -12,6 +12,8 @@ import time
 from typing import Any, Callable
 from urllib import error, parse, request
 
+from primordial.core.rag.vuln_sync_sources import VulnFeedSourceMixin
+
 
 NVD_API_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 CISA_KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
@@ -39,7 +41,7 @@ class VulnSyncOptions:
     allow_ocr: bool = False
 
 
-class VulnFeedSyncer:
+class VulnFeedSyncer(VulnFeedSourceMixin):
     def __init__(
         self,
         project_root: Path | str,
@@ -115,221 +117,6 @@ class VulnFeedSyncer:
         }
         self._write_json(output_dir / "vuln" / "status" / "vuln_sync_status.json", summary)
         return summary
-
-    def _sync_nvd(self, raw_dir: Path, options: VulnSyncOptions) -> tuple[dict[str, Any], set[str]]:
-        result = self._source_result("nvd")
-        cves: set[str] = set()
-        api_key = os.getenv("NVD_API_KEY", "").strip()
-        headers = {"User-Agent": "Primordial vulnerability RAG sync"}
-        if api_key:
-            headers["apiKey"] = api_key
-        rate_limit = options.rate_limit_seconds
-        if rate_limit is None:
-            rate_limit = 0.6 if api_key else 6.0
-        start = datetime(max(1999, int(options.since_year)), 1, 1, tzinfo=timezone.utc)
-        end_limit = _utc_now()
-        pages_seen = 0
-        try:
-            for window_start, window_end in _nvd_windows(start, end_limit):
-                start_index = 0
-                total_results = None
-                while total_results is None or start_index < total_results:
-                    if options.max_nvd_pages is not None and pages_seen >= options.max_nvd_pages:
-                        result["status"] = "partial"
-                        result["truncated"] = True
-                        result["limit"] = options.max_nvd_pages
-                        result["records"] = len(cves)
-                        return result, cves
-                    params = {
-                        "pubStartDate": _nvd_timestamp(window_start),
-                        "pubEndDate": _nvd_timestamp(window_end),
-                        "startIndex": str(start_index),
-                        "resultsPerPage": "2000",
-                    }
-                    payload = self._fetch_json(f"{NVD_API_URL}?{parse.urlencode(params)}", headers=headers, timeout=options.timeout_seconds)
-                    if not isinstance(payload, dict):
-                        raise ValueError("NVD response was not a JSON object")
-                    total_results = int(payload.get("totalResults") or 0)
-                    vulnerabilities = payload.get("vulnerabilities") if isinstance(payload.get("vulnerabilities"), list) else []
-                    file_path = (
-                        raw_dir
-                        / "structured"
-                        / "nvd"
-                        / str(window_start.year)
-                        / f"nvd_{window_start.date()}_{window_end.date()}_{start_index}.json"
-                    )
-                    self._write_json(file_path, payload)
-                    result["files_written"] += 1
-                    pages_seen += 1
-                    for row in vulnerabilities:
-                        cve_id = _cve_id_from_nvd_row(row)
-                        if cve_id:
-                            cves.add(cve_id)
-                    result["records"] += len(vulnerabilities)
-                    start_index += max(1, int(payload.get("resultsPerPage") or len(vulnerabilities) or 1))
-                    if start_index < total_results and rate_limit > 0:
-                        self._sleep(float(rate_limit))
-                if rate_limit > 0:
-                    self._sleep(float(rate_limit))
-        except Exception as exc:  # noqa: BLE001 - sync status must preserve source failures
-            result["status"] = "failed" if not cves else "partial"
-            result["failures"] += 1
-            result["errors"].append(str(exc))
-        result["records"] = max(int(result["records"]), len(cves))
-        return result, cves
-
-    def _sync_kev(self, raw_dir: Path, options: VulnSyncOptions) -> tuple[dict[str, Any], set[str]]:
-        result = self._source_result("kev")
-        cves: set[str] = set()
-        errors: list[str] = []
-        try:
-            text = self._fetch_text(CISA_KEV_CSV_URL, timeout=options.timeout_seconds)
-            rows = list(csv.DictReader(text.splitlines()))
-            for row in rows:
-                cve_id = str(row.get("cveID") or row.get("cve_id") or "").upper()
-                if cve_id.startswith("CVE-"):
-                    cves.add(cve_id)
-            path = raw_dir / "structured" / "kev" / "known_exploited_vulnerabilities.csv"
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(text, encoding="utf-8")
-            result["files_written"] = 1
-            result["records"] = len(rows)
-            return result, cves
-        except Exception as exc:  # noqa: BLE001
-            errors.append(f"csv: {exc}")
-        try:
-            payload = self._fetch_json(CISA_KEV_URL, timeout=options.timeout_seconds)
-            if not isinstance(payload, dict):
-                raise ValueError("CISA KEV response was not a JSON object")
-            rows = payload.get("vulnerabilities") if isinstance(payload.get("vulnerabilities"), list) else []
-            for row in rows:
-                if isinstance(row, dict):
-                    cve_id = str(row.get("cveID") or row.get("cve_id") or "").upper()
-                    if cve_id.startswith("CVE-"):
-                        cves.add(cve_id)
-            self._write_json(raw_dir / "structured" / "kev" / "known_exploited_vulnerabilities.json", payload)
-            result["files_written"] = 1
-            result["records"] = len(rows)
-        except Exception as exc:  # noqa: BLE001
-            result["status"] = "failed"
-            result["failures"] += 1
-            result["errors"].extend([*errors, f"json: {exc}"])
-        return result, cves
-
-    def _sync_epss(self, raw_dir: Path, cve_ids: list[str], options: VulnSyncOptions) -> dict[str, Any]:
-        result = self._source_result("epss")
-        if not cve_ids:
-            result["status"] = "skipped"
-            result["skip_reason"] = "no CVE IDs available for EPSS enrichment"
-            return result
-        rows: list[dict[str, str]] = []
-        for batch in _batches(cve_ids, 100):
-            try:
-                url = f"{FIRST_EPSS_URL}?{parse.urlencode({'cve': ','.join(batch)})}"
-                payload = self._fetch_json(url, timeout=options.timeout_seconds)
-                data = payload.get("data") if isinstance(payload, dict) and isinstance(payload.get("data"), list) else []
-                for item in data:
-                    if not isinstance(item, dict):
-                        continue
-                    rows.append(
-                        {
-                            "cve": str(item.get("cve") or "").upper(),
-                            "epss": str(item.get("epss") or ""),
-                            "percentile": str(item.get("percentile") or ""),
-                            "date": str(item.get("date") or ""),
-                        }
-                    )
-            except Exception as exc:  # noqa: BLE001
-                result["failures"] += 1
-                result["errors"].append(str(exc))
-        if rows:
-            path = raw_dir / "structured" / "epss" / f"epss_{_utc_now().date().isoformat()}.csv"
-            self._write_csv(path, rows, ["cve", "epss", "percentile", "date"])
-            result["files_written"] = 1
-            result["records"] = len(rows)
-        if result["failures"]:
-            result["status"] = "partial" if rows else "failed"
-        return result
-
-    def _sync_cvelist_v5(self, raw_dir: Path, cve_ids: list[str], options: VulnSyncOptions) -> dict[str, Any]:
-        result = self._source_result("cvelist_v5")
-        if not cve_ids:
-            result["status"] = "skipped"
-            result["skip_reason"] = "no CVE IDs available for CVEProject enrichment"
-            return result
-        for cve_id in cve_ids:
-            try:
-                year, bucket = _cvelist_bucket(cve_id)
-                url = f"{CVELIST_V5_RAW_URL}/cves/{year}/{bucket}/{cve_id}.json"
-                payload = self._fetch_json(url, timeout=options.timeout_seconds, not_found_ok=True)
-                if payload is None:
-                    continue
-                self._write_json(raw_dir / "structured" / "cve_v5" / str(year) / bucket / f"{cve_id}.json", payload)
-                result["files_written"] += 1
-                result["records"] += 1
-            except Exception as exc:  # noqa: BLE001
-                result["failures"] += 1
-                result["errors"].append(f"{cve_id}: {exc}")
-        if result["failures"]:
-            result["status"] = "partial" if result["records"] else "failed"
-        return result
-
-    def _sync_osv(self, raw_dir: Path, cve_ids: list[str], options: VulnSyncOptions) -> dict[str, Any]:
-        result = self._source_result("osv")
-        if not cve_ids:
-            result["status"] = "skipped"
-            result["skip_reason"] = "no CVE IDs available for OSV enrichment"
-            return result
-        for cve_id in cve_ids:
-            try:
-                payload = self._fetch_json(f"{OSV_VULN_URL}/{parse.quote(cve_id)}", timeout=options.timeout_seconds, not_found_ok=True)
-                if payload is None:
-                    continue
-                self._write_json(raw_dir / "structured" / "osv" / f"{cve_id}.json", payload)
-                result["files_written"] += 1
-                result["records"] += 1
-            except Exception as exc:  # noqa: BLE001
-                result["failures"] += 1
-                result["errors"].append(f"{cve_id}: {exc}")
-        if result["failures"]:
-            result["status"] = "partial" if result["records"] else "failed"
-        return result
-
-    def _sync_ghsa(self, raw_dir: Path, cve_ids: list[str], options: VulnSyncOptions) -> dict[str, Any]:
-        result = self._source_result("ghsa")
-        if not cve_ids:
-            result["status"] = "skipped"
-            result["skip_reason"] = "no CVE IDs available for GHSA enrichment"
-            return result
-        headers = {
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "User-Agent": "Primordial vulnerability RAG sync",
-        }
-        token = os.getenv("GITHUB_TOKEN", "").strip()
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-        for cve_id in cve_ids:
-            try:
-                url = f"{GITHUB_ADVISORIES_URL}?{parse.urlencode({'cve_id': cve_id, 'per_page': '100'})}"
-                payload = self._fetch_json(url, headers=headers, timeout=options.timeout_seconds, not_found_ok=True)
-                if payload is None:
-                    continue
-                advisories = payload if isinstance(payload, list) else []
-                for index, advisory in enumerate(advisories):
-                    if not isinstance(advisory, dict):
-                        continue
-                    advisory_id = str(advisory.get("ghsa_id") or advisory.get("id") or f"{cve_id}-{index}")
-                    safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", advisory_id)
-                    self._write_json(raw_dir / "structured" / "ghsa" / f"{safe_id}.json", advisory)
-                    result["files_written"] += 1
-                    result["records"] += 1
-            except Exception as exc:  # noqa: BLE001
-                result["failures"] += 1
-                result["errors"].append(f"{cve_id}: {exc}")
-        if result["failures"]:
-            result["status"] = "partial" if result["records"] else "failed"
-        return result
 
     def _run_preprocessor(self, raw_dir: Path, output_dir: Path, options: VulnSyncOptions) -> dict[str, Any]:
         package_root = str(self.preprocess_root)

@@ -8,6 +8,16 @@ from primordial.core.context.normalization import normalized_context_key
 from primordial.core.context.sinks import ContextSinkValidator
 from primordial.core.context.source_refs import SOURCE_REFS_METADATA_KEYS, is_source_refs_metadata_key
 from primordial.core.context.source_types import RAG_ADVISORY_SOURCE_TYPES
+from primordial.core.rag.import_validation_safety import (
+    citation_id as _citation_id,
+    contains_marker as _contains_marker,
+    list_field as _list_field,
+    metadata_value as _metadata_value,
+    restrictive_safety_value as _restrictive_safety_value,
+    restrictive_valid_for_field as _restrictive_valid_for_field,
+    restrictive_valid_for_value as _restrictive_valid_for_value,
+    truthy_safety_flag_value as _truthy_safety_flag_value,
+)
 
 
 GENERATED_EXPORT_KINDS = frozenset({"generated_export", "export_archive"})
@@ -482,181 +492,5 @@ def _collect_source_ref_metadata_values(value: Any, values: list[Any]) -> None:
             _collect_source_ref_metadata_values(item, values)
 
 
-def _restrictive_safety_value(key: str, *sources: dict[str, Any]) -> Any:
-    values = []
-    for source in sources:
-        values.extend(_safety_metadata_values(source, key))
-    if not values:
-        return None
-    if key in {"origin", "origins"}:
-        for value in values:
-            if _contains_generated_export_marker(value):
-                return value
-    if key in FALSE_DENY_KEYS and any(_metadata_value_is_false(value) for value in values):
-        return False
-    if key in {"benchmark_mode", "mode"}:
-        for value in values:
-            for candidate in _normalized_context_values(value):
-                if candidate in CLOSED_BOOK_MODES:
-                    return candidate
-    if key == "writeup_access_policy":
-        for value in values:
-            for candidate in _normalized_context_values(value):
-                if candidate in WRITEUP_FORBIDDEN_POLICIES:
-                    return candidate
-    return values[-1]
-
-
-def _safety_metadata_values(value: Any, key: str) -> list[Any]:
-    values: list[Any] = []
-    aliases = {"origin", "origins"} if key in {"origin", "origins"} else {key}
-    _collect_safety_metadata_values(value, aliases, values)
-    return values
-
-
-def _collect_safety_metadata_values(value: Any, aliases: set[str], values: list[Any]) -> None:
-    if isinstance(value, dict):
-        for raw_key, item in value.items():
-            if normalized_context_key(raw_key) in aliases:
-                values.append(item)
-            if isinstance(item, (dict, list, tuple, set)):
-                _collect_safety_metadata_values(item, aliases, values)
-        return
-    if isinstance(value, (list, tuple, set)):
-        for item in value:
-            _collect_safety_metadata_values(item, aliases, values)
-
-
-def _metadata_value_is_false(value: Any) -> bool:
-    if isinstance(value, (frozenset, list, set, tuple)):
-        return any(_metadata_value_is_false(item) for item in value)
-    return value is False or normalized_context_key(value) in FALSE_VALUES
-
-
-def _metadata_value_is_true(value: Any) -> bool:
-    if isinstance(value, (frozenset, list, set, tuple)):
-        return any(_metadata_value_is_true(item) for item in value)
-    return value is True or normalized_context_key(value) in TRUTHY_VALUES
-
-
-def _contains_generated_export_marker(value: Any) -> bool:
-    return _contains_marker(value, GENERATED_EXPORT_SOURCE_TYPES)
-
-
-def _contains_marker(value: Any, allowed: frozenset[str]) -> bool:
-    if isinstance(value, (frozenset, list, set, tuple)):
-        return any(_contains_marker(item, allowed) for item in value)
-    return normalized_context_key(value) in allowed
-
-
-def _metadata_value(source: dict[str, Any], *names: str) -> Any:
-    values = _metadata_values(source, *names)
-    return values[0] if values else None
-
-
-def _metadata_values(source: dict[str, Any], *names: str) -> list[Any]:
-    normalized_names = {normalized_context_key(name) for name in names}
-    values: list[Any] = []
-    for raw_key, value in source.items():
-        if normalized_context_key(raw_key) in normalized_names:
-            values.append(value)
-    return values
-
-
-def _truthy_safety_flag_value(key: str, *sources: dict[str, Any]) -> bool | None:
-    for source in sources:
-        if _contains_truthy_safety_flag(source, key):
-            return True
-    return None
-
-
-def _contains_truthy_safety_flag(value: Any, key: str) -> bool:
-    if isinstance(value, dict):
-        for raw_key, item in value.items():
-            if normalized_context_key(raw_key) == key and _metadata_value_is_true(item):
-                return True
-            if isinstance(item, (dict, list, tuple, set)) and _contains_truthy_safety_flag(item, key):
-                return True
-    if isinstance(value, (list, tuple, set)):
-        return any(_contains_truthy_safety_flag(item, key) for item in value)
-    return False
-
-
-def _list_field(record: dict[str, Any], metadata: dict[str, Any], name: str) -> list[str]:
-    value = _metadata_value(record, name)
-    if value is None:
-        value = _metadata_value(metadata, name)
-    if value is None:
-        return []
-    if isinstance(value, str):
-        value = [value]
-    elif isinstance(value, (frozenset, set, tuple)):
-        value = list(value)
-    elif not isinstance(value, list):
-        raise ValueError(f"{name} must be a string or list-like value")
-    return [str(item).strip() for item in value if str(item).strip()]
-
-
 def _merged_list_field(record: dict[str, Any], metadata: dict[str, Any], name: str) -> list[str]:
     return _merged_safety_list_value(name, metadata, record)
-
-
-def _restrictive_valid_for_field(record: dict[str, Any], metadata: dict[str, Any]) -> list[str]:
-    return _restrictive_valid_for_value(metadata, record) or []
-
-
-def _restrictive_valid_for_value(*sources: dict[str, Any]) -> list[str] | None:
-    explicit: list[list[str]] = []
-    for source in sources:
-        for value in _list_metadata_values(source, "valid_for"):
-            values = _list_items(value, "valid_for")
-            if values:
-                explicit.append(values)
-    if not explicit:
-        return None
-    allowed = set(explicit[0])
-    for values in explicit[1:]:
-        allowed &= set(values)
-    if not allowed:
-        raise ValueError("conflicting valid_for restrictions")
-    return [item for item in explicit[0] if item in allowed]
-
-
-def _citation_id(record: dict[str, Any], metadata: dict[str, Any], *, fallback_chunk_id: str) -> str:
-    explicit = str(
-        _metadata_value(record, "citation_id")
-        or _metadata_value(metadata, "citation_id")
-        or _nested_citation_id_value(record)
-        or _nested_citation_id_value(metadata)
-        or ""
-    ).strip()
-    if explicit and explicit.lower() != "rag:none":
-        return _normalized_rag_citation_id(explicit)
-    fallback = str(fallback_chunk_id or "unknown").strip()
-    return _normalized_rag_citation_id(fallback)
-
-
-def _nested_citation_id_value(value: Any) -> Any:
-    values: list[Any] = []
-    _collect_nested_citation_id_values(value, values)
-    return values[0] if values else None
-
-
-def _collect_nested_citation_id_values(value: Any, values: list[Any]) -> None:
-    if isinstance(value, dict):
-        for raw_key, item in value.items():
-            if normalized_context_key(raw_key) == "citation_id":
-                values.append(item)
-            if isinstance(item, (dict, list, tuple, set)):
-                _collect_nested_citation_id_values(item, values)
-        return
-    if isinstance(value, (list, tuple, set)):
-        for item in value:
-            _collect_nested_citation_id_values(item, values)
-
-
-def _normalized_rag_citation_id(value: str) -> str:
-    clean = value.strip()
-    if clean.lower().startswith("rag:"):
-        return f"rag:{clean[4:].strip()}"
-    return f"rag:{clean}"
