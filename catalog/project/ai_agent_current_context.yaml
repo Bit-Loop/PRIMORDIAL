@@ -1,0 +1,213 @@
+id: ai_agent_current_context
+source_path: ai-agent-current-context.md
+status: migrated_planning_baseline
+last_updated: "2026-05-04"
+current_goals:
+  - authorized_security_workflow_orchestration
+  - strong_context_management
+  - note_management
+  - tool_orchestration
+  - long_running_reliability
+user_intents:
+  - optional_claude_agents
+  - large_external_security_tool_collection
+  - notion_operator_notes_workspace
+  - per_target_notion_subtrees
+  - high_signal_discord_notifications
+architecture_principles:
+  - deterministic_orchestration_layer
+  - short_lived_task_workers
+  - durable_state_reloaded_per_task
+  - local_structured_storage_is_source_of_truth
+  - caido_source_of_truth_for_http_artifacts
+  - typed_primitives_with_clear_schemas
+model_strategy:
+  baseline:
+    - local_first_by_default
+    - gpu_hot_path_planning_and_reasoning
+    - cpu_background_compaction_and_classification
+    - claude_selective_augmentation
+  hot_path_roles:
+    - primary_orchestrator
+    - hard_reasoning_escalation_worker
+    - code_tool_synthesis_worker
+    - memory_compactor
+  cold_path_roles:
+    - checkpoint_review
+    - dispute_resolution
+    - deep_synthesis
+    - periodic_memory_rebuild
+  recommended_models:
+    primary_orchestrator: gemma3:12b
+    hard_reasoning: deepseek-r1:8b
+    code_tool_synthesis: qwen2.5-coder:7b
+    memory_compactor: phi4-mini
+    richer_summarizer: gemma3:4b
+agent_roles:
+  - id: primary_orchestrator
+    activation: scheduler_controller
+    triggers:
+      - new_scope
+      - finished_task
+      - failed_task
+      - timer_tick
+      - operator_action
+    outputs:
+      - admissible_next_actions
+      - task_decomposition
+      - note_aware_priorities
+    guardrails:
+      - restricted_to_policy_admissible_steps
+      - no_freeform_always_on_prompt_session
+  - id: recon_workers
+    activation: event_driven_specialist
+    triggers:
+      - new_target
+      - stale_target_needing_refresh
+      - new_auth_session_artifact
+      - methodology_phase_recon
+    outputs:
+      - observations
+      - normalized_evidence
+      - target_surface_updates
+    guardrails:
+      - structured_evidence_required
+      - scope_bound_execution_only
+  - id: critical_thinking_worker
+    activation: event_driven_specialist
+    triggers:
+      - enough_new_evidence_accumulated
+      - anomaly_cluster_detected
+      - unresolved_hypothesis_backlog_exceeds_threshold
+    outputs:
+      - candidate_hypotheses
+      - ranked_next_actions
+      - confidence_changes
+    guardrails:
+      - no_durable_promotion_without_evidence
+  - id: exploitation_worker
+    activation: policy_gated_specialist
+    triggers:
+      - prioritized_hypothesis_with_prerequisites_present
+      - operator_approval_if_required
+    outputs:
+      - bounded_verification_tasks
+      - normalized_results
+    guardrails:
+      - policy_gate_required
+      - approval_gate_for_risky_work
+  - id: vulnerability_chaining_worker
+    activation: selective_specialist
+    triggers:
+      - two_or_more_related_verified_interests
+      - repeated_co_occurrence_across_notes_or_evidence
+      - unresolved_exploit_candidate_with_partial_prerequisites
+    outputs:
+      - candidate_chains
+      - missing_prerequisites
+      - verification_tasks
+    guardrails:
+      - produces_verification_tasks_not_final_claims
+      - consumes_structured_evidence_not_raw_transcripts
+      - budget_limited_fanout
+  - id: agent_behavior_verifier
+    activation: frequent_lightweight_verifier
+    triggers:
+      - high_confidence_claim
+      - repeated_retry_loop
+      - duplicate_task_pattern
+      - premium_model_escalation_request
+      - final_finding_candidate
+    outputs:
+      - unsupported_claim_findings
+      - duplicate_work_findings
+      - confidence_inflation_findings
+    guardrails:
+      - verifier_does_not_create_durable_truth_without_evidence
+  - id: memory_notes_worker
+    activation: maintenance_worker
+    triggers:
+      - task_completion
+      - large_evidence_ingestion
+      - timer_based_maintenance
+      - context_budget_threshold_crossing
+    outputs:
+      - summaries
+      - dedupe_candidates
+      - clusters
+      - memory_promotion_proposals
+    guardrails:
+      - no_live_weight_updates
+      - verified_facts_only_for_durable_promotion
+evidence_claim_requirements:
+  - source_references
+  - timestamp
+  - target_scope_binding
+  - confidence_score
+  - freshness_score
+  - verification_status
+durable_fact_denials:
+  - raw_intuition_alone
+  - single_weak_unverified_clue
+  - unsupported_chain_speculation
+context_layers:
+  - id: task_context
+    contents:
+      - minimum_needed_for_one_bounded_task
+      - expires_on_task_finish
+  - id: shared_working_context
+    contents:
+      - active_interests
+      - unresolved_hypotheses
+      - recent_verified_evidence
+      - short_operator_directives
+  - id: episodic_memory
+    contents:
+      - per_task_summaries
+      - failures
+      - successful_attempts
+      - important_tool_outputs
+  - id: semantic_memory
+    contents:
+      - durable_target_facts
+      - recurring_auth_patterns
+      - validated_attack_paths
+      - methodology_heuristics
+context_loading_rules:
+  - role_relevant_context_slices_only
+  - no_full_project_history_by_default
+communication_patterns:
+  - orchestrator_to_specialist
+  - specialist_to_orchestrator
+  - specialist_to_memory_worker
+  - verifier_to_orchestrator
+  - direct_specialist_to_specialist_limited
+efficiency_rules:
+  - cheap_local_agents_before_strong_slow_agents
+  - strong_local_agents_before_claude
+  - verification_before_high_value_promotion
+  - cap_chaining_fanout
+  - run_behavior_verification_cheaply_and_frequently
+claude_escalation:
+  triggers:
+    - subtle_authorization_or_business_logic_interpretation
+    - material_local_model_disagreement
+    - high_confidence_high_severity_finding_candidate
+    - long_horizon_chain_reasoning
+    - repeated_bounded_attempts_fail_to_converge
+    - final_writeup_or_exploit_reasoning_needs_stronger_judgment
+  denials:
+    - routine_summarization
+    - endpoint_clustering
+    - repetitive_script_generation
+    - low_value_noise_triage
+  flow:
+    - trigger
+    - policy_and_budget_gate
+    - escalation_package_build
+    - escalation_mode_selection
+    - claude_response_handling
+    - post_response_verification
+  post_response_rules:
+    - do_not_promote_claude_output_directly_to_durable_truth
+    - write_back_as_reviewed_note_or_candidate_update_or_verification_tasks

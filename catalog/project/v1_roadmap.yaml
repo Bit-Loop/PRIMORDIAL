@@ -1,0 +1,162 @@
+id: primordial_real_v1
+source_path: TODO-real-v1.md
+status: active
+last_updated: "2026-05-04"
+archived_sections:
+  - 2026-05-08_file_review_tracker
+locked_decisions:
+  - remove_fixture_bootstrap_sample_paths_from_active_product
+  - postgres_pgvector_canonical_live_store
+  - ollama_standard_local_model_serving
+  - first_real_workflow_lane_http_probe_content_discovery_parameter_mining_js_extraction_caido_finding_verification
+  - caido_notion_discord_real_integrations
+  - defer_anthropic_claude_api_until_local_tool_substrate_proven
+  - secure_web_gui_bearer_token
+model_storage:
+  default_local_model_path: PRIMORDIAL/AI_MODELS/ollama
+  followups:
+    - exclude_model_blobs_from_version_control
+    - set_OLLAMA_MODELS_to_local_model_path
+    - health_checks_verify_ollama_and_required_models
+target_model_set:
+  - gemma4:e4b
+  - deepseek-r1:8b
+  - qwen3-coder-next:q4_K_M
+  - phi4-reasoning
+  - gemma3:27b
+  - qwen2.5:32b
+  - deepseek-r1:32b
+explicit_deferrals:
+  - anthropic_claude_api_execution
+  - broad_heterogeneous_tool_onboarding
+  - mature_exploit_automation
+immediate_execution_order:
+  - remove_scaffold_paths
+  - production_storage_backbone
+  - local_model_runtime_ollama
+  - real_primitive_execution_lane
+  - caido_integration
+  - notion_integration
+  - discord_integration
+  - web_gui_security
+  - workflow_memory_hardening
+  - htb_first_real_workflow
+phases:
+  - id: remove_scaffold_paths
+    title: "Phase 1: Remove Scaffold Paths"
+    goals:
+      - remove_legacy_bootstrap_action_from_cli_and_web
+      - remove_runtime_sample_bootstrap_helpers_from_active_path
+      - remove_sample_scope_wiring_from_config_defaults
+      - replace_synthetic_empty_state_assumptions_with_operator_setup_flows
+      - replace_stubbed_or_fake_populated_ui_records
+    acceptance_criteria:
+      - no_active_command_seeds_fake_targets_evidence_notes_or_findings
+      - fresh_runtime_starts_empty_and_explains_real_setup_steps
+      - no_production_code_path_depends_on_retired_sample_scope
+  - id: production_storage_backbone
+    title: "Phase 2: Production Storage Backbone"
+    goals:
+      - replace_sqlite_active_runtime_store_with_postgresql
+      - add_pgvector_note_evidence_finding_memory_retrieval
+      - preserve_filesystem_artifacts_with_sql_metadata
+      - add_postgres_schema_initialization_and_migration
+      - define_database_vector_artifact_export_archive_config
+    acceptance_criteria:
+      - active_runtime_boots_against_postgres_only
+      - core_entities_persist_across_restart
+      - retrieval_metadata_persisted_with_canonical_records
+  - id: local_model_runtime_ollama
+    title: "Phase 3: Local Model Runtime via Ollama"
+    goals:
+      - add_real_ollama_provider_adapter
+      - add_ollama_reachability_and_required_model_health_checks
+      - add_model_preload_and_residency_settings
+      - add_scheduler_awareness_for_hot_compact_and_cold_jobs
+      - normalize_provider_results_with_traceable_metadata
+    acceptance_criteria:
+      - runtime_verifies_model_availability_before_scheduling
+      - real_model_calls_replace_placeholder_reasoning
+      - scheduler_respects_hot_path_and_cold_path_separation
+  - id: real_primitive_execution_lane
+    title: "Phase 4: Real Primitive Execution Lane"
+    goals:
+      - remove_synthetic_outputs_from_security_executor
+      - call_real_tools_through_primitive_runner_contracts
+      - keep_capability_routing_and_manifest_onboarding
+      - add_install_and_health_checks_per_primitive
+      - add_timeout_retry_risk_artifact_evidence_trace_controls
+    acceptance_criteria:
+      - recon_and_analysis_evidence_comes_from_actual_tool_execution
+      - artifacts_stored_on_disk_and_referenced_in_canonical_storage
+      - orchestrator_sees_only_normalized_evidence_and_primitive_metadata
+  - id: caido_integration
+    title: "Phase 5: Caido Integration"
+    goals:
+      - replace_placeholder_caido_semantics
+      - ingest_and_search_caido_traffic
+      - bind_evidence_to_replay_ids_fingerprints_scope_and_timestamps
+      - keep_caido_source_of_truth_for_http_workflow_artifacts
+    acceptance_criteria:
+      - runtime_ingests_and_searches_caido_backed_target_evidence
+      - evidence_lineage_references_caido_ids_directly
+      - findings_and_notes_link_back_to_caido_artifacts
+  - id: notion_integration
+    title: "Phase 6: Notion Integration"
+    goals:
+      - replace_fake_local_notion_generation_with_real_api_sync
+      - preserve_local_structured_storage_as_canonical
+      - build_idempotent_per_target_subtree_syncing
+      - track_sync_jobs_external_ids_retries_and_failures
+      - avoid_pushing_raw_noisy_artifacts_to_notion
+    acceptance_criteria:
+      - real_target_sync_creates_or_updates_stable_notion_subtree
+      - sync_is_idempotent_and_failure_aware
+      - internal_records_track_external_page_ids_and_delivery_state
+  - id: discord_integration
+    title: "Phase 7: Discord Integration"
+    goals:
+      - replace_fake_local_discord_delivery_records
+      - implement_high_signal_filtering
+      - add_deduplication_and_rate_limiting
+      - include_target_task_finding_refs_in_alerts
+      - persist_delivery_attempts_and_failures
+    acceptance_criteria:
+      - approval_requests_and_high_signal_findings_delivered_to_discord
+      - repeated_low_value_events_do_not_spam_channel
+      - delivery_history_remains_auditable
+  - id: web_gui_security
+    title: "Phase 8: Web GUI Security"
+    goals:
+      - add_bearer_token_auth_to_web_gui_and_api
+      - store_token_securely_and_remember_across_restarts
+      - avoid_plaintext_tokens_in_repo_or_casual_runtime_dumps
+      - add_login_logout_rotation_flow
+      - bind_secure_defaults_for_local_only_constant_time_auth_and_audit
+    acceptance_criteria:
+      - web_console_requires_auth_for_control_actions_and_state_reads
+      - token_rotation_works
+      - token_persistence_survives_restart_without_unsafe_plaintext_storage
+  - id: workflow_memory_hardening
+    title: "Phase 9: Workflow and Memory Hardening"
+    goals:
+      - replace_summary_only_compaction_with_contradiction_aware_memory_logic
+      - enforce_promotion_demotion_invalidation_rules
+      - trigger_memory_jobs_on_task_completion_evidence_context_pressure_and_timers
+      - add_verifier_checks_for_claims_duplicates_retry_storms_loops_and_confidence
+      - add_richer_context_slicing
+    acceptance_criteria:
+      - durable_facts_always_link_back_to_evidence_and_metadata
+      - contradictions_supersede_prior_facts_explicitly
+      - verification_checks_run_without_relying_only_on_another_model
+  - id: htb_first_real_workflow
+    title: "Phase 10: HTB First Real Workflow"
+    goals:
+      - use_pirate_htb_10_129_47_117_as_first_live_htb_test_target
+      - ensure_scope_tracking_in_cli_tui_and_web_gui
+      - run_first_real_workflow_lane_with_real_primitives_and_evidence
+      - record_failures_blockers_and_missing_capabilities_as_first_class_records
+    acceptance_criteria:
+      - real_in_scope_htb_asset_exists_in_canonical_storage
+      - real_tool_output_for_pirate_htb
+      - operator_surfaces_show_real_evidence_notes_interests_and_task_lineage

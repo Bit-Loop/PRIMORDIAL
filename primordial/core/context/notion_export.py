@@ -56,6 +56,41 @@ def validate_notion_export_envelope(
     known_note_refs: Iterable[str] | None = None,
     known_rag_refs: Iterable[str] | None = None,
 ) -> NotionExportDecision:
+    common_decision = _validate_notion_export_common(envelope)
+    if common_decision:
+        return common_decision
+    if envelope.kind == "rag":
+        return _validate_notion_export_rag(
+            envelope,
+            known_evidence_refs=known_evidence_refs,
+            known_note_refs=known_note_refs,
+            known_rag_refs=known_rag_refs,
+        )
+    if envelope.kind == "operator_note":
+        source_ref_decision = _validate_notion_export_source_refs(
+            envelope,
+            known_evidence_refs=known_evidence_refs,
+            known_note_refs=known_note_refs,
+            known_rag_refs=known_rag_refs,
+        )
+        if source_ref_decision:
+            return source_ref_decision
+    if envelope.kind not in AI_SUMMARY_KINDS:
+        return _validate_notion_export_citations(
+            envelope,
+            known_evidence_refs=known_evidence_refs,
+            known_rag_refs=known_rag_refs,
+        )
+    return _validate_notion_export_ai_summary(
+        envelope,
+        seen_ai_summaries,
+        known_evidence_refs=known_evidence_refs,
+        known_note_refs=known_note_refs,
+        known_rag_refs=known_rag_refs,
+    )
+
+
+def _validate_notion_export_common(envelope: ContextEnvelope) -> NotionExportDecision | None:
     if is_generated_export_context(envelope) or has_generated_export_path(envelope):
         return NotionExportDecision(
             "quarantine",
@@ -113,81 +148,83 @@ def validate_notion_export_envelope(
             "quarantine",
             f"notion_export quarantines {envelope.ref}: {binding_reason} context",
         )
-    if envelope.kind == "rag":
-        if not _has_citation_prefix(envelope, RAG_CITATION_PREFIX):
-            return NotionExportDecision("quarantine", f"notion_export quarantines {envelope.ref}: missing rag citation")
-        source_ref_errors = source_refs_metadata_errors(envelope)
-        if source_ref_errors:
-            return NotionExportDecision(
-                "quarantine",
-                f"notion_export quarantines {envelope.ref}: {source_ref_errors[0]}",
-            )
-        unresolved_source_refs = unresolved_ai_derived_source_ref_errors(
-            envelope.ref,
-            source_refs_metadata_values(envelope),
-            known_evidence_refs=known_evidence_refs,
-            known_note_refs=known_note_refs,
-            known_rag_refs=known_rag_refs,
-        )
-        if unresolved_source_refs:
-            return NotionExportDecision("quarantine", "; ".join(unresolved_source_refs))
-        citations = CitationValidator(
-            known_evidence_refs=known_evidence_refs,
-            known_rag_refs=known_rag_refs,
-        ).validate([envelope])
-        if not citations.valid:
-            return NotionExportDecision("quarantine", "; ".join(citations.errors))
-        return NotionExportDecision("accept")
-    if envelope.kind == "operator_note":
-        source_ref_errors = source_refs_metadata_errors(envelope)
-        if source_ref_errors:
-            return NotionExportDecision(
-                "quarantine",
-                f"notion_export quarantines {envelope.ref}: {source_ref_errors[0]}",
-            )
-        unresolved_source_refs = unresolved_ai_derived_source_ref_errors(
-            envelope.ref,
-            source_refs_metadata_values(envelope),
-            known_evidence_refs=known_evidence_refs,
-            known_note_refs=known_note_refs,
-            known_rag_refs=known_rag_refs,
-        )
-        if unresolved_source_refs:
-            return NotionExportDecision("quarantine", "; ".join(unresolved_source_refs))
-    if envelope.kind not in AI_SUMMARY_KINDS:
-        citations = CitationValidator(
-            known_evidence_refs=known_evidence_refs,
-            known_rag_refs=known_rag_refs,
-        ).validate([envelope])
-        if not citations.valid:
-            return NotionExportDecision("quarantine", "; ".join(citations.errors))
-        return NotionExportDecision("accept")
-    if _has_truth_like_authority(envelope):
-        return NotionExportDecision(
-            "quarantine",
-            f"notion_export quarantines {envelope.ref}: truth-like authority on AI-derived context",
-        )
-    if not _has_export_citation(envelope):
-        return NotionExportDecision("quarantine", f"notion_export quarantines {envelope.ref}: missing citations")
-    source_ref_errors = source_refs_metadata_errors(envelope)
-    if source_ref_errors:
-        return NotionExportDecision(
-            "quarantine",
-            f"notion_export quarantines {envelope.ref}: {source_ref_errors[0]}",
-        )
-    unsupported_citations = _unsupported_ai_citations(envelope)
-    if unsupported_citations:
-        refs = ", ".join(unsupported_citations)
-        return NotionExportDecision(
-            "quarantine",
-            f"notion_export quarantines {envelope.ref}: unsupported citations {refs}",
-        )
+    return None
+
+
+def _validate_notion_export_rag(
+    envelope: ContextEnvelope,
+    *,
+    known_evidence_refs: Iterable[str] | None,
+    known_note_refs: Iterable[str] | None,
+    known_rag_refs: Iterable[str] | None,
+) -> NotionExportDecision:
+    if not _has_citation_prefix(envelope, RAG_CITATION_PREFIX):
+        return NotionExportDecision("quarantine", f"notion_export quarantines {envelope.ref}: missing rag citation")
+    source_ref_decision = _validate_notion_export_source_refs(
+        envelope,
+        known_evidence_refs=known_evidence_refs,
+        known_note_refs=known_note_refs,
+        known_rag_refs=known_rag_refs,
+    )
+    if source_ref_decision:
+        return source_ref_decision
+    return _validate_notion_export_citations(
+        envelope,
+        known_evidence_refs=known_evidence_refs,
+        known_rag_refs=known_rag_refs,
+    )
+
+
+def _validate_notion_export_citations(
+    envelope: ContextEnvelope,
+    *,
+    known_evidence_refs: Iterable[str] | None,
+    known_rag_refs: Iterable[str] | None,
+) -> NotionExportDecision:
     citations = CitationValidator(
         known_evidence_refs=known_evidence_refs,
         known_rag_refs=known_rag_refs,
     ).validate([envelope])
     if not citations.valid:
         return NotionExportDecision("quarantine", "; ".join(citations.errors))
+    return NotionExportDecision("accept")
+
+
+def _validate_notion_export_source_refs(
+    envelope: ContextEnvelope,
+    *,
+    known_evidence_refs: Iterable[str] | None,
+    known_note_refs: Iterable[str] | None,
+    known_rag_refs: Iterable[str] | None,
+) -> NotionExportDecision | None:
+    source_ref_decision = _validate_notion_export_source_ref_shape(envelope)
+    if source_ref_decision:
+        return source_ref_decision
+    return _validate_notion_export_unresolved_source_refs(
+        envelope,
+        known_evidence_refs=known_evidence_refs,
+        known_note_refs=known_note_refs,
+        known_rag_refs=known_rag_refs,
+    )
+
+
+def _validate_notion_export_source_ref_shape(envelope: ContextEnvelope) -> NotionExportDecision | None:
+    source_ref_errors = source_refs_metadata_errors(envelope)
+    if not source_ref_errors:
+        return None
+    return NotionExportDecision(
+        "quarantine",
+        f"notion_export quarantines {envelope.ref}: {source_ref_errors[0]}",
+    )
+
+
+def _validate_notion_export_unresolved_source_refs(
+    envelope: ContextEnvelope,
+    *,
+    known_evidence_refs: Iterable[str] | None,
+    known_note_refs: Iterable[str] | None,
+    known_rag_refs: Iterable[str] | None,
+) -> NotionExportDecision | None:
     unresolved_source_refs = unresolved_ai_derived_source_ref_errors(
         envelope.ref,
         source_refs_metadata_values(envelope),
@@ -197,6 +234,49 @@ def validate_notion_export_envelope(
     )
     if unresolved_source_refs:
         return NotionExportDecision("quarantine", "; ".join(unresolved_source_refs))
+    return None
+
+
+def _validate_notion_export_ai_summary(
+    envelope: ContextEnvelope,
+    seen_ai_summaries: set[tuple[str, tuple[str, ...]]],
+    *,
+    known_evidence_refs: Iterable[str] | None,
+    known_note_refs: Iterable[str] | None,
+    known_rag_refs: Iterable[str] | None,
+) -> NotionExportDecision:
+    if _has_truth_like_authority(envelope):
+        return NotionExportDecision(
+            "quarantine",
+            f"notion_export quarantines {envelope.ref}: truth-like authority on AI-derived context",
+        )
+    if not _has_export_citation(envelope):
+        return NotionExportDecision("quarantine", f"notion_export quarantines {envelope.ref}: missing citations")
+    source_ref_decision = _validate_notion_export_source_ref_shape(envelope)
+    if source_ref_decision:
+        return source_ref_decision
+    unsupported_citations = _unsupported_ai_citations(envelope)
+    if unsupported_citations:
+        refs = ", ".join(unsupported_citations)
+        return NotionExportDecision(
+            "quarantine",
+            f"notion_export quarantines {envelope.ref}: unsupported citations {refs}",
+        )
+    citation_decision = _validate_notion_export_citations(
+        envelope,
+        known_evidence_refs=known_evidence_refs,
+        known_rag_refs=known_rag_refs,
+    )
+    if citation_decision.action != "accept":
+        return citation_decision
+    unresolved_decision = _validate_notion_export_unresolved_source_refs(
+        envelope,
+        known_evidence_refs=known_evidence_refs,
+        known_note_refs=known_note_refs,
+        known_rag_refs=known_rag_refs,
+    )
+    if unresolved_decision:
+        return unresolved_decision
     summary_key = _ai_summary_dedupe_key(envelope)
     if summary_key in seen_ai_summaries:
         return NotionExportDecision("quarantine", f"notion_export quarantines {envelope.ref}: duplicate AI summary")

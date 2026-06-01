@@ -1,0 +1,165 @@
+id: primordial_rag_preprocess_pipeline
+source_path: primordial-rag-preprocess/README.md
+status: migrated_operational_manifest
+markdown_authoritative: false
+purpose:
+  - local_only_preprocessing
+  - mixed_cybersecurity_formal_methods_web_kubernetes_binary_analysis_attack_corpus
+  - rag_ready_artifact_generation
+safety_and_provenance:
+  - never_modify_source_files
+  - never_upload_sync_or_transmit_documents_or_extracted_text
+  - unknown_commercial_or_proprietary_body_extraction_blocked_by_default
+  - restricted_material_not_default_web_or_api_planner_retrieval
+install_commands:
+  - cd primordial-rag-preprocess
+  - python3 -m venv .venv
+  - . .venv/bin/activate
+  - pip install -r requirements.txt
+  - pytest -q
+cli_options:
+  - --input-dir
+  - --raw-dir
+  - --output-dir
+  - --policy
+  - --overrides
+  - --force
+  - --skip-vlm
+  - --skip-docling
+  - --only
+  - --inventory-only
+  - --classify-only
+  - --extract-only
+  - --chunk-only
+  - --validate-only
+pipeline_stages:
+  - inventory
+  - classify
+  - policy_gate
+  - extract
+  - parse_attack_json
+  - chunk
+  - validate
+  - manifest
+phase_modes:
+  - inventory
+  - dedupe
+  - convert
+  - epub
+  - profiles
+  - mitre
+  - chunk
+  - merge
+  - eval
+  - validate
+output_files:
+  - inventory.jsonl
+  - inventory.csv
+  - duplicates.json
+  - classified_sources.jsonl
+  - extracted_sources.jsonl
+  - extracted/<source_id>.json
+  - converted/docling_json/<source_id>.json
+  - converted/markdown/<source_id>.md
+  - converted/epub_converted/<source_id>.md
+  - profiles/<source_id>.profile.json
+  - profiles.jsonl
+  - attack/enterprise_records.jsonl
+  - attack/mobile_records.jsonl
+  - attack/ics_records.jsonl
+  - chunks/chunks.jsonl
+  - chunks/chunks_by_source/<source_id>.jsonl
+  - chunks/api_web.jsonl
+  - chunks/kubernetes_cloud.jsonl
+  - chunks/systems_exploitation.jsonl
+  - chunks/methodology_standards.jsonl
+  - chunks/mitre_attack.jsonl
+  - chunks/formal_methods.jsonl
+  - chunks/general_security.jsonl
+  - indexes/attck_enterprise_index.jsonl
+  - indexes/attck_mobile_index.jsonl
+  - indexes/attck_ics_index.jsonl
+  - validation_report.json
+  - manifest.json
+generated_markdown_outputs:
+  - classification_report.md
+  - manifest.md
+output_rules:
+  - output_directory_gitignored_except_gitkeep
+  - generated_markdown_outputs_runtime_only_not_source_truth
+  - validation_report_must_be_checked_before_ingest
+source_metadata_fields:
+  - original_path
+  - relative_path
+  - file_type
+  - byte_size
+  - timestamps
+  - sha256
+  - duplicate_group
+  - canonical_copy_recommendation
+  - title_author_publisher_year_guesses
+  - source_family
+  - provenance_flags
+  - license_status
+  - extraction_policy
+  - quarantine_reason
+classification_fields:
+  - authority_level
+  - corpus_type
+  - risk_level
+  - planner_visibility
+  - scope_gate_required
+  - requires_operator_approval
+  - allowed_contexts
+chunk_schema_fields:
+  - deterministic_chunk_id
+  - doc_id
+  - source_id
+  - source_sha256
+  - source_path
+  - source_file
+  - source_type
+  - retrieval_text
+  - raw_text
+  - title_author_publisher_year
+  - page_and_section_location
+  - chunk_index
+  - token_estimate
+  - authority
+  - corpus_type
+  - domain
+  - risk_level
+  - planner_visibility
+  - approval_gates
+  - requires_authorized_scope
+  - allowed_use_modes
+  - license_status
+  - policy_blocked
+  - extraction_warnings
+  - pipeline_version
+override_rules:
+  - commercial_extraction_requires_operator_source_override
+  - overrides_require_rights_to_process_locally
+  - do_not_use_overrides_to_bypass_drm_access_controls_or_license_uncertainty
+attack_json_rules:
+  - enterprise_mobile_and_ics_attack_json_structurally_parsed
+  - all_stix_objects_with_ids_preserved_as_structured_records
+  - attack_chunks_planner_visibility_taxonomy_only
+  - authority_level_official_taxonomy
+  - scope_gate_required_true
+  - requires_operator_approval_false
+  - use_attack_for_behavior_classification_evidence_mapping_reporting_vocabulary_detection_mitigation_alignment
+  - do_not_use_attack_to_decide_scope_or_bypass_authorization
+extraction_contracts:
+  - docling_required_for_pdf_markdown_html_and_text
+  - epub_requires_pandoc_before_docling
+  - docling_or_pandoc_failure_records_error_and_continues_without_fallback
+  - docling_hybrid_chunker_uses_local_approximate_tokenizer
+  - profile_extraction_heuristic_by_default
+  - vlm_profile_extraction_only_when_enabled_and_not_skip_vlm
+troubleshooting_signals:
+  - docling_required_no_fallback_extractors_enabled
+  - pandoc_missing_epub_fallback_extractors_disabled
+  - policy_blocked_true_requires_policy_block_reason_review
+  - no_chunks_generated_check_blocked_sources_docling_failures_or_phase_mode
+  - validation_failed_inspect_validation_report_before_ingest

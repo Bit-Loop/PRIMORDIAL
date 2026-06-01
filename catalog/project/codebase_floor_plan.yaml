@@ -1,0 +1,297 @@
+id: primordial_codebase_floor_plan
+source_path: docs/FLOOR_PLAN.md
+status: migrated_editing_map
+authority: advisory_editing_map_not_runtime_policy
+purpose:
+  - where_features_live
+  - where_to_add_behavior
+  - what_files_change_together
+  - practical_map_for_editing_primordial
+top_level_layout:
+  - path: cli.py
+    role: repo_root_cli_wrapper
+    guidance:
+      - use_for_commands_from_project_root
+  - path: primordial/cli.py
+    role: main_command_line_interface
+    guidance:
+      - add_commands_only_after_runtime_exposes_behavior
+  - path: primordial/app/runtime.py
+    role: application_composition_root_and_service_facade
+    guidance:
+      - ui_cli_and_web_actions_call_runtime_methods
+      - avoid_reaching_into_storage_or_workers_directly
+      - treat_carefully_large_file
+  - path: primordial/core/
+    role: reusable_control_plane_systems
+    guidance:
+      - storage_orchestration_policy_providers_credentials_web_validation_recovery_events_domain_models
+  - path: primordial/modes/security/
+    role: authorized_security_testing_behavior
+    guidance:
+      - add_cyber_methodology_primitive_execution_evidence_generation_and_memory_behavior_here
+  - path: primordial/adapters/
+    role: external_integrations
+    guidance:
+      - notion_discord_caido_integrations
+  - path: primordial/gui/launcher.py
+    role: local_tk_gui_launcher
+    guidance:
+      - mirrors_many_web_console_controls
+      - calls_runtime_methods_not_duplicate_business_logic
+  - path: primordial/core/web/
+    role: local_web_app_and_static_console
+    guidance:
+      - owns_local_web_app_static_html_css_js_console
+  - path: manifests/
+    role: primitive_manifests
+    guidance:
+      - add_or_update_tool_skill_capability_metadata_here
+  - path: tests/
+    role: unit_and_integration_tests
+    guidance:
+      - add_tests_for_runtime_web_workflow_policy_storage_credentials_or_primitive_behavior_changes
+  - path: findings/
+    role: durable_operator_facing_findings_workspace
+    guidance:
+      - runtime_data_not_core_source_code
+      - agents_may_read_bounded_guidance_from_here
+  - path: runtime/
+    role: sqlite_crash_journal_and_runtime_state
+    guidance:
+      - do_not_manually_edit_without_debugging_backups
+  - path: primordial/n8n-master/
+    role: reference_vendor_material
+    guidance:
+      - avoid_broad_searches_unless_comparing_against_n8n
+common_edit_paths:
+  - id: add_runtime_feature
+    title: Add A Runtime Feature
+    files:
+      - primordial/core/domain/enums.py
+      - primordial/core/domain/models.py
+      - primordial/core/storage/schema.py
+      - primordial/core/storage/runtime.py
+      - primordial/app/runtime.py
+      - primordial/cli.py
+      - primordial/core/web/app.py
+      - primordial/gui/launcher.py
+      - tests/
+    ordered_steps:
+      - add_domain_types_if_needed
+      - add_durable_persistence_if_needed
+      - add_facade_methods_in_primordial_runtime
+      - expose_through_cli_if_useful
+      - expose_through_web_if_operator_facing
+      - expose_through_gui_if_operator_facing
+      - add_tests_under_tests
+    rules:
+      - ui_layers_should_call_primordial_runtime_not_storage_internals
+  - id: add_web_console_control
+    title: Add A Web Console Control
+    files:
+      - primordial/core/web/app.py
+      - primordial/core/web/static/index.html
+      - primordial/core/web/static/app.js
+      - primordial/core/web/static/styles.css
+      - tests/test_web_console.py
+    ordered_steps:
+      - add_or_update_api_endpoint
+      - add_control_markup
+      - wire_button_form_behavior_and_state_rendering
+      - add_visual_styles
+      - add_endpoint_level_test
+    rules:
+      - keep_web_app_thin
+      - business_logic_stays_in_primordial_runtime
+      - prefer_python_web_app_tests_over_browser_automation
+  - id: add_gui_control
+    title: Add A GUI Control
+    files:
+      - primordial/gui/launcher.py
+    ordered_steps:
+      - add_tk_variables_in_initializer
+      - add_widgets_in_appropriate_build_tab_method
+      - add_small_event_handler
+      - use_run_background_for_work_that_may_block
+      - call_runtime_facade_under_runtime_lock
+      - queue_ui_updates_through_queue
+    rules:
+      - use_run_background_for_model_storage_network_tool_or_filesystem_work
+      - call_runtime_facade_methods_under_runtime_lock
+      - do_not_update_tk_widgets_directly_from_background_threads
+  - id: add_target_or_scope_feature
+    title: Add A Target Or Scope Feature
+    files:
+      - primordial/app/runtime.py
+      - primordial/core/web/app.py
+      - primordial/gui/launcher.py
+      - tests/test_web_console.py
+    ordered_steps:
+      - update_register_or_import_scope_runtime_methods
+      - update_web_target_or_scope_endpoints
+      - update_gui_scope_management_block
+      - add_web_target_registration_or_scope_import_tests
+    rules:
+      - runtime_owns_target_and_scope_behavior
+  - id: add_credentials
+    title: Add Or Change Credentials
+    files:
+      - primordial/core/credentials.py
+      - primordial/app/runtime.py
+      - primordial/core/web/app.py
+      - primordial/gui/launcher.py
+      - tests/test_credentials.py
+    ordered_steps:
+      - update_credential_store_behavior_and_redacted_status
+      - update_runtime_credential_methods_and_payload
+      - update_web_credential_endpoints
+      - update_gui_credential_controls
+      - add_storage_redaction_and_migration_tests
+    rules:
+      - never_expose_full_credential_values_in_payloads_logs_tests_chat_or_status
+  - id: add_primitive_or_tool
+    title: Add A Primitive Or Tool
+    files:
+      - manifests/
+      - primordial/modes/security/execution.py
+      - primordial/core/validation/validators.py
+      - tests/test_runtime_integration.py
+    ordered_steps:
+      - add_or_update_primitive_manifest
+      - add_custom_execution_handler_if_needed
+      - add_structural_or_safety_validation_if_needed
+      - test_normalized_evidence_and_unsafe_behavior_gating
+    rules:
+      - models_reason_about_capability_not_raw_shell_chaos
+      - raw_tool_output_becomes_normalized_evidence_interests_artifacts_or_notes
+      - dos_flooding_destructive_behavior_and_unbounded_bruteforce_stay_blocked
+  - id: add_task_type
+    title: Add A New Task Type
+    files:
+      - primordial/core/domain/enums.py
+      - primordial/modes/security/methodology.py
+      - primordial/core/orchestration/workflow.py
+      - primordial/modes/security/execution.py
+      - manifests/
+      - tests/test_workflow.py
+      - tests/test_runtime_integration.py
+    ordered_steps:
+      - add_task_kind_if_needed
+      - add_methodology_blueprint_or_capability_mapping
+      - add_planning_rules_and_state_transitions
+      - add_execution_handler
+      - add_required_primitive_manifests
+      - test_planning_execution_and_evidence_behavior
+    rules:
+      - task_lifecycle_changes_need_workflow_and_runtime_integration_tests
+  - id: add_ai_model_behavior
+    title: Add AI Model Behavior
+    files:
+      - primordial/core/providers/router.py
+      - primordial/core/providers/scheduler.py
+      - primordial/core/providers/ollama.py
+      - primordial/app/runtime.py
+      - primordial/modes/security/execution.py
+    ordered_steps:
+      - update_provider_route_decision
+      - update_concurrency_or_model_scheduling_constraints
+      - update_provider_api_calls_if_needed
+      - update_model_role_config_persistence_or_ai_generation
+      - update_worker_prompts_or_task_specific_ai_use
+    rules:
+      - keep_ai_calls_bounded_and_task_specific
+      - do_not_use_deterministic_status_rendering_when_operator_asks_for_actual_reasoning
+      - store_ai_chat_in_db_and_chat_log
+      - keep_mission_critical_code_or_exploit_work_on_configured_cold_code_route_unless_intentionally_changed
+  - id: add_notion_discord_or_caido_behavior
+    title: Add Notion, Discord, Or Caido Behavior
+    files:
+      - primordial/adapters/notion.py
+      - primordial/adapters/discord.py
+      - primordial/adapters/caido.py
+      - primordial/app/runtime.py
+      - primordial/modes/security/execution.py
+      - tests/test_caido_and_skills.py
+      - tests/test_credentials.py
+      - tests/test_web_console.py
+    ordered_steps:
+      - update_adapter_api_behavior
+      - update_runtime_integration_payloads_or_credentials
+      - queue_sync_jobs_or_notifications_from_task_side_when_needed
+      - test_adapter_credentials_and_web_surface_behavior
+    rules:
+      - integration_behavior_flows_through_runtime_and_task_side_requests
+current_ui_edit_areas:
+  - id: local_gui
+    files:
+      - primordial/gui/launcher.py
+    areas:
+      - main_web_server_controls_target_scope_guidance_workflow_output
+      - agent_monitor_traces_task_runs_worker_ai_notes
+      - ai_thinking_reasoning_stream_with_speaker_and_model_metadata
+      - operator_chat_local_model_q_and_a
+      - counts_dashboard_and_runtime_counts
+      - config_model_roles_and_credential_controls
+    known_issues:
+      - file_too_large_split_into_smaller_view_controller_modules
+  - id: web_app
+    files:
+      - primordial/core/web/app.py
+      - primordial/core/web/static/index.html
+      - primordial/core/web/static/app.js
+      - primordial/core/web/static/styles.css
+    areas:
+      - controls_and_execution_mode
+      - counts_dashboard
+      - credentials
+      - integrations
+      - model_roles
+      - operator_ai
+      - tips_and_target_guidance
+      - scope_and_targets
+      - tasks_and_task_detail
+      - audit_records
+    known_issues:
+      - app_js_should_split_by_domain
+      - split_domains_state_api_controls_scope_credentials_models_chat_guidance_records
+test_map:
+  - path: tests/test_web_console.py
+    coverage:
+      - web_endpoints
+      - model_controls
+      - credentials
+      - target_registration
+      - scope_import
+      - operator_chat
+      - guidance
+  - path: tests/test_runtime_integration.py
+    coverage:
+      - real_runtime_behavior_for_primitives
+      - recon_searchsploit_ad_kerberos_credentialed_access
+  - path: tests/test_workflow.py
+    coverage:
+      - planning_and_workflow_transitions
+  - path: tests/test_policy.py
+    coverage:
+      - approval_and_safety_gates
+  - path: tests/test_provider_router.py
+    coverage:
+      - model_route_decisions
+  - path: tests/test_credentials.py
+    coverage:
+      - secret_storage_and_redaction
+  - path: tests/test_findings_context.py
+    coverage:
+      - durable_findings_guidance_workspace
+  - path: tests/test_caido_and_skills.py
+    coverage:
+      - caido_and_skill_surfaces
+refactor_priorities:
+  - split_primordial_gui_launcher_into_tab_modules
+  - split_web_static_app_js_into_focused_modules
+  - split_security_execution_into_primitive_handler_families
+  - move_repetitive_api_action_response_wiring_into_helpers_or_router_table
+  - add_explicit_schema_version_migrations_for_storage
+  - add_richer_server_side_continuous_mode_if_browser_ticks_unreliable
+  - add_stronger_typed_api_contract_for_web_gui_payloads

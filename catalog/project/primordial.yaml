@@ -1,0 +1,106 @@
+id: primordial
+runtime_model: local_first_control_plane
+domains:
+  - authorized_security_testing
+  - hackerone
+  - hack_the_box
+  - pentesting_engagements
+authority_sources:
+  - deterministic_policy
+  - durable_workflow_state
+  - evidence_lineage
+  - explicit_operator_controls
+core_principles:
+  - no_risky_action_without_policy_evaluation
+  - no_durable_memory_without_evidence_and_metadata
+  - no_freeform_always_on_agent_loop
+  - no_full_history_context_by_default
+  - autonomy_event_driven_inspectable_reversible
+  - poc_execution_requires_scope_non_dos_limits_and_approval
+implemented_surfaces:
+  - cli_entrypoint
+  - postgres_pgvector_store
+  - control_plane_domain_models
+  - methodology_task_planner
+  - autonomy_policy_engine
+  - provider_router
+  - primitive_manifest_catalog
+  - capability_catalog
+  - rag_pipeline
+  - memory_compaction
+  - task_run_lifecycle
+  - behavior_verifier
+  - handoffs_notifications_sync_artifacts_sessions
+  - operator_ask
+  - agent_chat_api
+  - textual_tui_and_terminal_fallback
+  - web_console
+  - notion_discord_caido_adapters
+cli_commands:
+  - add-target
+  - approve
+  - ask
+  - caido
+  - compact
+  - credentials
+  - deny
+  - doctor
+  - findings-context
+  - gui
+  - import-scope
+  - models
+  - process-queues
+  - rag
+  - remove-target
+  - repair
+  - run-loop
+  - scope
+  - show
+  - skills
+  - start-session
+  - stop-server
+  - tick
+  - tui
+  - web
+runtime_directories:
+  - PRIMORDIAL_RUNTIME_DIR
+  - PRIMORDIAL_ARTIFACTS_DIR
+  - PRIMORDIAL_CHAT_LOGS_DIR
+  - PRIMORDIAL_CHECKPOINTS_DIR
+  - PRIMORDIAL_CRASH_JOURNAL_PATH
+  - PRIMORDIAL_FINDINGS_DIR
+  - PRIMORDIAL_NOTION_EXPORTS_DIR
+  - PRIMORDIAL_EXPORTS_DIR
+  - PRIMORDIAL_MANIFESTS_DIR
+  - PRIMORDIAL_CATALOG_DIR
+  - PRIMORDIAL_SKILLS_DIR
+  - PRIMORDIAL_SECRETS_DIR
+  - PRIMORDIAL_CREDENTIALS_PATH
+required_environment:
+  - PRIMORDIAL_DATABASE_URL
+policy_environment:
+  - PRIMORDIAL_AUTONOMY_MODE
+  - PRIMORDIAL_ALLOW_EXPLOITATIVE_ACTIONS
+  - PRIMORDIAL_ALLOW_PASSWORD_ARG_TOOLS
+  - PRIMORDIAL_ALLOW_REMOTE_CAIDO
+  - PRIMORDIAL_ALLOW_DESTRUCTIVE_TARGET_DELETE
+  - PRIMORDIAL_MAX_EVIDENCE_ITEMS
+  - PRIMORDIAL_CONTENT_DISCOVERY_WORDLIST
+agent_chat_environment:
+  - PRIMORDIAL_AGENT_CHAT_BASE_URL
+  - PRIMORDIAL_AGENT_CHAT_API_KEY
+  - PRIMORDIAL_AGENT_CHAT_MODEL
+  - PRIMORDIAL_AGENT_CHAT_PROVIDER
+  - PRIMORDIAL_AGENT_CHAT_CODEX_SANDBOX
+  - PRIMORDIAL_AGENT_CHAT_CLAUDE_PERMISSION_MODE
+  - PRIMORDIAL_AGENT_CHAT_CWD
+hard_boundaries:
+  - ddos_always_forbidden
+  - explicit_scope_required
+  - ambiguous_scope_requires_operator_clarification
+poc_execution_gate:
+  - autonomy_mode_supervised_auto_or_high_autonomy
+  - PRIMORDIAL_ALLOW_EXPLOITATIVE_ACTIONS=1
+  - agent_safety_approval
+  - explicit_scope_evidence_non_dos_limits_and_timeout
+markdown_authoritative: false

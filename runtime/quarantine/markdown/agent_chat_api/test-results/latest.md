@@ -1,0 +1,90 @@
+---
+origin: generated_export
+ingest_allowed: false
+operational_retrieval_allowed: false
+---
+
+# Agent Chat API Test Results
+
+- Status: `PASS`
+- Started: `2026-05-14T21:20:30.649991+00:00`
+- Finished: `2026-05-14T21:20:30.812757+00:00`
+- Duration: `0.163s`
+- Python: `3.14.4`
+- Platform: `Linux-7.0.3-1-MANJARO-x86_64-with-glibc2.43`
+- Root: `/home/bitloop/Desktop/PRIMORDIAL/agent_chat_api`
+
+## Summary
+
+| Metric | Count |
+| --- | ---: |
+| Tests run | 58 |
+| Passed | 58 |
+| Failed | 0 |
+| Errors | 0 |
+| Skipped | 0 |
+| Expected failures | 0 |
+| Unexpected successes | 0 |
+
+## Test Cases
+
+| Status | Seconds | Test | Description |
+| --- | ---: | --- | --- |
+| `passed` | 0.000 | `agent_chat_api.tests.test_config.ConfigTests.test_default_workspace_root_is_subfolder` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_config.ConfigTests.test_env_bool_and_int_fallbacks` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_config.ConfigTests.test_provider_paths_report_existing_absolute_binary` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_config.ConfigTests.test_provider_paths_report_missing_absolute_binary` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_config.ConfigTests.test_settings_from_env_reads_runtime_options` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_config.ConfigTests.test_settings_from_env_uses_subfolder_default` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_providers.ProviderTests.test_build_prompt_can_disable_guard` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_providers.ProviderTests.test_build_prompt_combines_guard_system_prompt_and_messages` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_providers.ProviderTests.test_build_prompt_rejects_empty_or_oversized_prompt` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_providers.ProviderTests.test_child_cwd_under_workspace_is_allowed` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_providers.ProviderTests.test_claude_command_allows_explicit_tool_mode` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_providers.ProviderTests.test_claude_command_disables_tools_by_default` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_providers.ProviderTests.test_claude_max_turns_emits_warning_without_cli_flag` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_providers.ProviderTests.test_codex_command_uses_read_only_sandbox` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_providers.ProviderTests.test_codex_danger_sandbox_is_denied_by_default` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_providers.ProviderTests.test_codex_workspace_write_sandbox_can_be_requested` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_providers.ProviderTests.test_cwd_is_confined_to_workspace_root` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_providers.ProviderTests.test_dry_run_does_not_invoke_provider` |  |
+| `passed` | 0.016 | `agent_chat_api.tests.test_providers.ProviderTests.test_fallback_uses_claude_after_codex_quota_error` |  |
+| `passed` | 0.015 | `agent_chat_api.tests.test_providers.ProviderTests.test_fallback_uses_claude_after_codex_refusal_and_audits` |  |
+| `passed` | 0.015 | `agent_chat_api.tests.test_providers.ProviderTests.test_final_fallback_when_all_providers_refuse` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_providers.ProviderTests.test_invalid_provider_is_rejected` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_providers.ProviderTests.test_messages_to_prompt_preserves_roles` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_providers.ProviderTests.test_model_prefix_selects_provider` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_providers.ProviderTests.test_parse_claude_stdout_handles_json_and_plain_text` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_providers.ProviderTests.test_payload_parses_string_booleans_deliberately` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_providers.ProviderTests.test_payload_rejects_ambiguous_boolean_values` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_providers.ProviderTests.test_payload_rejects_bad_integer_fields` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_providers.ProviderTests.test_payload_rejects_non_list_messages` |  |
+| `passed` | 0.008 | `agent_chat_api.tests.test_providers.ProviderTests.test_provider_nonzero_exit_becomes_provider_error` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_providers.ProviderTests.test_public_dict_excludes_raw_payload_by_default` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_providers.ProviderTests.test_public_dict_redacts_raw_provider_identifiers` |  |
+| `passed` | 0.008 | `agent_chat_api.tests.test_providers.ProviderTests.test_run_uses_fake_claude_binary_without_live_model_call` |  |
+| `passed` | 0.008 | `agent_chat_api.tests.test_providers.ProviderTests.test_run_uses_fake_codex_binary_without_live_model_call` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_providers.ProviderTests.test_timeout_is_capped_and_validated` |  |
+| `passed` | 0.001 | `agent_chat_api.tests.test_reporter.ReporterTests.test_render_markdown_report_contains_summary_and_case_table` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_reporter.ReporterTests.test_write_markdown_report_writes_timestamp_and_latest_files` |  |
+| `passed` | 0.015 | `agent_chat_api.tests.test_server.ServerTests.test_api_chat_falls_back_from_codex_refusal_to_claude` |  |
+| `passed` | 0.008 | `agent_chat_api.tests.test_server.ServerTests.test_api_chat_streams_sse_events` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_server.ServerTests.test_auth_accepts_expected_bearer_token` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_server.ServerTests.test_auth_blocks_missing_bearer_token` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_server.ServerTests.test_dry_run_is_exempt_from_rate_limit` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_server.ServerTests.test_health_accepts_query_string` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_server.ServerTests.test_health_reports_workspace_and_providers` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_server.ServerTests.test_openai_compatible_endpoint_accepts_provider_prefixed_model` |  |
+| `passed` | 0.007 | `agent_chat_api.tests.test_server.ServerTests.test_openai_compatible_stream_returns_sse_chunks` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_server.ServerTests.test_post_route_accepts_query_string` |  |
+| `passed` | 0.008 | `agent_chat_api.tests.test_server.ServerTests.test_rate_limit_blocks_live_requests_after_limit` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_server.ServerTests.test_simple_chat_defaults_to_codex` |  |
+| `passed` | 0.001 | `agent_chat_api.tests.test_server.ServerTests.test_simple_chat_dry_run_returns_claude_command` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_server.ServerTests.test_unknown_route_returns_404` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_service_assets.ServiceAssetTests.test_user_systemd_service_targets_subfolder` |  |
+| `passed` | 0.008 | `agent_chat_api.tests.test_sessions_rate.SessionAndRateTests.test_claude_persistent_conversation_creates_and_resumes` |  |
+| `passed` | 0.008 | `agent_chat_api.tests.test_sessions_rate.SessionAndRateTests.test_codex_persistent_conversation_parses_session_id_and_resumes` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_sessions_rate.SessionAndRateTests.test_persist_false_leaves_existing_conversation_ephemeral` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_sessions_rate.SessionAndRateTests.test_persistent_conversation_rejects_provider_mismatch` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_sessions_rate.SessionAndRateTests.test_rate_limit_bucket_prefers_authorization_hash` |  |
+| `passed` | 0.000 | `agent_chat_api.tests.test_sessions_rate.SessionAndRateTests.test_rate_limiter_blocks_after_fixed_window_capacity` |  |

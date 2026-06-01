@@ -54,6 +54,28 @@ def validate_report_sink(
     known_note_refs: Iterable[str] | None = None,
     known_rag_refs: Iterable[str] | None = None,
 ) -> ReportSinkDecision:
+    for decision in (
+        _report_context_material_decision(envelope),
+        _report_proof_shape_decision(envelope),
+        _report_ai_derived_decision(envelope),
+        _report_source_refs_decision(
+            envelope,
+            known_evidence_refs=known_evidence_refs,
+            known_note_refs=known_note_refs,
+            known_rag_refs=known_rag_refs,
+        ),
+        _report_citation_decision(
+            envelope,
+            known_evidence_refs=known_evidence_refs,
+            known_rag_refs=known_rag_refs,
+        ),
+    ):
+        if decision is not None:
+            return decision
+    return ReportSinkDecision("accept")
+
+
+def _report_context_material_decision(envelope: ContextEnvelope) -> ReportSinkDecision | None:
     if is_generated_export_context(envelope) or has_generated_export_path(envelope):
         return ReportSinkDecision(
             "reject",
@@ -78,6 +100,10 @@ def validate_report_sink(
             "reject",
             f"report sink rejects {writeup_reason} ref={envelope.ref}",
         )
+    return None
+
+
+def _report_proof_shape_decision(envelope: ContextEnvelope) -> ReportSinkDecision | None:
     proof_shape_reason = evidence_shape_omission_reason(envelope)
     if proof_shape_reason == "ref":
         return ReportSinkDecision(
@@ -107,6 +133,12 @@ def validate_report_sink(
             "reject",
             f"report sink rejects {binding_reason} context ref={envelope.ref}",
         )
+    return None
+
+
+def _report_ai_derived_decision(envelope: ContextEnvelope) -> ReportSinkDecision | None:
+    if envelope.kind not in AI_DERIVED_KINDS:
+        return None
     if envelope.kind in AI_DERIVED_KINDS and _has_truth_like_authority(envelope):
         return ReportSinkDecision(
             "reject",
@@ -137,6 +169,18 @@ def validate_report_sink(
             "reject",
             f"report sink rejects unsupported citations for AI-derived context ref={envelope.ref}: {refs}",
         )
+    return None
+
+
+def _report_source_refs_decision(
+    envelope: ContextEnvelope,
+    *,
+    known_evidence_refs: Iterable[str] | None,
+    known_note_refs: Iterable[str] | None,
+    known_rag_refs: Iterable[str] | None,
+) -> ReportSinkDecision | None:
+    if envelope.kind not in SOURCE_REF_VALIDATED_KINDS:
+        return None
     source_ref_errors = source_refs_metadata_errors(envelope)
     if envelope.kind in SOURCE_REF_VALIDATED_KINDS and source_ref_errors:
         return ReportSinkDecision(
@@ -152,13 +196,22 @@ def validate_report_sink(
     )
     if envelope.kind in SOURCE_REF_VALIDATED_KINDS and unresolved_source_refs:
         return ReportSinkDecision("reject", "; ".join(unresolved_source_refs))
+    return None
+
+
+def _report_citation_decision(
+    envelope: ContextEnvelope,
+    *,
+    known_evidence_refs: Iterable[str] | None,
+    known_rag_refs: Iterable[str] | None,
+) -> ReportSinkDecision | None:
     citations = CitationValidator(
         known_evidence_refs=known_evidence_refs,
         known_rag_refs=known_rag_refs,
     ).validate([envelope])
     if not citations.valid:
         return ReportSinkDecision("reject", "; ".join(citations.errors))
-    return ReportSinkDecision("accept")
+    return None
 
 
 def has_ai_derived_report_citation(envelope: ContextEnvelope) -> bool:

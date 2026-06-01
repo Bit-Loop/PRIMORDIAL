@@ -21,6 +21,7 @@ from primordial.core.context.generated_exports import (
 from primordial.core.context.metadata_flags import metadata_value_is_false, raw_metadata_value
 from primordial.core.context.normalization import normalized_context_key, normalized_context_keys
 from primordial.core.context.poison import has_context_flag
+from primordial.core.context.source_markdown import has_source_markdown_path, is_source_markdown_path
 from primordial.core.context.source_refs import (
     has_malformed_source_refs_metadata,
     placeholder_source_refs,
@@ -99,6 +100,23 @@ def validate_rag_index_sink(
     known_note_refs: Iterable[str] | None = None,
     known_rag_refs: Iterable[str] | None = None,
 ) -> RagIndexSinkDecision:
+    for decision in (
+        _rag_index_metadata_decision(envelope),
+        _rag_index_lane_material_decision(envelope),
+        _rag_index_source_ref_decision(
+            envelope,
+            known_evidence_refs=known_evidence_refs,
+            known_note_refs=known_note_refs,
+            known_rag_refs=known_rag_refs,
+        ),
+        _rag_index_contract_decision(envelope, known_rag_refs=known_rag_refs),
+    ):
+        if decision is not None:
+            return decision
+    return RagIndexSinkDecision("accept")
+
+
+def _rag_index_metadata_decision(envelope: ContextEnvelope) -> RagIndexSinkDecision | None:
     if envelope.kind in GENERATED_EXPORT_KINDS or envelope.source_type in GENERATED_EXPORT_SOURCE_TYPES:
         return RagIndexSinkDecision("reject", f"rag_index rejects generated export ref={envelope.ref}")
     if metadata_value_is_false(envelope, "ingest_allowed"):
@@ -119,6 +137,12 @@ def validate_rag_index_sink(
         return RagIndexSinkDecision("reject", f"rag_index rejects generated export ref={envelope.ref}")
     if is_generated_export_path(raw_metadata_value(envelope, "source_url")):
         return RagIndexSinkDecision("reject", f"rag_index rejects generated export ref={envelope.ref}")
+    if has_source_markdown_path(envelope) or is_source_markdown_path(raw_metadata_value(envelope, "source_url")):
+        return RagIndexSinkDecision("reject", f"rag_index rejects source Markdown ref={envelope.ref}")
+    return None
+
+
+def _rag_index_lane_material_decision(envelope: ContextEnvelope) -> RagIndexSinkDecision | None:
     if _is_generated_model_or_chat_material(envelope):
         return RagIndexSinkDecision(
             "reject",
@@ -155,6 +179,16 @@ def validate_rag_index_sink(
         return RagIndexSinkDecision("reject", f"rag_index rejects raw sensitive material ref={envelope.ref}")
     if has_target_fact_marker(envelope):
         return RagIndexSinkDecision("reject", f"rag_index rejects target fact material ref={envelope.ref}")
+    return None
+
+
+def _rag_index_source_ref_decision(
+    envelope: ContextEnvelope,
+    *,
+    known_evidence_refs: Iterable[str] | None,
+    known_note_refs: Iterable[str] | None,
+    known_rag_refs: Iterable[str] | None,
+) -> RagIndexSinkDecision | None:
     source_ref_reason = _source_refs_reject_reason(
         envelope,
         known_evidence_refs=known_evidence_refs,
@@ -163,6 +197,14 @@ def validate_rag_index_sink(
     )
     if source_ref_reason:
         return RagIndexSinkDecision("reject", f"rag_index rejects {source_ref_reason} ref={envelope.ref}")
+    return None
+
+
+def _rag_index_contract_decision(
+    envelope: ContextEnvelope,
+    *,
+    known_rag_refs: Iterable[str] | None,
+) -> RagIndexSinkDecision | None:
     if _context_source_types(envelope) & WRITEUP_SOURCE_TYPES and _writeup_policy_forbids_ingest(envelope):
         restriction = _writeup_restriction(envelope) or "<unspecified>"
         return RagIndexSinkDecision("reject", f"rag_index rejects writeup in {restriction} mode ref={envelope.ref}")
@@ -193,7 +235,7 @@ def validate_rag_index_sink(
     )
     if not citations.valid:
         return RagIndexSinkDecision("reject", "; ".join(citations.errors))
-    return RagIndexSinkDecision("accept")
+    return None
 
 
 def _is_generated_model_or_chat_material(envelope: ContextEnvelope) -> bool:

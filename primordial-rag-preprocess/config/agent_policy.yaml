@@ -1,0 +1,34 @@
+id: primordial_rag_preprocess_agent_policy
+source_path: primordial-rag-preprocess/AGENTS.md
+status: migrated_local_preprocess_policy
+markdown_authoritative: false
+boundaries:
+  - local_only_preprocessing_pipeline
+  - do_not_modify_original_corpus_files
+  - no_upload_sync_transmit_or_exfiltrate_source_documents_or_extracted_text
+  - no_normal_planner_retrieval_for_restricted_material_by_default
+defaults:
+  - conservative_by_default
+  - unknown_commercial_or_proprietary_sources_inventory_only_until_operator_override
+  - source_documents_remain_local
+parser_constraints:
+  - mitre_attack_json_structural_taxonomy_records_only
+  - do_not_vectorize_raw_attack_bundles_as_giant_chunks
+extraction_constraints:
+  - docling_first_policy_gated_document_extraction
+  - no_silent_fallback_extractors_when_docling_unavailable_or_fails
+  - mark_source_not_extracted_and_preserve_error_on_docling_failure
+  - epub_handling_pandoc_only
+  - no_ebooklib_or_beautifulsoup_epub_fallback
+  - ocr_allowed_only_when_docling_allow_ocr_true
+  - docling_rapidocr_may_initialize_local_model_artifacts_on_first_use
+explicit_operator_toggles:
+  - allow_operator_overrides
+  - docling_allow_ocr
+restricted_material:
+  - restricted_exploit_material
+  - kernel_security_material
+  - binary_analysis_material
+  - post_exploitation_material
+  - tool_abuse_material
+  - low_authority_hacking_material

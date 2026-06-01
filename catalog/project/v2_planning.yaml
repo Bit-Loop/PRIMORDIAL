@@ -1,0 +1,44 @@
+id: primordial_v2_planning
+source_path: docs/v2/README.md
+status: v2_preparation_only
+loaded_by_v1_runtime: false
+markdown_authoritative: false
+purpose:
+  - future_version_planning
+  - reverse_engineering_capability_preparation
+boundaries:
+  - not_loaded_by_primordial_v1_runtime
+  - not_operator_intent_authority
+  - not_runtime_policy_authority
+  - not_acceptance_criteria_authority_until_promoted
+artifacts:
+  - path: docs/v2/reverse_engineering_framework.md
+    kind: planning_framework
+    domains:
+      - binary_exploitation_research
+      - software_reverse_engineering
+      - embedded_firmware_analysis
+      - hardware_reverse_engineering
+      - fpga_reverse_engineering
+  - path: docs/v2/reverse_engineering_tooling.yaml
+    kind: structured_tooling_taxonomy
+    domains:
+      - controls
+      - domains
+      - toolchains
+      - risks
+      - expected_evidence_types
+  - path: docs/v2/reverse_engineering_test_plan.md
+    kind: acceptance_test_plan
+    domains:
+      - fixtures
+      - policy_gates
+      - runners
+      - hardware_benches
+      - release_acceptance
+future_integration_gate:
+  - dedicated_implementation_milestone
+  - move_selected_material_into_runtime_catalogs
+  - move_selected_material_into_storage_models
+  - move_selected_material_into_policy_gates
+  - move_selected_material_into_tests

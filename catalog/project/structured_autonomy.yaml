@@ -1,0 +1,60 @@
+id: primordial_structured_autonomy
+source_path: docs/structured_autonomy.md
+status: migrated_autonomy_scaffold
+authority: typed_scaffold_description_not_policy_authority
+scaffold_support:
+  - tool_inventory
+  - missing_tool_resolution
+  - failure_diagnosis
+  - script_safety_validation
+  - methodology_proposals
+tool_inventory_checks:
+  - id: approved_executables
+    mechanism: shutil.which
+  - id: approved_python_packages
+    mechanism: importlib.metadata
+  - id: trusted_scripts
+    mechanism: configured_path_exists
+tooling_gap_substitutions:
+  - capability: smb_share_enumeration
+    preferred_tool: netexec
+    substitute_tool: smbclient
+    rationale:
+      - read_only_smb_share_enumeration
+      - no_generated_helpers_required
+failure_diagnosis_categories:
+  - missing_tool
+  - timeout
+  - parser_failure
+  - authentication_required
+  - protocol_mismatch
+  - policy_blocked
+  - scope_blocked
+  - operator_intent_blocked
+  - unknown_failure
+script_safety:
+  generated_helper_scope: engagement_local_only
+  forbidden_imports:
+    - subprocess
+    - socket
+  forbidden_calls:
+    - os.system
+    - eval
+    - exec
+    - __import__
+    - subprocess.run
+    - subprocess.Popen
+    - socket.socket
+    - importlib.import_module
+  rejected_behaviors:
+    - dynamic_imports
+    - broad_filesystem_writes
+    - unapproved_socket_or_network_behavior
+methodology_compiler:
+  input_format: markdown
+  output_root: proposals/methodology
+  rules:
+    - proposal_local_artifacts_only
+    - baseline_catalogs_are_not_mutated_by_compiler_output
+    - operator_review_required_before_promotion
+    - strict_catalog_validation_required_before_promotion

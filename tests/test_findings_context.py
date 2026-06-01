@@ -7,6 +7,10 @@ from pathlib import Path
 from primordial.config import AppConfig
 from primordial.core.domain.enums import ScopeProfile
 from primordial.runtime import PrimordialRuntime
+from tests.support import fixture_ip
+
+
+PIRATE_IP = fixture_ip(10, 129, 47, 117)
 
 
 class FindingsContextTests(unittest.TestCase):
@@ -22,7 +26,7 @@ class FindingsContextTests(unittest.TestCase):
                 handle="pirate.htb",
                 display_name="HTB Pirate",
                 profile=ScopeProfile.HACK_THE_BOX,
-                assets=["pirate.htb", "10.129.47.117"],
+                assets=["pirate.htb", PIRATE_IP],
             )
             payload = runtime.findings_context_payload(target="pirate.htb", include_guidance=True)
             workspace = payload["workspace"]
@@ -31,6 +35,24 @@ class FindingsContextTests(unittest.TestCase):
             self.assertTrue(Path(workspace["findings_path"]).exists())
             self.assertTrue(Path(workspace["evidence_path"]).exists())
             self.assertIn("AI Agent Guidance", workspace["guidance"])
+            runtime.shutdown()
+
+    def test_initialize_creates_machine_readable_workspace_manifest_not_readme(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = AppConfig.from_env(project_root=root)
+            config.ensure_directories()
+            runtime = PrimordialRuntime(config)
+            runtime.initialize()
+
+            manifest_path = config.findings_dir / "workspace.yaml"
+
+            self.assertTrue(manifest_path.exists())
+            self.assertFalse((config.findings_dir / "README.md").exists())
+            body = manifest_path.read_text(encoding="utf-8")
+            self.assertIn("id: primordial_findings_workspace", body)
+            self.assertIn("guidance_path: targets/<target>/guidance.md", body)
+            self.assertIn("notion_export_path: notion/<target>/notion-export.md", body)
             runtime.shutdown()
 
     def test_sync_findings_context_exports_local_notion_markdown(self) -> None:

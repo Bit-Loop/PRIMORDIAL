@@ -1,0 +1,8 @@
+id: primordial_findings_workspace
+authority: durable_operator_context
+prompt_ingestion: bounded_summaries_only
+paths:
+  guidance_path: targets/<target>/guidance.md
+  findings_path: targets/<target>/findings.md
+  evidence_path: targets/<target>/evidence.md
+  notion_export_path: notion/<target>/notion-export.md

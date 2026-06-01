@@ -1,0 +1,115 @@
+id: owasp_api_security_top_10_2023
+source_directory: docs/RAG_SRC
+status: migrated_external_advisory_corpus
+authority: advisory_not_target_truth
+source_type: validated_external
+corpus_type: api_security_standards
+source_markdown_ingest_allowed: false
+operational_retrieval_allowed: false
+allowed_use_modes:
+  - advisory_training
+  - postmortem
+  - authorized_security_research_reference
+denied_use_modes:
+  - closed_book
+  - target_truth
+  - evidence
+  - scope_authority
+  - policy_authority
+documents:
+  - source_path: docs/RAG_SRC/0x10-api-security-risks.md
+    title: API Security Risks
+    source_family: owasp_api_security_top_10_2023
+    quarantine_path: runtime/quarantine/markdown/docs/RAG_SRC/0x10-api-security-risks.md
+    ingest_allowed: false
+    operational_retrieval_allowed: false
+  - source_path: docs/RAG_SRC/0x11-t10.md
+    title: OWASP Top 10 API Security Risks 2023
+    source_family: owasp_api_security_top_10_2023
+    quarantine_path: runtime/quarantine/markdown/docs/RAG_SRC/0x11-t10.md
+    ingest_allowed: false
+    operational_retrieval_allowed: false
+  - source_path: docs/RAG_SRC/0xa1-broken-object-level-authorization.md
+    title: API1:2023 Broken Object Level Authorization
+    source_family: owasp_api_security_top_10_2023
+    quarantine_path: runtime/quarantine/markdown/docs/RAG_SRC/0xa1-broken-object-level-authorization.md
+    ingest_allowed: false
+    operational_retrieval_allowed: false
+  - source_path: docs/RAG_SRC/0xa2-broken-authentication.md
+    title: API2:2023 Broken Authentication
+    source_family: owasp_api_security_top_10_2023
+    quarantine_path: runtime/quarantine/markdown/docs/RAG_SRC/0xa2-broken-authentication.md
+    ingest_allowed: false
+    operational_retrieval_allowed: false
+  - source_path: docs/RAG_SRC/0xa3-broken-object-property-level-authorization.md
+    title: API3:2023 Broken Object Property Level Authorization
+    source_family: owasp_api_security_top_10_2023
+    quarantine_path: runtime/quarantine/markdown/docs/RAG_SRC/0xa3-broken-object-property-level-authorization.md
+    ingest_allowed: false
+    operational_retrieval_allowed: false
+  - source_path: docs/RAG_SRC/0xa4-unrestricted-resource-consumption.md
+    title: API4:2023 Unrestricted Resource Consumption
+    source_family: owasp_api_security_top_10_2023
+    quarantine_path: runtime/quarantine/markdown/docs/RAG_SRC/0xa4-unrestricted-resource-consumption.md
+    ingest_allowed: false
+    operational_retrieval_allowed: false
+  - source_path: docs/RAG_SRC/0xa5-broken-function-level-authorization.md
+    title: API5:2023 Broken Function Level Authorization
+    source_family: owasp_api_security_top_10_2023
+    quarantine_path: runtime/quarantine/markdown/docs/RAG_SRC/0xa5-broken-function-level-authorization.md
+    ingest_allowed: false
+    operational_retrieval_allowed: false
+  - source_path: docs/RAG_SRC/0xa6-unrestricted-access-to-sensitive-business-flows.md
+    title: API6:2023 Unrestricted Access to Sensitive Business Flows
+    source_family: owasp_api_security_top_10_2023
+    quarantine_path: runtime/quarantine/markdown/docs/RAG_SRC/0xa6-unrestricted-access-to-sensitive-business-flows.md
+    ingest_allowed: false
+    operational_retrieval_allowed: false
+  - source_path: docs/RAG_SRC/0xa7-server-side-request-forgery.md
+    title: API7:2023 Server Side Request Forgery
+    source_family: owasp_api_security_top_10_2023
+    quarantine_path: runtime/quarantine/markdown/docs/RAG_SRC/0xa7-server-side-request-forgery.md
+    ingest_allowed: false
+    operational_retrieval_allowed: false
+  - source_path: docs/RAG_SRC/0xa8-security-misconfiguration.md
+    title: API8:2023 Security Misconfiguration
+    source_family: owasp_api_security_top_10_2023
+    quarantine_path: runtime/quarantine/markdown/docs/RAG_SRC/0xa8-security-misconfiguration.md
+    ingest_allowed: false
+    operational_retrieval_allowed: false
+  - source_path: docs/RAG_SRC/0xa9-improper-inventory-management.md
+    title: API9:2023 Improper Inventory Management
+    source_family: owasp_api_security_top_10_2023
+    quarantine_path: runtime/quarantine/markdown/docs/RAG_SRC/0xa9-improper-inventory-management.md
+    ingest_allowed: false
+    operational_retrieval_allowed: false
+  - source_path: docs/RAG_SRC/0xaa-unsafe-consumption-of-apis.md
+    title: API10:2023 Unsafe Consumption of APIs
+    source_family: owasp_api_security_top_10_2023
+    quarantine_path: runtime/quarantine/markdown/docs/RAG_SRC/0xaa-unsafe-consumption-of-apis.md
+    ingest_allowed: false
+    operational_retrieval_allowed: false
+  - source_path: docs/RAG_SRC/0xb0-next-devs.md
+    title: What's Next For Developers
+    source_family: owasp_api_security_top_10_2023
+    quarantine_path: runtime/quarantine/markdown/docs/RAG_SRC/0xb0-next-devs.md
+    ingest_allowed: false
+    operational_retrieval_allowed: false
+  - source_path: docs/RAG_SRC/0xb1-next-devsecops.md
+    title: What's Next For DevSecOps
+    source_family: owasp_api_security_top_10_2023
+    quarantine_path: runtime/quarantine/markdown/docs/RAG_SRC/0xb1-next-devsecops.md
+    ingest_allowed: false
+    operational_retrieval_allowed: false
+  - source_path: docs/RAG_SRC/0xd0-about-data.md
+    title: Methodology and Data
+    source_family: owasp_api_security_top_10_2023
+    quarantine_path: runtime/quarantine/markdown/docs/RAG_SRC/0xd0-about-data.md
+    ingest_allowed: false
+    operational_retrieval_allowed: false
+  - source_path: docs/RAG_SRC/0xd1-acknowledgments.md
+    title: Acknowledgments
+    source_family: owasp_api_security_top_10_2023
+    quarantine_path: runtime/quarantine/markdown/docs/RAG_SRC/0xd1-acknowledgments.md
+    ingest_allowed: false
+    operational_retrieval_allowed: false

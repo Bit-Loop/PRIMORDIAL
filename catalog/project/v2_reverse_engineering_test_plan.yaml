@@ -1,0 +1,180 @@
+id: primordial_v2_reverse_engineering_test_plan
+source_path: docs/v2/reverse_engineering_test_plan.md
+status: v2_preparation_only
+loaded_by_v1_runtime: false
+authority: typed_v2_acceptance_plan_not_v1_runtime_authority
+test_philosophy:
+  - fixture_driven
+  - deterministic_where_possible
+  - hardware_risk_explicit
+  - reason_over_binaries_firmware_hardware_captures_and_fpga_artifacts
+  - no_live_uncontrolled_targets
+  - no_hidden_model_behavior_dependency
+fixture_requirements:
+  - provenance
+  - authorization_class
+  - expected_artifact_hashes
+  - expected_tool_outputs
+  - expected_policy_verdicts
+acceptance_gates:
+  - runner_requires_subject_authorization_tool_manifest_timeout_and_artifact_directory
+  - static_analysis_tests_pass_without_hardware_access
+  - dynamic_binary_tests_run_only_against_local_fixture_binaries_and_harnesses
+  - hardware_tests_use_recorded_captures_mock_probes_or_bench_devices_with_voltage_current_metadata
+  - active_hardware_flash_fuse_glitch_or_invasive_operations_blocked_by_default
+  - ai_suggestions_remain_proposals_until_deterministic_policy_accepts_operation
+  - large_outputs_stored_as_hash_referenced_artifacts_not_inlined_logs
+failure_modes:
+  - missing_tool
+  - unsupported_architecture
+  - corrupt_firmware
+  - locked_debug_port
+  - noisy_capture
+  - timeout
+  - unsafe_approval_request
+fixture_corpus:
+  - id: binary_fixtures
+    fixtures:
+      - elf_x86_64_command_line_parser_with_symbols_no_crash
+      - elf_x86_64_parser_stack_overflow_local_harness
+      - pie_nx_canary_enabled_crash_without_control_flow_preconditions
+      - arm32_little_endian_firmware_utility_binary
+      - mips_big_endian_network_utility_binary
+      - pe32_or_pe64_windows_utility_with_imports_and_resources
+      - mach_o_sample_when_macos_analysis_support_added
+    expected_checks:
+      - format_architecture_endian_and_mitigation_identification
+      - callgraph_and_function_index_generation
+      - crash_reproduction_deduplication_and_non_weaponized_exploitability_classification
+      - no_reverse_shells_credential_theft_or_public_target_instructions
+  - id: firmware_fixtures
+    fixtures:
+      - squashfs_firmware_image
+      - jffs2_firmware_image
+      - ubi_or_ubifs_firmware_image
+      - u_boot_plus_linux_kernel_image
+      - signed_update_package_extraction_allowed_signature_bypass_blocked
+      - corrupt_firmware_image_fails_safely
+    expected_checks:
+      - original_image_hash_preservation
+      - extraction_tree_hashing
+      - filesystem_init_service_certificate_endpoint_and_secret_indicator_inventory
+      - safe_handling_of_corrupt_or_encrypted_images
+      - secret_values_redacted_from_summaries
+  - id: hardware_capture_fixtures
+    fixtures:
+      - uart_boot_log_capture
+      - spi_flash_transaction_capture
+      - i2c_sensor_transaction_capture
+      - swd_jtag_idcode_scan_transcript
+      - power_rail_measurement_log
+      - logic_capture_unknown_or_noisy_decoder_confidence
+    expected_checks:
+      - voltage_and_sample_rate_metadata_validation
+      - decoder_confidence_handling
+      - interface_classification_with_uncertainty
+      - evidence_link_from_bus_hypothesis_to_capture_segment
+      - active_probing_blocked_without_hardware_active_intent_and_approval
+  - id: fpga_fixtures
+    fixtures:
+      - small_verilog_module_with_testbench_and_expected_waveform
+      - synthesized_netlist_json
+      - ice40_or_ecp5_open_bitstream_fixture_with_analysis_allowed
+      - encrypted_or_unsupported_bitstream_classifies_non_decodable
+      - black_box_io_trace_for_finite_state_behavior_inference
+    expected_checks:
+      - toolchain_version_recording
+      - simulation_transcript_and_waveform_artifact_retention
+      - family_identification_and_support_status_classification
+      - no_encryption_or_device_bound_protection_bypass
+policy_tests:
+  intent_gate_tests:
+    - intent_id: reverse_engineering_observe
+      allows:
+        - static_metadata_extraction
+      blocks:
+        - blocks_dynamic_execution
+    - intent_id: reverse_engineering_dynamic
+      allows:
+        - local_emulator_or_harness_execution
+      blocks:
+        - blocks_hardware_probe_operations
+    - intent_id: binary_exploitability_assessment
+      allows:
+        - crash_triage
+      blocks:
+        - blocks_weaponized_payload_generation
+    - intent_id: firmware_unpacking
+      allows:
+        - extraction_and_bom_generation
+      blocks:
+        - blocks_signature_bypass_instructions
+    - intent_id: hardware_probe_readonly
+      allows:
+        - measurement_and_passive_capture
+      blocks:
+        - blocks_active_debug_attach
+    - intent_id: hardware_probe_active
+      allows:
+        - approved_debug_attach_or_flash_read
+      blocks:
+        - blocks_flash_write_fuse_glitch_operations
+    - intent_id: hardware_destructive
+      allows:
+        - irreversible_hardware_actions_with_intent
+      blocks:
+        - still_requires_explicit_operator_confirmation
+    - intent_id: fpga_netlist_analysis
+      allows:
+        - lawful_netlist_or_bitstream_analysis
+      blocks:
+        - blocks_encrypted_bitstream_bypass_attempts
+  safety_regression_tests:
+    - prompted_exploit_generation_returns_blocked_proposal
+    - public_ip_or_third_party_domain_in_strings_not_execution_target
+    - password_looking_firmware_string_redacted_in_summaries
+    - unknown_voltage_blocks_active_digital_interface_tools
+    - flash_write_fails_without_backup_recovery_plan_and_destructive_approval
+    - glitching_fails_without_destructive_intent_lab_safety_metadata_and_operator_confirmation
+tool_runner_tests:
+  baseline_contract:
+    - missing_executable_returns_tool_unavailable
+    - unsupported_architecture_returns_unsupported_subject
+    - timeout_returns_timed_out_and_preserves_partial_logs
+    - nonzero_exit_returns_tool_failed_with_bounded_stderr_snippet
+    - output_parser_validates_schema_and_rejects_unknown_critical_fields
+    - artifact_store_records_hashes_and_file_sizes
+    - command_argv_recorded_without_shell_string
+    - deterministic_tools_rerun_to_stable_artifact_identity
+  required_runner_suites:
+    - binary_identity_runner
+    - mitigation_runner
+    - strings_imports_runner
+    - ghidra_or_headless_analysis_runner
+    - debugger_crash_triage_runner
+    - fuzz_harness_runner
+    - firmware_extraction_runner
+    - firmware_bom_runner
+    - bus_capture_import_runner
+    - jtag_swd_transcript_parser
+    - verilog_simulation_runner
+    - netlist_summary_runner
+hardware_bench_qualification:
+  - isolated_power_supply_limits
+  - ground_reference_plan
+  - esd_handling
+  - target_ownership_and_serial_or_asset_identity
+  - photo_evidence_of_probe_setup
+  - voltage_domain_measurements
+  - known_good_backup_or_recovery_plan_when_flash_memory_involved
+  - emergency_stop_procedure
+  - operator_confirmation_for_exact_operation_class
+release_criteria:
+  - all_policy_tests_pass
+  - static_binary_and_firmware_intake_work_without_hardware
+  - hardware_read_only_workflows_work_from_recorded_captures
+  - active_hardware_workflows_blocked_by_default_and_require_complete_bench_metadata
+  - all_artifact_types_represented_in_storage_and_ui_design
+  - no_v1_runtime_behavior_changes_without_explicit_v2_integration_milestone
+  - documentation_describes_limitations_and_operator_responsibilities
+  - fixture_corpus_committed_without_proprietary_or_secret_material

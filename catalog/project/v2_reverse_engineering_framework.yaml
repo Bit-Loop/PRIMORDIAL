@@ -1,0 +1,233 @@
+id: primordial_v2_reverse_engineering_framework
+source_path: docs/v2/reverse_engineering_framework.md
+status: v2_preparation_only
+loaded_by_v1_runtime: false
+authority: typed_v2_planning_not_v1_runtime_authority
+purpose:
+  - authorized_binary_exploitation_research
+  - software_reverse_engineering
+  - hardware_reverse_engineering
+  - embedded_firmware_analysis
+  - fpga_oriented_reverse_engineering
+  - control_plane_framework_not_ad_hoc_scripts
+  - scope_evidence_approvals_operator_intent_artifacts_and_tool_provenance_are_authority
+design_boundaries:
+  - v1_runtime_integration_deferred
+  - no_current_primordial_runtime_imports
+  - shell_false_argv_only_timeout_bounded_workspace_isolated_provenance_recorded
+  - live_hardware_actions_require_operator_confirmation_authorization_device_identity_limits_and_recovery_plan
+  - destructive_hardware_operations_require_separate_high_risk_approval
+  - weaponized_payload_generation_out_of_baseline_scope
+work_domains:
+  - id: binary_exploitation_research
+    primary_questions:
+      - architecture_abi_format_compiler_hardening_dependency_surface
+      - crash_reproducible_under_bounded_harness
+      - primitive_class_null_bounds_uaf_type_integer_format_command_deserialization_logic
+      - missing_exploitability_preconditions
+      - mitigations_blocking_or_constraining_exploitation
+    required_artifacts:
+      - binary_identity_hash_format_architecture_bitness_endian_compiler_libraries
+      - mitigation_profile_nx_pie_relro_canary_cfi_sandboxing_seccomp_entitlements
+      - crash_record_input_hash_signal_fault_registers_stack_coverage
+      - triage_verdict_reproducible_unique_duplicate_non_security_harness_repair
+      - exploitability_preconditions_ip_control_write_infoleak_heap_groom_aslr_version
+  - id: software_reverse_engineering
+    primary_questions:
+      - program_behavior_and_trust_boundaries
+      - reachable_parsing_deserialization_crypto_update_auth_ipc_plugin_driver_network_paths
+      - code_paths_needing_review_symbolic_exploration_dynamic_tracing_or_fuzz_harnessing
+      - dependencies_or_protocol_grammars_to_model
+    required_artifacts:
+      - function_index_callgraph_import_export_table_string_clusters_protocol_notes
+      - small_decompiled_references_not_bulk_copyrighted_source_dumps
+      - trust_boundary_map_with_evidence_references
+      - dynamic_trace_summaries_with_tool_versions_inputs_and_environment_constraints
+  - id: embedded_and_firmware_reverse_engineering
+    primary_questions:
+      - image_format_boot_chain_filesystem_compression_signing_update_storage_layout
+      - chips_boards_buses_debug_interfaces_voltage_domains_test_pads
+      - safe_read_without_device_writes
+      - realistic_emulation_or_rehosting_path
+    required_artifacts:
+      - firmware_bill_of_materials_hashes_partitions_filesystems_init_services_credential_indicators
+      - hardware_observation_log_photos_chip_markings_connectors_voltage_probe_continuity
+      - bus_capture_metadata_interface_voltage_sample_rate_decoder_timestamps_confidence
+      - debug_interface_verdict_observed_confirmed_disabled_locked_unknown
+  - id: hardware_and_fpga_reverse_engineering
+    primary_questions:
+      - logic_devices_fpgas_cplds_memories_clocks_regulators_sensors_transceivers
+      - bitstream_accessibility_encryption_compression_signing_device_binding
+      - simulation_netlist_analysis_or_black_box_io_characterization_path
+      - device_under_test_safety_constraints
+    required_artifacts:
+      - board_inventory_power_tree_clock_tree_io_voltage_map_connector_map
+      - netlist_or_hdl_only_when_lawfully_obtained_from_owned_or_authorized_material
+      - simulation_transcript_waveform_constraints_synthesis_simulation_tool_versions
+      - fpga_family_profile_supported_open_tooling_and_known_limitations
+control_plane_records:
+  - subject
+  - authorization
+  - environment
+  - artifact
+  - finding
+  - hazard
+intent_gates:
+  - id: reverse_engineering_observe
+    allows:
+      - static_analysis_metadata_extraction_read_only_classification
+  - id: reverse_engineering_dynamic
+    allows:
+      - emulator_or_local_harness_execution_against_owned_artifacts
+  - id: binary_exploitability_assessment
+    allows:
+      - crash_triage_and_exploitability_precondition_analysis_without_payload_weaponization
+  - id: firmware_unpacking
+    allows:
+      - firmware_extraction_filesystem_recovery_credential_indicator_review
+  - id: hardware_probe_readonly
+    allows:
+      - non_invasive_measurement_bus_sniffing_debug_interface_discovery
+  - id: hardware_probe_active
+    allows:
+      - active_probing_debug_attach_flash_read_controlled_register_or_memory_access
+  - id: hardware_destructive
+    allows:
+      - flash_erase_write_fuse_changes_glitching_invasive_work_decap_irreversible_actions
+  - id: fpga_netlist_analysis
+    allows:
+      - bitstream_or_netlist_analysis_for_owned_or_authorized_devices_only
+default_posture:
+  - static_analysis_before_dynamic_execution
+  - emulation_before_physical_hardware_interaction
+  - read_only_hardware_before_active_debug_attach
+  - active_hardware_blocked_until_identity_limits_connection_and_recovery_plan_exist
+  - generated_harnesses_run_against_local_owned_artifacts_only
+workflow_families:
+  - id: binary_intake
+    inputs:
+      - binary_file
+      - debug_symbols_if_available
+      - provenance_statement
+      - scope_record
+    steps:
+      - hash_and_identify_format_architecture_endian_imports_sections_compiler_packer
+      - extract_strings_exports_imports_resources_symbols_dependency_metadata
+      - record_mitigation_profile_and_risk_relevant_binary_properties
+      - initial_review_map_parsers_file_io_network_ipc_crypto_auth_update_plugin_memory_unsafe_surfaces
+  - id: crash_triage
+    inputs:
+      - binary_identity
+      - harness
+      - crashing_input
+      - run_constraints
+    steps:
+      - reproduce_under_bounded_local_environment
+      - capture_signal_fault_registers_backtrace_allocator_sanitizer_input_hash
+      - deduplicate_by_stack_signature_coverage_signature_and_fault_class
+      - classify_exploitability_preconditions_without_weaponized_payload
+  - id: firmware_intake
+    inputs:
+      - image_dump
+      - update_package
+      - memory_read
+      - vendor_package
+    steps:
+      - hash_original_image_and_preserve_read_only
+      - identify_compression_container_partition_filesystem_bootloader_kernel_init_architecture
+      - extract_filesystems_into_controlled_artifact_directory
+      - firmware_bom_services_ports_scripts_endpoints_certificates_secret_indicators
+  - id: board_intake
+    inputs:
+      - board_photos
+      - ownership_record
+      - target_device_profile
+    steps:
+      - inventory_chips_markings_connectors_test_pads_regulators_crystals_memories_antennas_debug_headers
+      - voltage_domains_measured_before_digital_instrument_connection
+      - map_uart_jtag_swd_spi_i2c_i3c_can_lin_usb_pcie_mipi_memory_interfaces
+      - record_probe_settings_sample_rates_grounding_isolation_and_current_limits
+  - id: fpga_and_logic_analysis
+    inputs:
+      - bitstream
+      - configuration_flash_dump
+      - hdl_or_netlist
+      - board_inventory
+      - captured_io_traces
+    steps:
+      - identify_device_family_package_configuration_memory_encryption_signing_toolchain_clues
+      - preserve_raw_bitstream_or_flash_and_derive_read_only_normalized_artifacts
+      - lawful_netlist_or_intermediate_conversion_and_structural_review
+      - validate_hypotheses_with_simulation_waveform_comparison_or_black_box_io
+evidence_standards:
+  required_fields:
+    - subject_id
+    - operation_id
+    - tool
+    - tool_version
+    - argv
+    - working_directory
+    - started_at
+    - finished_at
+    - timeout_seconds
+    - exit_status
+    - input_artifact_refs
+    - output_artifact_refs
+    - environment_ref
+    - operator_intent_id
+    - authorization_ref
+    - sensitivity
+    - confidence
+  sensitivity_classes:
+    - id: public_metadata
+      description: hashes_formats_tool_versions_high_level_summaries
+    - id: controlled_binary
+      description: proprietary_binaries_firmware_board_photos_captures_or_dumps
+    - id: secrets_possible
+      description: firmware_filesystems_strings_memory_dumps_traces_with_credential_indicators
+    - id: device_damage_risk
+      description: active_hardware_actions_voltage_probing_flash_writes_glitching_fuse_changes
+    - id: export_control_review
+      description: cryptographic_hardware_radio_firmware_restricted_ip_or_sensitive_infrastructure_contexts
+ai_control_plane:
+  allowed_outputs:
+    - suggested_next_analysis_steps_with_evidence_references
+    - function_or_component_summaries
+    - harness_review_and_safety_review
+    - crash_classification_and_missing_precondition_analysis
+    - bus_or_protocol_identification_hypotheses
+    - fpga_or_netlist_component_labeling_hypotheses
+  blocked_baseline_outputs:
+    - weaponized_exploit_payloads
+    - reverse_shells_credential_theft_persistence_or_evasion
+    - third_party_access_control_or_drm_bypass_instructions
+    - automatic_flash_writes_fuse_changes_glitching_campaigns_or_destructive_hardware_operations
+    - bulk_reconstruction_of_proprietary_source_code_beyond_limited_evidence_excerpts
+implementation_milestones:
+  - static_artifact_and_subject_model
+  - read_only_tool_catalog_loader_for_v2_manifests
+  - local_artifact_store_for_binaries_firmware_captures_traces_and_board_media
+  - static_binary_and_firmware_intake_runners
+  - dynamic_local_harness_and_debugger_runners
+  - hardware_read_only_observation_workflow
+  - hardware_active_probe_workflow_with_explicit_high_risk_approvals
+  - fpga_netlist_analysis_workflow
+  - ui_surfaces_for_subject_inventory_evidence_graph_waveforms_callgraphs_crash_groups_hardware_maps
+  - policy_test_suite_and_fixture_corpus
+official_reference_anchors:
+  - label: Ghidra official repository
+    url: https://github.com/NationalSecurityAgency/ghidra
+  - label: angr documentation
+    url: https://docs.angr.io/en/latest/
+  - label: AFL++ documentation
+    url: https://aflplus.plus/
+  - label: Renode documentation/about
+    url: https://renode.io/about/
+  - label: OpenOCD documentation
+    url: https://openocd.org/doc/html/About.html
+  - label: pyOCD documentation
+    url: https://pyocd.io/
+  - label: sigrok supported hardware
+    url: https://sigrok.org/wiki/Supported_hardware
+  - label: Yosys documentation
+    url: https://yosyshq.readthedocs.io/projects/yosys/

@@ -172,28 +172,63 @@ def _validate_discord_notification(
             "quarantine",
             f"discord_notification requires advisory or unverified label ref={envelope.ref}",
         )
-    if envelope.kind in DISCORD_SOURCE_REF_VALIDATED_KINDS:
-        for source_ref_error in source_refs_metadata_errors(envelope):
-            return CollaborationSinkDecision(
-                "reject",
-                f"discord_notification rejects {source_ref_error} ref={envelope.ref}",
-            )
-        unresolved_source_refs = unresolved_ai_derived_source_ref_errors(
-            envelope.ref,
-            source_refs_metadata_values(envelope),
-            known_evidence_refs=known_evidence_refs,
-            known_note_refs=known_note_refs,
-            known_rag_refs=known_rag_refs,
+    source_refs_decision = _validate_discord_source_refs(
+        envelope,
+        known_evidence_refs=known_evidence_refs,
+        known_note_refs=known_note_refs,
+        known_rag_refs=known_rag_refs,
+    )
+    if source_refs_decision:
+        return source_refs_decision
+    citations_decision = _validate_discord_citations(
+        envelope,
+        known_evidence_refs=known_evidence_refs,
+        known_rag_refs=known_rag_refs,
+    )
+    if citations_decision:
+        return citations_decision
+    return CollaborationSinkDecision("accept")
+
+
+def _validate_discord_source_refs(
+    envelope: ContextEnvelope,
+    *,
+    known_evidence_refs: Iterable[str] | None,
+    known_note_refs: Iterable[str] | None,
+    known_rag_refs: Iterable[str] | None,
+) -> CollaborationSinkDecision | None:
+    if envelope.kind not in DISCORD_SOURCE_REF_VALIDATED_KINDS:
+        return None
+    for source_ref_error in source_refs_metadata_errors(envelope):
+        return CollaborationSinkDecision(
+            "reject",
+            f"discord_notification rejects {source_ref_error} ref={envelope.ref}",
         )
-        if unresolved_source_refs:
-            return CollaborationSinkDecision("reject", "; ".join(unresolved_source_refs))
+    unresolved_source_refs = unresolved_ai_derived_source_ref_errors(
+        envelope.ref,
+        source_refs_metadata_values(envelope),
+        known_evidence_refs=known_evidence_refs,
+        known_note_refs=known_note_refs,
+        known_rag_refs=known_rag_refs,
+    )
+    if unresolved_source_refs:
+        return CollaborationSinkDecision("reject", "; ".join(unresolved_source_refs))
+    return None
+
+
+def _validate_discord_citations(
+    envelope: ContextEnvelope,
+    *,
+    known_evidence_refs: Iterable[str] | None,
+    known_rag_refs: Iterable[str] | None,
+) -> CollaborationSinkDecision | None:
     citations = CitationValidator(
         known_evidence_refs=known_evidence_refs,
         known_rag_refs=known_rag_refs,
     ).validate([envelope])
     if not citations.valid:
         return CollaborationSinkDecision("reject", "; ".join(citations.errors))
-    return CollaborationSinkDecision("accept")
+    return None
 
 
 def _validate_github_issue(envelope: ContextEnvelope) -> CollaborationSinkDecision:

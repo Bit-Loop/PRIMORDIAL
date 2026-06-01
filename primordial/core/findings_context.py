@@ -33,16 +33,17 @@ class FindingsContextService:
     def initialize(self) -> None:
         self.findings_dir.mkdir(parents=True, exist_ok=True)
         self.notion_exports_dir.mkdir(parents=True, exist_ok=True)
-        readme = self.findings_dir / "README.md"
-        if not readme.exists():
-            readme.write_text(
-                "# Primordial Findings Workspace\n\n"
-                "This folder is durable operator-facing context. Agents may read bounded summaries from target "
-                "guidance files, but this folder is not loaded wholesale into model prompts.\n\n"
-                "- `targets/<target>/guidance.md`: operator guidance for agents.\n"
-                "- `targets/<target>/findings.md`: durable finding notes and manual observations.\n"
-                "- `targets/<target>/evidence.md`: lightweight evidence index generated from local state.\n"
-                "- `notion/<target>/notion-export.md`: local Notion-oriented export mirror.\n",
+        manifest = self.findings_dir / "workspace.yaml"
+        if not manifest.exists():
+            manifest.write_text(
+                "id: primordial_findings_workspace\n"
+                "authority: durable_operator_context\n"
+                "prompt_ingestion: bounded_summaries_only\n"
+                "paths:\n"
+                "  guidance_path: targets/<target>/guidance.md\n"
+                "  findings_path: targets/<target>/findings.md\n"
+                "  evidence_path: targets/<target>/evidence.md\n"
+                "  notion_export_path: notion/<target>/notion-export.md\n",
                 encoding="utf-8",
             )
 
@@ -97,6 +98,17 @@ class FindingsContextService:
         findings: list[Finding],
     ) -> TargetFindingsWorkspace:
         workspace = self.ensure_target(target)
+        self._write_evidence_index(workspace, target, evidence)
+        export_lines = self._notion_export_lines(target, evidence, notes, interests, findings)
+        workspace.notion_export_path.write_text("\n".join(export_lines).rstrip() + "\n", encoding="utf-8")
+        return workspace
+
+    def _write_evidence_index(
+        self,
+        workspace: TargetFindingsWorkspace,
+        target: Target,
+        evidence: list[EvidenceRecord],
+    ) -> None:
         evidence_lines = [
             f"# {target.display_name} Evidence Index",
             "",
@@ -107,7 +119,45 @@ class FindingsContextService:
             evidence_lines.append(f"- `{item.id}` {item.title}: {item.summary}")
         workspace.evidence_path.write_text("\n".join(evidence_lines).rstrip() + "\n", encoding="utf-8")
 
-        export_lines = [
+    def _notion_export_lines(
+        self,
+        target: Target,
+        evidence: list[EvidenceRecord],
+        notes: list[Note],
+        interests: list[Interest],
+        findings: list[Finding],
+    ) -> list[str]:
+        export_lines = self._notion_export_header(target)
+        self._extend_export_section(
+            export_lines,
+            "Observed Evidence",
+            [f"- `{item.id}` {item.title}: {item.summary}" for item in evidence[:25]],
+            "- No evidence recorded.",
+        )
+        self._extend_export_section(
+            export_lines,
+            "Reviewed Findings",
+            [f"- `{finding.severity.value}` {finding.title}: {finding.summary}" for finding in findings[:25]],
+            "- No reviewed findings recorded.",
+        )
+        self._extend_export_section(
+            export_lines,
+            "Operator Notes",
+            [f"- {note.title}: {note.body[:500]}" for note in notes[:25]],
+            "- No operator notes recorded.",
+        )
+        self._extend_export_section(export_lines, "Candidate Tasks", [], "- No candidate tasks recorded.")
+        self._extend_export_section(
+            export_lines,
+            "Hypotheses",
+            [f"- `{interest.status.value}` {interest.title}: {interest.summary}" for interest in interests[:25]],
+            "- No open interests recorded.",
+        )
+        self._append_static_empty_export_sections(export_lines)
+        return export_lines
+
+    def _notion_export_header(self, target: Target) -> list[str]:
+        return [
             f"# {target.display_name} Notion Export",
             "",
             "<!-- primordial-generated-export",
@@ -131,30 +181,13 @@ class FindingsContextService:
             "## AI Agent Guidance",
             "",
             self.read_guidance(target, max_chars=2400) or "No target-specific guidance recorded.",
-            "",
-            "## Observed Evidence",
-            "",
         ]
-        if evidence:
-            export_lines.extend(f"- `{item.id}` {item.title}: {item.summary}" for item in evidence[:25])
-        else:
-            export_lines.append("- No evidence recorded.")
-        export_lines.extend(["", "## Reviewed Findings", ""])
-        if findings:
-            export_lines.extend(f"- `{finding.severity.value}` {finding.title}: {finding.summary}" for finding in findings[:25])
-        else:
-            export_lines.append("- No reviewed findings recorded.")
-        export_lines.extend(["", "## Operator Notes", ""])
-        if notes:
-            export_lines.extend(f"- {note.title}: {note.body[:500]}" for note in notes[:25])
-        else:
-            export_lines.append("- No operator notes recorded.")
-        export_lines.extend(["", "## Candidate Tasks", "", "- No candidate tasks recorded."])
-        export_lines.extend(["", "## Hypotheses", ""])
-        if interests:
-            export_lines.extend(f"- `{interest.status.value}` {interest.title}: {interest.summary}" for interest in interests[:25])
-        else:
-            export_lines.append("- No open interests recorded.")
+
+    def _extend_export_section(self, lines: list[str], title: str, rows: list[str], empty_message: str) -> None:
+        lines.extend(["", f"## {title}", ""])
+        lines.extend(rows or [empty_message])
+
+    def _append_static_empty_export_sections(self, export_lines: list[str]) -> None:
         export_lines.extend(
             [
                 "",
@@ -183,8 +216,6 @@ class FindingsContextService:
                 "- No sync conflicts recorded.",
             ]
         )
-        workspace.notion_export_path.write_text("\n".join(export_lines).rstrip() + "\n", encoding="utf-8")
-        return workspace
 
     def audit_generated_exports(self) -> dict[str, object]:
         records: list[dict[str, object]] = []

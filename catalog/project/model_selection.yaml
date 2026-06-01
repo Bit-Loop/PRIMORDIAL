@@ -1,0 +1,284 @@
+id: primordial_model_selection_20260509
+source_path: docs/MODEL_SELECTION_NOTES.md
+status: migrated_benchmark_guidance
+authority: recommendation_catalog_not_runtime_mutation
+date: "2026-05-09"
+purpose:
+  - summarize_current_and_optimal_local_agent_role_models
+  - preserve_lmstudio_and_ollama_observable_task_benchmark_guidance
+  - keep_model_role_changes_recommend_only_until_operator_apply_and_policy_checks
+evidence_sources:
+  - codex_primordial_model_role_benchmark_20260509.md
+  - codex_primordial_OLLAMA-model_role_benchmark_20260509.md
+role_selection:
+  - role: local_fast
+    best_current_models:
+      - gemma4:e4b
+    optimal_targets:
+      - gemma4:e4b
+    decision: use_for_fast_routing_gate_decisions_with_deterministic_policy_checks
+  - role: local_deep
+    best_current_models: []
+    optimal_targets:
+      - gpt-oss-safeguard-20b
+    decision: add_and_test_policy_judge_current_local_models_failed_durable_authority_reasoning
+  - role: local_code
+    best_current_models:
+      - gemma4:e4b
+    optimal_targets:
+      - gemma4:e4b
+      - qwen3-coder-next:q4_K_M
+    decision: use_gemma_for_requirements_tests_specs_and_qwen_coder_for_deeper_code_when_latency_acceptable
+  - role: local_compact
+    best_current_models:
+      - deepseek-r1:8b
+    optimal_targets:
+      - deepseek-r1:8b
+    decision: use_for_compacting_logs_events_and_benchmark_records_where_id_preservation_matters
+  - role: poc_pressure
+    best_current_models:
+      - qwen3-coder-next:q4_K_M
+    optimal_targets:
+      - qwen3-coder-next:q4_K_M
+      - deterministic_policy_checks
+    decision: use_only_with_guardrails_blocking_execution_real_targets_credentials_bruteforce_persistence_reverse_shells_and_exfiltration
+  - role: rag_embeddings
+    best_current_models:
+      - text-embedding-nomic-embed-text-v1.5
+    optimal_targets:
+      - text-embedding-nomic-embed-text-v1.5
+    decision: vector_indexing_and_retrieval_not_chat_completion
+  - role: rag_synthesis
+    best_current_models:
+      - gpt-oss-cybersecurity-20b-merged-heretic-i1
+    optimal_targets:
+      - gpt-oss-cybersecurity-20b-merged-heretic-i1
+      - source_id_validation
+    decision: grounded_synthesis_from_retrieved_evidence_docs_with_source_id_validation
+local_deep:
+  authority_hierarchy:
+    - durable_operator_intent
+    - durable_approvals
+    - target_scope
+    - evidence_records
+    - durable_guidance
+    - chat_request
+  observed_failures:
+    - chat_guidance_overrode_recon_only
+    - read_only_recon_approval_overrode_credential_validation_block
+    - current_local_models_failed_durable_authority_arbitration
+  target_model: gpt-oss-safeguard-20b
+  target_rationale:
+    - gpt_oss_safeguard_20b_matches_policy_reasoning_classifier_need
+    - supplied_policy_classifier_closer_to_durable_authority_model_than_general_chat_or_coding_model
+operating_guardrails:
+  - models_must_not_directly_expand_target_scope
+  - models_must_not_directly_approve_credential_validation
+  - models_must_not_directly_approve_exploit_or_poc_execution
+  - chat_requests_must_not_override_durable_operator_intent
+  - require_deterministic_post_checks_for_source_ids_evidence_ids_approval_ids_invented_authority_and_scope_drift
+  - route_uncertain_local_deep_to_supervised_or_offloaded_review
+practical_configuration:
+  - role: local_fast
+    models:
+      - gemma4:e4b
+    note: fast_routing_gate_decisions
+  - role: local_deep
+    models: []
+    note: supervised_or_offloaded_until_safeguard_model_is_tested
+  - role: local_code
+    models:
+      - gemma4:e4b
+    note: requirements_test_spec_work_current_default
+  - role: local_compact
+    models:
+      - deepseek-r1:8b
+    note: logs_events_and_benchmark_record_compaction
+  - role: poc_pressure
+    models:
+      - qwen3-coder-next:q4_K_M
+    note: deterministic_policy_checks_required
+  - role: rag_embeddings
+    models:
+      - text-embedding-nomic-embed-text-v1.5
+    note: embeddings_only
+  - role: rag_synthesis
+    models:
+      - gpt-oss-cybersecurity-20b-merged-heretic-i1
+    note: source_id_validation_required
+wrapper_only_mode:
+  activation_settings:
+    - PRIMORDIAL_USE_ONLY_WRAPPER_MODE=1
+    - persisted_model_wrapper_setting_enabled
+  applies_to:
+    - runtime_ai_generation_role_calls
+    - agent_chat_api_model_interface
+  bypassed_actions:
+    - ollama_startup_topology_validation
+    - model_warmup
+    - model_unload
+  authority_boundary: wrapper_prompts_do_not_grant_authority_control_plane_remains_operator_intent_approvals_scope_evidence_validators
+  personalities:
+    - role: local_fast
+      personality: terse_runtime_dispatcher
+    - role: local_deep
+      personality: policy_and_authority_arbiter
+    - role: local_code
+      personality: implementation_and_test_design_reviewer
+    - role: local_compact
+      personality: lossless_compactor
+    - role: poc_pressure
+      personality: poc_boundary_reviewer
+    - role: rag_synthesis
+      personality: citation_bound_synthesis
+    - role: operator_chat
+      personality: operator_facing_runtime_assistant
+next_tests:
+  - install_or_expose_gpt_oss_safeguard_20b_locally
+  - rerun_deep_conflict_probes_with_explicit_primordial_policy
+  - require_allowed_blocked_missing_authority_controlling_authority_and_exact_ids
+  - credential_validation_must_remain_blocked_under_recon_only_without_durable_intent_and_approval
+  - compare_safeguard_output_against_gemma4_e4b_and_qwen3_coder_next_as_secondary_planner_candidates
+external_model_notes:
+  escalation_order:
+    - GPT-5.5_high_or_extra_high_reasoning
+    - Claude_Opus_4.7_secondary_judge
+  rules:
+    - offload_high_risk_or_ambiguous_local_deep_decisions_to_frontier_model
+    - require_agreement_with_deterministic_policy_checks_before_changing_durable_task_state
+  reference_links:
+    - https://openai.com/index/introducing-gpt-oss-safeguard/
+    - https://openai.com/index/gpt-oss-safeguard-technical-report/
+    - https://platform.openai.com/docs/models/gpt-oss-20b
+    - https://huggingface.co/Qwen/Qwen3-30B-A3B-Instruct-2507
+authority_pipeline:
+  steps:
+    - deterministic_policy_pre_checks
+    - policy_model_classification
+    - general_reasoning_model_for_explanation_only
+    - deterministic_post_checks_before_durable_state_mutation
+poc_pressure_split:
+  design_surface: poc_design
+  execution_gate: poc_execution_gate
+  rules:
+    - poc_design_may_draft_inert_lab_artifacts_parser_fixtures_test_cases_and_pseudocode
+    - poc_execution_gate_returns_only_allow_block_or_escalate
+    - poc_execution_gate_must_be_backed_by_policy_model
+follow_up_changes:
+  - create_regression_benchmark_with_exact_hard_cases
+  - require_every_gate_output_to_cite_controlling_authority_id
+  - treat_outputs_missing_operator_intent_approval_id_or_evidence_id_as_invalid
+  - gemma4_e4b_for_quick_operator_ux_never_final_approval_authority
+  - retest_qwen_and_gemma_thinking_models_after_final_answer_template_behavior_is_fixed
+agent_communication:
+  core_rule: models_recommend_classify_summarize_and_draft_runtime_grants_authority
+  flow:
+    - operator_or_chat
+    - runtime
+    - task_evidence_intent_context_packet
+    - selected_model_role
+    - structured_output
+    - deterministic_validator
+    - durable_record_task_approval_or_evidence
+    - next_model_sees_durable_record_not_raw_peer_chat
+  durable_channels:
+    - channel: task_records
+      carries:
+        - work_item
+        - status
+        - owner
+        - prerequisites
+        - retries
+      used_by:
+        - local_fast
+        - runtime_planner
+        - workers
+    - channel: evidence_records
+      carries:
+        - observed_facts
+        - provenance
+        - source_ids
+      used_by:
+        - all_model_roles
+    - channel: approval_records
+      carries:
+        - allowed
+        - blocked
+        - pending
+        - expired_authority
+      used_by:
+        - policy_gate
+        - local_deep
+        - poc_execution_gate
+    - channel: operator_intent
+      carries:
+        - durable_policy_state_for_session
+      used_by:
+        - all_model_roles
+        - local_deep
+    - channel: guidance_records
+      carries:
+        - durable_per_target_operator_instructions
+      used_by:
+        - planner
+        - rag
+        - compactors
+    - channel: artifacts
+      carries:
+        - drafts
+        - summaries
+        - inert_poc_designs
+        - reports
+      used_by:
+        - local_code
+        - poc_design
+        - reviewers
+    - channel: model_traces
+      carries:
+        - model_recommendation
+        - cited_inputs
+        - validator_result
+      used_by:
+        - audit
+        - behavior_review
+        - local_compact
+    - channel: rag_index
+      carries:
+        - retrieved_evidence
+        - docs
+        - source_snippets
+      used_by:
+        - synthesis_models
+        - reviewers
+  handoff_sequence:
+    - local_fast_returns_route_summarize_escalate_or_draft_task_intent
+    - deterministic_policy_pre_check_rejects_impossible_or_unauthorized_requests
+    - local_deep_or_safeguard_classifies_authority_as_allow_block_or_escalate
+    - local_code_and_poc_design_draft_only_after_gate_passes
+    - poc_execution_gate_returns_only_allow_block_escalate_and_cites_authority
+    - local_compact_compresses_traces_evidence_and_decisions
+    - rag_supplies_cited_context_to_any_role
+    - runtime_validates_structured_output_before_writing_durable_state
+  canonical_handoff_packet_fields:
+    - handoff_type
+    - target
+    - operator_intent
+    - scope_ids
+    - evidence_ids
+    - approval_ids
+    - chat_request
+    - requested_action
+    - required_output
+  accepted_gate_response_fields:
+    - decision
+    - missing_authority
+    - controlling_authority
+    - cited_ids
+    - reason
+  validator_rejection_rules:
+    - reject_missing_operator_intent
+    - reject_gated_actions_without_approval_and_evidence_ids
+    - reject_uncited_authority_claims
+    - reject_scope_expansion_from_chat_alone
+    - reject_poc_execution_approval_from_non_policy_model
+    - reject_new_targets_credentials_exploit_execution_or_flag_collection_without_durable_authority
