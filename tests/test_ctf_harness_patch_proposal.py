@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from primordial.labs.ctf import PatchProposal
+from tests.support import fixture_flag
 
 
 class PatchProposalContractTests(unittest.TestCase):
@@ -70,7 +71,7 @@ class PatchProposalContractTests(unittest.TestCase):
             PatchProposal.create(
                 id="patch-raw-flag",
                 failure_analysis_id="failure-juice-1",
-                proposed_change="Hardcode ctf{hidden-answer} into the solve check.",
+                proposed_change="Hardcode " + fixture_flag("hidden-answer") + " into the solve check.",
                 files_changed=["primordial/labs/ctf/sessions.py"],
                 tests_added=["tests.test_ctf_harness_sessions"],
                 validation_results=[
@@ -101,7 +102,7 @@ class PatchProposalContractTests(unittest.TestCase):
                     {
                         "command": "python3 -m unittest tests.test_ctf_harness_solve_verification -v",
                         "status": "passed",
-                        "note": "Captured ctf{hidden-answer} during validation.",
+                        "note": "Captured " + fixture_flag("hidden-answer") + " during validation.",
                     }
                 ],
                 regression_results=[

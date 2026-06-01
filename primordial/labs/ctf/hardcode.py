@@ -10,7 +10,9 @@ import re
 FLAG_PATTERN = re.compile(r"\b(?:flag|ctf)\{[^}\s]{4,}\}", re.IGNORECASE)
 TARGET_IP_PATTERN = re.compile(r"\b(?:10|172|192)\.(?:\d{1,3}\.){2}\d{1,3}\b")
 CHALLENGE_CONDITIONAL_PATTERN = re.compile(
-    r"\b(?:if|elif)\s+[^:\n]*(?:target|challenge|lab)[^:\n]*==\s*[\"'][^\"']+[\"']",
+    r"\b(?:if|elif)\s+[^:\n]*"
+    r"(?:target(?:\.name|_name|\.id|_id)|challenge(?:\.name|_name|\.id|_id)|lab(?:\.name|_name|\.id|_id))"
+    r"[^:\n]*==\s*[\"'][^\"']+[\"']",
     re.IGNORECASE,
 )
 CREDENTIAL_LITERAL_PATTERN = re.compile(
@@ -34,6 +36,7 @@ CHALLENGE_FILENAME_LITERAL_PATTERN = re.compile(
     r"(?:bak|conf|db|json|key|php|sql|txt|zip)[\"']",
     re.IGNORECASE,
 )
+STRING_LITERAL_PATTERN = re.compile(r"([\"'])(.*?)\1")
 COMMAND_CHAIN_TOOL_PATTERN = re.compile(r"\b(?:curl|ffuf|gobuster|hydra|nmap|sqlmap|wfuzz)\b", re.IGNORECASE)
 COMMAND_BIGRAM_REVIEW_THRESHOLD = 0.70
 COMMAND_BIGRAM_MINIMUM = 8
@@ -58,11 +61,22 @@ RULE_ORDER = {
     "challenge_banner_literal": 6,
     "static_service_port": 7,
     "challenge_filename_literal": 8,
-    "hidden_solution_snippet": 9,
-    "command_sequence_similarity": 10,
-    "text_span_similarity": 11,
-    "code_simhash_similarity": 12,
+    "box_name_literal": 9,
+    "hidden_solution_snippet": 10,
+    "command_sequence_similarity": 11,
+    "text_span_similarity": 12,
+    "code_simhash_similarity": 13,
 }
+LINE_REGEX_RULES = (
+    (FLAG_PATTERN, "raw_flag", "raw flag-like material is not allowed"),
+    (TARGET_IP_PATTERN, "target_ip_literal", "target IP literals must not be baked into behavior"),
+    (CHALLENGE_CONDITIONAL_PATTERN, "challenge_specific_conditional", "challenge-specific conditionals are not generalized solve logic"),
+    (CREDENTIAL_LITERAL_PATTERN, "credential_literal", "credential literals must not be baked into generated solver behavior"),
+    (CHALLENGE_PATH_LITERAL_PATTERN, "challenge_path_literal", "challenge-specific path literals must not be baked into generated solver behavior"),
+    (CHALLENGE_BANNER_LITERAL_PATTERN, "challenge_banner_literal", "challenge-specific banner literals must not drive generated solver behavior"),
+    (STATIC_SERVICE_PORT_PATTERN, "static_service_port", "static service port assumptions must come from observed evidence"),
+    (CHALLENGE_FILENAME_LITERAL_PATTERN, "challenge_filename_literal", "challenge-specific filename literals must not be baked into generated solver behavior"),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,12 +104,14 @@ class HardcodeScanner:
         files: Mapping[str, str],
         *,
         hidden_solution_snippets: Iterable[str] = (),
+        box_names: Iterable[str] = (),
         reference_command_sequences: Iterable[Sequence[str]] = (),
         reference_text_spans: Iterable[str] = (),
         reference_code_spans: Iterable[str] = (),
     ) -> HardcodeScanResult:
         findings: list[HardcodeFinding] = []
         snippets = tuple(snippet.strip() for snippet in hidden_solution_snippets if len(snippet.strip()) >= 12)
+        box_name_literals = tuple(_normalize_box_name(name) for name in box_names if _normalize_box_name(name))
         command_sequences = tuple(
             tuple(command.strip() for command in sequence if command.strip()) for sequence in reference_command_sequences
         )
@@ -110,6 +126,7 @@ class HardcodeScanner:
                     str(path),
                     text,
                     hidden_solution_snippets=snippets,
+                    box_names=box_name_literals,
                     reference_command_sequences=command_sequences,
                     reference_text_spans=text_spans,
                     reference_code_spans=code_spans,
@@ -126,114 +143,73 @@ def _scan_text(
     content: str,
     *,
     hidden_solution_snippets: tuple[str, ...],
+    box_names: tuple[str, ...],
     reference_command_sequences: tuple[tuple[str, ...], ...],
     reference_text_spans: tuple[str, ...],
     reference_code_spans: tuple[str, ...],
 ) -> tuple[HardcodeFinding, ...]:
     findings: list[HardcodeFinding] = []
-    multiline_hidden_snippets = tuple(snippet for snippet in hidden_solution_snippets if "\n" in snippet)
+    findings.extend(_line_findings(path, content, hidden_solution_snippets=hidden_solution_snippets, box_names=box_names))
+    findings.extend(_multiline_hidden_snippet_findings(path, content, hidden_solution_snippets))
+    findings.extend(_command_similarity_findings(path, content, reference_command_sequences))
+    findings.extend(_text_span_similarity_findings(path, content, reference_text_spans))
+    findings.extend(_code_similarity_findings(path, content, reference_code_spans))
+    return tuple(findings)
+
+
+def _line_findings(
+    path: str,
+    content: str,
+    *,
+    hidden_solution_snippets: tuple[str, ...],
+    box_names: tuple[str, ...],
+) -> tuple[HardcodeFinding, ...]:
+    findings: list[HardcodeFinding] = []
     for line_number, line in enumerate(content.splitlines(), start=1):
-        if FLAG_PATTERN.search(line):
-            findings.append(
-                HardcodeFinding(
-                    rule_id="raw_flag",
-                    path=path,
-                    line=line_number,
-                    message="raw flag-like material is not allowed",
-                )
-            )
-        if TARGET_IP_PATTERN.search(line):
-            findings.append(
-                HardcodeFinding(
-                    rule_id="target_ip_literal",
-                    path=path,
-                    line=line_number,
-                    message="target IP literals must not be baked into behavior",
-                )
-            )
-        if CHALLENGE_CONDITIONAL_PATTERN.search(line):
-            findings.append(
-                HardcodeFinding(
-                    rule_id="challenge_specific_conditional",
-                    path=path,
-                    line=line_number,
-                    message="challenge-specific conditionals are not generalized solve logic",
-                )
-            )
-        if CREDENTIAL_LITERAL_PATTERN.search(line):
-            findings.append(
-                HardcodeFinding(
-                    rule_id="credential_literal",
-                    path=path,
-                    line=line_number,
-                    message="credential literals must not be baked into generated solver behavior",
-                )
-            )
+        findings.extend(_regex_line_findings(path, line, line_number))
         if _looks_like_scripted_command_chain(line):
-            findings.append(
-                HardcodeFinding(
-                    rule_id="scripted_command_chain",
-                    path=path,
-                    line=line_number,
-                    message="scripted command chains look like target-specific solve traces",
-                )
-            )
-        if CHALLENGE_PATH_LITERAL_PATTERN.search(line):
-            findings.append(
-                HardcodeFinding(
-                    rule_id="challenge_path_literal",
-                    path=path,
-                    line=line_number,
-                    message="challenge-specific path literals must not be baked into generated solver behavior",
-                )
-            )
-        if CHALLENGE_BANNER_LITERAL_PATTERN.search(line):
-            findings.append(
-                HardcodeFinding(
-                    rule_id="challenge_banner_literal",
-                    path=path,
-                    line=line_number,
-                    message="challenge-specific banner literals must not drive generated solver behavior",
-                )
-            )
-        if STATIC_SERVICE_PORT_PATTERN.search(line):
-            findings.append(
-                HardcodeFinding(
-                    rule_id="static_service_port",
-                    path=path,
-                    line=line_number,
-                    message="static service port assumptions must come from observed evidence",
-                )
-            )
-        if CHALLENGE_FILENAME_LITERAL_PATTERN.search(line):
-            findings.append(
-                HardcodeFinding(
-                    rule_id="challenge_filename_literal",
-                    path=path,
-                    line=line_number,
-                    message="challenge-specific filename literals must not be baked into generated solver behavior",
-                )
-            )
+            findings.append(_finding("scripted_command_chain", path, line_number, "scripted command chains look like target-specific solve traces"))
+        if _contains_box_name_literal(line, box_names):
+            findings.append(_finding("box_name_literal", path, line_number, "box names must not be baked into generated solver behavior"))
         if any(snippet in line for snippet in hidden_solution_snippets):
-            findings.append(
-                HardcodeFinding(
-                    rule_id="hidden_solution_snippet",
-                    path=path,
-                    line=line_number,
-                    message="hidden solution snippets must not appear in generated solver behavior",
-                )
-            )
-    for snippet in multiline_hidden_snippets:
+            findings.append(_finding("hidden_solution_snippet", path, line_number, "hidden solution snippets must not appear in generated solver behavior"))
+    return tuple(findings)
+
+
+def _regex_line_findings(path: str, line: str, line_number: int) -> tuple[HardcodeFinding, ...]:
+    return tuple(
+        _finding(rule_id, path, line_number, message)
+        for pattern, rule_id, message in LINE_REGEX_RULES
+        if pattern.search(line)
+    )
+
+
+def _multiline_hidden_snippet_findings(
+    path: str,
+    content: str,
+    hidden_solution_snippets: tuple[str, ...],
+) -> tuple[HardcodeFinding, ...]:
+    findings: list[HardcodeFinding] = []
+    for snippet in (item for item in hidden_solution_snippets if "\n" in item):
         offset = content.find(snippet)
         if offset != -1:
             findings.append(
-                HardcodeFinding(
-                    rule_id="hidden_solution_snippet",
-                    path=path,
-                    line=content[:offset].count("\n") + 1,
-                    message="hidden solution snippets must not appear in generated solver behavior",
+                _finding(
+                    "hidden_solution_snippet",
+                    path,
+                    content[:offset].count("\n") + 1,
+                    "hidden solution snippets must not appear in generated solver behavior",
                 )
             )
+    return tuple(findings)
+
+
+def _command_similarity_findings(
+    path: str,
+    content: str,
+    reference_command_sequences: tuple[tuple[str, ...], ...],
+) -> tuple[HardcodeFinding, ...]:
+    findings: list[HardcodeFinding] = []
     generated_commands = tuple(line.strip() for line in content.splitlines() if line.strip())
     for sequence in reference_command_sequences:
         if len(sequence) >= 4 and (
@@ -241,26 +217,44 @@ def _scan_text(
             or _command_bigram_similarity(generated_commands, sequence) >= COMMAND_BIGRAM_REVIEW_THRESHOLD
         ):
             findings.append(
-                HardcodeFinding(
-                    rule_id="command_sequence_similarity",
-                    path=path,
-                    line=_command_sequence_line(content, _first_overlapping_command(generated_commands, sequence)),
-                    message="command sequence bigram similarity requires review before accepting generated solver behavior",
-                )
+                _finding(
+                    "command_sequence_similarity",
+                    path,
+                    _command_sequence_line(content, _first_overlapping_command(generated_commands, sequence)),
+                    "command sequence bigram similarity requires review before accepting generated solver behavior",
+                ),
             )
+    return tuple(findings)
+
+
+def _text_span_similarity_findings(
+    path: str,
+    content: str,
+    reference_text_spans: tuple[str, ...],
+) -> tuple[HardcodeFinding, ...]:
+    findings: list[HardcodeFinding] = []
     normalized_content = _normalize_text_span(content)
     for span in reference_text_spans:
         normalized_span = _normalize_text_span(span)
         matched_text = _matching_text_span(normalized_content, normalized_span)
         if matched_text is not None:
             findings.append(
-                HardcodeFinding(
-                    rule_id="text_span_similarity",
-                    path=path,
-                    line=_text_span_line(content, matched_text),
-                    message="normalized text span similarity requires review before accepting generated solver behavior",
+                _finding(
+                    "text_span_similarity",
+                    path,
+                    _text_span_line(content, matched_text),
+                    "normalized text span similarity requires review before accepting generated solver behavior",
                 )
             )
+    return tuple(findings)
+
+
+def _code_similarity_findings(
+    path: str,
+    content: str,
+    reference_code_spans: tuple[str, ...],
+) -> tuple[HardcodeFinding, ...]:
+    findings: list[HardcodeFinding] = []
     content_code_tokens = _normalize_code_tokens(content)
     if len(content_code_tokens) >= CODE_SIMHASH_MINIMUM_TOKENS:
         for reference_code in reference_code_spans:
@@ -268,19 +262,37 @@ def _scan_text(
             matched_tokens = _matching_code_simhash_tokens(content_code_tokens, reference_code_tokens)
             if matched_tokens is not None:
                 findings.append(
-                    HardcodeFinding(
-                        rule_id="code_simhash_similarity",
-                        path=path,
-                        line=_code_span_line(content, matched_tokens),
-                        message="code SimHash similarity requires review before accepting generated solver behavior",
+                    _finding(
+                        "code_simhash_similarity",
+                        path,
+                        _code_span_line(content, matched_tokens),
+                        "code SimHash similarity requires review before accepting generated solver behavior",
                     )
                 )
     return tuple(findings)
 
 
+def _finding(rule_id: str, path: str, line: int, message: str) -> HardcodeFinding:
+    return HardcodeFinding(rule_id=rule_id, path=path, line=line, message=message)
+
+
 def _looks_like_scripted_command_chain(line: str) -> bool:
-    separators = line.count("&&") + line.count(";") + line.count("|")
+    separators = line.count("&&") + line.count(";") + len(re.findall(r"\s\|\s", line))
     return separators >= 2 and COMMAND_CHAIN_TOOL_PATTERN.search(line) is not None
+
+
+def _contains_box_name_literal(line: str, box_names: tuple[str, ...]) -> bool:
+    if not box_names:
+        return False
+    for match in STRING_LITERAL_PATTERN.finditer(line):
+        normalized_literal = _normalize_box_name(match.group(2))
+        if any(name and name in normalized_literal for name in box_names):
+            return True
+    return False
+
+
+def _normalize_box_name(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.lower())
 
 
 def _severity_for_rule(rule_id: str) -> str:

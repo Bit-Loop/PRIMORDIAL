@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from primordial.labs.ctf import BenchmarkRun
+from tests.support import fixture_flag
 
 
 class BenchmarkRunContractTests(unittest.TestCase):
@@ -57,7 +58,7 @@ class BenchmarkRunContractTests(unittest.TestCase):
     def test_benchmark_run_rejects_raw_flag_material_in_start_payload(self) -> None:
         with self.assertRaisesRegex(ValueError, "hidden flag material"):
             BenchmarkRun.start(
-                id="benchmark-ctf{training-only-hidden-value}",
+                id="benchmark-" + fixture_flag(),
                 target_set=["juice-shop-foundation"],
                 benchmark_mode="closed_book",
                 mutation_seed="seed:2026-05-23",
@@ -137,7 +138,7 @@ class BenchmarkRunContractTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "hidden flag material"):
             run.record_solve_result(
-                solve_session_id="solve-ctf{training-only-hidden-value}",
+                solve_session_id="solve-" + fixture_flag(),
                 target_id="juice-shop-foundation",
                 solve_status="blocked",
                 result="no_solve",

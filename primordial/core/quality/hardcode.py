@@ -36,6 +36,7 @@ NON_SOURCE_PATH_PREFIXES = (
     "AI_MODELS/",
     "ENV/",
     "agent_chat_api/runtime/",
+    "artifacts/model_eval/",
     "chat_log/",
     "env/",
     "goal/",

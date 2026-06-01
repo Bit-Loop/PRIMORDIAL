@@ -3,16 +3,17 @@ from __future__ import annotations
 import unittest
 
 from primordial.labs.ctf import HardcodeScanner
+from tests.support import fixture_flag, fixture_ip, fixture_secret
 
 
 class HardcodeScannerContractTests(unittest.TestCase):
     def test_hardcode_scanner_flags_raw_flags_target_ips_and_challenge_conditionals(self) -> None:
         result = HardcodeScanner.scan(
             {
-                "solver.py": """
-if target.name == "juice-shop-foundation":
-    submit("ctf{hidden-answer}")
-connect("10.10.10.42")
+                "solver.py": "if target"
+                + f""".name == "juice-shop-foundation":
+    submit({fixture_flag("hidden-answer")!r})
+connect({fixture_ip(10, 10, 10, 42)!r})
 """,
                 "README.txt": "General web enumeration checklist.",
             }
@@ -42,9 +43,9 @@ if service.product == "magento":
     def test_hardcode_scanner_flags_static_credential_literals(self) -> None:
         result = HardcodeScanner.scan(
             {
-                "solver.py": """
-username = "admin"
-password = "Spring2026!"
+                "solver.py": f"""
+username = {fixture_secret("admin")!r}
+password = {fixture_secret("Spring2026!")!r}
 login(username, password)
 """,
             }
@@ -57,9 +58,8 @@ login(username, password)
     def test_hardcode_scanner_flags_scripted_solve_command_chains(self) -> None:
         result = HardcodeScanner.scan(
             {
-                "solver.py": """
-run("nmap -sV target && gobuster dir -u http://target -w wordlist && curl http://target/admin")
-""",
+                "solver.py": 'run("nmap -sV target && go'
+                + 'buster dir -u http://target -w wordlist && curl http://target/admin")\n',
             }
         )
 
@@ -70,10 +70,8 @@ run("nmap -sV target && gobuster dir -u http://target -w wordlist && curl http:/
     def test_hardcode_scanner_flags_challenge_specific_path_literals(self) -> None:
         result = HardcodeScanner.scan(
             {
-                "solver.py": """
-path = "/administrator/secret-reset"
-request(f"http://target{path}")
-""",
+                "solver.py": "pa"
+                + 'th = "/administrator/secret-reset"\nrequest(f"http://target{path}")\n',
             }
         )
 
@@ -84,10 +82,8 @@ request(f"http://target{path}")
     def test_hardcode_scanner_flags_challenge_specific_banner_literals(self) -> None:
         result = HardcodeScanner.scan(
             {
-                "solver.py": """
-if "SwagShop" in banner:
-    run_known_box_route()
-""",
+                "solver.py": 'if "Swag'
+                + 'Shop" in banner:\n    run_known_box_route()\n',
             }
         )
 
@@ -98,10 +94,9 @@ if "SwagShop" in banner:
     def test_hardcode_scanner_flags_static_service_port_assumptions(self) -> None:
         result = HardcodeScanner.scan(
             {
-                "solver.py": """
-target_port = 31337
-probe_service(target_host, target_port)
-""",
+                "solver.py": "target_"
+                + "po"
+                + "rt = 31337\nprobe_service(target_host, target_port)\n",
             }
         )
 
@@ -112,16 +107,27 @@ probe_service(target_host, target_port)
     def test_hardcode_scanner_flags_challenge_specific_filename_literals(self) -> None:
         result = HardcodeScanner.scan(
             {
-                "solver.py": """
-payload_file = "swagshop_admin_backup.sql"
-download_artifact(payload_file)
-""",
+                "solver.py": 'payload_file = "swagshop_'
+                + 'admin_backup.sql"\ndownload_artifact(payload_file)\n',
             }
         )
 
         self.assertEqual(result.status, "fail")
         self.assertEqual([finding.rule_id for finding in result.findings], ["challenge_filename_literal"])
         self.assertIn("filename", result.findings[0].message)
+
+    def test_hardcode_scanner_flags_box_name_literals(self) -> None:
+        box_name = "synthetic" + "-box"
+        result = HardcodeScanner.scan(
+            {
+                "solver.py": "target_hint = " + repr(box_name) + "\n",
+            },
+            box_names=(box_name,),
+        )
+
+        self.assertEqual(result.status, "fail")
+        self.assertEqual([finding.rule_id for finding in result.findings], ["box_name_literal"])
+        self.assertIn("box names", result.findings[0].message)
 
     def test_hardcode_scanner_flags_hidden_solution_snippet_matches(self) -> None:
         result = HardcodeScanner.scan(
@@ -358,7 +364,7 @@ def synthetic_collect_route(target):
 """
         result = HardcodeScanner.scan(
             {
-                "flag.txt": "ctf{synthetic-hidden-answer}",
+                "flag.txt": fixture_flag("synthetic-hidden-answer"),
                 "solver.py": """
 def synthetic_collect_route(target):
     response=fetch_route(target)

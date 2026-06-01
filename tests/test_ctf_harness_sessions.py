@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from primordial.labs.ctf import SolveSession
+from tests.support import fixture_flag
 
 
 class SolveSessionContractTests(unittest.TestCase):
@@ -75,14 +76,14 @@ class SolveSessionContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "hidden flag material"):
             session.record_flag_submission(
                 challenge_id="juice-shop-foundation",
-                captured_flag_ref="ctf{training-only-hidden-value}",
+                captured_flag_ref=fixture_flag(),
                 policy_decision_id="policy:allow-submit",
             )
 
     def test_solve_session_rejects_raw_flag_material_in_start_payload(self) -> None:
         with self.assertRaisesRegex(ValueError, "hidden flag material"):
             SolveSession.start(
-                id="solve-ctf{training-only-hidden-value}",
+                id="solve-" + fixture_flag(),
                 target_id="juice-shop-foundation",
                 engagement_profile="co_internal_lab",
                 active_intent="recon_only",
@@ -104,7 +105,7 @@ class SolveSessionContractTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "hidden flag material"):
             session.record_action(
-                action_id="action-ctf{training-only-hidden-value}",
+                action_id="action-" + fixture_flag(),
                 action_type="http_probe",
                 status="completed",
                 evidence_ids=["evidence:http-title"],
@@ -218,7 +219,7 @@ class SolveSessionContractTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "hidden flag material"):
             session.record_blocked_action(
-                action_id="action-ctf{training-only-hidden-value}",
+                action_id="action-" + fixture_flag(),
                 reason="recon_only blocks flag submission",
                 policy_decision_id="policy:block-flag",
             )
@@ -236,7 +237,7 @@ class SolveSessionContractTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "hidden flag material"):
             session.record_policy_decision(
-                decision_id="policy-ctf{training-only-hidden-value}",
+                decision_id="policy-" + fixture_flag(),
                 action="ctfd_submit_flag",
                 decision="blocked",
             )
@@ -268,7 +269,7 @@ class SolveSessionContractTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "hidden flag material"):
             session.complete(
-                result="blocked after seeing ctf{training-only-hidden-value}",
+                result="blocked after seeing " + fixture_flag(),
                 solve_status="blocked",
                 report_ref="report:juice-1",
             )

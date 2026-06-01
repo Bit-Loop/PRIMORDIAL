@@ -6,6 +6,7 @@ from pathlib import Path
 import unittest
 
 from primordial.labs.ctf import CTFTarget, load_ctf_target_manifest, load_ctf_target_manifest_file
+from tests.support import fixture_flag
 
 
 class CTFTargetManifestTests(unittest.TestCase):
@@ -84,7 +85,7 @@ class CTFTargetManifestTests(unittest.TestCase):
             "difficulty": "foundation",
             "scope": {"network": "unsafe_lab", "assets": ["http://127.0.0.1:3101"]},
             "provisioning": {"mode": "docker", "network": "unsafe_lab"},
-            "success_condition": {"type": "flag", "expected_flag": "FLAG{hidden-answer}"},
+            "success_condition": {"type": "flag", "expected_flag": fixture_flag("hidden-answer").upper()},
             "policy": {"default_intent": "recon_only"},
         }
 
@@ -116,7 +117,7 @@ class CTFTargetManifestTests(unittest.TestCase):
             "difficulty": "foundation",
             "scope": {"network": "raw_flag_value_lab", "assets": ["http://127.0.0.1:3115"]},
             "provisioning": {"mode": "docker", "network": "raw_flag_value_lab"},
-            "success_condition": {"proof_hint": "Submit ctf{hidden-answer} to score."},
+            "success_condition": {"proof_hint": "Submit " + fixture_flag("hidden-answer") + " to score."},
             "policy": {"default_intent": "recon_only"},
         }
 

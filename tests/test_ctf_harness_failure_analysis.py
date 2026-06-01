@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from primordial.labs.ctf import FailureAnalysis
+from tests.support import fixture_flag
 
 
 class FailureAnalysisContractTests(unittest.TestCase):
@@ -52,7 +53,7 @@ class FailureAnalysisContractTests(unittest.TestCase):
                 related_evidence=["evidence:http-title"],
                 related_policy_decisions=[],
                 related_model_runs=[],
-                suspected_root_cause="Report included FLAG{hidden-answer}.",
+                suspected_root_cause="Report included " + fixture_flag("hidden-answer").upper() + ".",
                 proposed_fix="Store redacted proof references instead of raw flags.",
                 github_issue_id="github:issue-43",
             )
@@ -63,7 +64,7 @@ class FailureAnalysisContractTests(unittest.TestCase):
                 id="failure-raw-flag-ref",
                 solve_session_id="solve-juice-1",
                 failure_class="reporting",
-                related_evidence=["evidence:http-title", "ctf{hidden-answer}"],
+                related_evidence=["evidence:http-title", fixture_flag("hidden-answer")],
                 related_policy_decisions=[],
                 related_model_runs=[],
                 suspected_root_cause="Report copied an unsafe reference into failure analysis.",

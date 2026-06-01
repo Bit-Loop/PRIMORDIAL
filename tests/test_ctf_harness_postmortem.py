@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from primordial.labs.ctf import PostmortemRecord
+from tests.support import fixture_flag
 
 
 class PostmortemRecordContractTests(unittest.TestCase):
@@ -87,7 +88,7 @@ class PostmortemRecordContractTests(unittest.TestCase):
                 solve_status="failed",
                 mode="postmortem",
                 source_refs=["writeup:juice-shop-foundation"],
-                lessons=["The failed path ended at ctf{training-only-hidden-value}."],
+                lessons=["The failed path ended at " + fixture_flag() + "."],
                 generalized_changes=["Add redaction tests for captured secrets."],
                 tests_added=["tests.test_ctf_harness_hardcode_scan"],
             )
@@ -95,7 +96,7 @@ class PostmortemRecordContractTests(unittest.TestCase):
     def test_postmortem_record_rejects_raw_flag_material_in_payload_identity(self) -> None:
         with self.assertRaisesRegex(ValueError, "hidden flag material"):
             PostmortemRecord.create(
-                id="postmortem-ctf{training-only-hidden-value}",
+                id="postmortem-" + fixture_flag(),
                 target_id="juice-shop-foundation",
                 solve_session_id="solve-juice-1",
                 solve_status="failed",

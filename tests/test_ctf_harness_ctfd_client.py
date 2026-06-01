@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from primordial.labs.ctf import FakeCTFdClient
+from tests.support import fixture_flag
 
 
 class FakeCTFdClientContractTests(unittest.TestCase):
@@ -38,7 +39,7 @@ class FakeCTFdClientContractTests(unittest.TestCase):
                         "id": "hidden-answer",
                         "title": "Hidden Answer",
                         "category": "web",
-                        "expected_flag": "ctf{hidden-answer}",
+                        "expected_flag": fixture_flag("hidden-answer"),
                     }
                 ],
                 scoreboard={},

@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from primordial.labs.ctf import ClosedBookPackage, load_ctf_target_manifest
+from tests.support import fixture_flag
 
 
 class ClosedBookPackageContractTests(unittest.TestCase):
@@ -63,7 +64,7 @@ class ClosedBookPackageContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "raw flag"):
             ClosedBookPackage.build(
                 target=target,
-                candidate_paths=["src/ctf{hidden-answer}.txt"],
+                candidate_paths=["src/" + fixture_flag("hidden-answer") + ".txt"],
             )
 
 

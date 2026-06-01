@@ -47,10 +47,15 @@ from primordial.core.providers.ollama import OllamaModelListResult, OllamaPreloa
 from primordial.core.web.app import PrimordialWebApp, WebResponse
 from primordial.core.web.server import _WebConsoleRequestHandler
 from primordial.runtime import PrimordialRuntime
-from tests.support import build_probe_fixture, write_scope_file
+from tests.support import build_probe_fixture, fixture_ip, write_scope_file
 
 
 MANIFESTS_DIR = Path(__file__).resolve().parents[1] / "manifests"
+ALPHA_IP = fixture_ip(10, 10, 10, 10)
+HELIX_IP = fixture_ip(10, 129, 54, 140)
+PIRATE_IP = fixture_ip(10, 129, 47, 117)
+REPLACEMENT_IP = fixture_ip(10, 129, 99, 99)
+UPDATED_IP = fixture_ip(10, 129, 244, 95)
 
 
 class WebConsoleTests(unittest.TestCase):
@@ -362,8 +367,8 @@ class WebConsoleTests(unittest.TestCase):
                     "handle": "helix.htb",
                     "display_name": "helix.htb",
                     "profile": "hack_the_box",
-                    "assets": ["helix.htb", "10.129.54.140"],
-                    "active_ip": "10.129.54.140",
+                    "assets": ["helix.htb", HELIX_IP],
+                    "active_ip": HELIX_IP,
                     "in_scope": True,
                 }
             ).encode("utf-8"),
@@ -1257,8 +1262,8 @@ class WebConsoleTests(unittest.TestCase):
                     "handle": "pirate.htb",
                     "display_name": "Pirate HTB",
                     "profile": "hack_the_box",
-                    "assets": ["pirate.htb", "10.129.47.117"],
-                    "active_ip": "10.129.47.117",
+                    "assets": ["pirate.htb", PIRATE_IP],
+                    "active_ip": PIRATE_IP,
                     "in_scope": True,
                     "metadata": {"target_kind": "htb_lab"},
                 }
@@ -1268,7 +1273,7 @@ class WebConsoleTests(unittest.TestCase):
 
         self.assertEqual(response.status, 200)
         self.assertEqual(payload["result"]["target"]["handle"], "pirate.htb")
-        self.assertEqual(payload["result"]["target"]["metadata"]["active_ip"], "10.129.47.117")
+        self.assertEqual(payload["result"]["target"]["metadata"]["active_ip"], PIRATE_IP)
         self.assertEqual(payload["result"]["target"]["metadata"]["target_kind"], "htb_lab")
         self.assertIn("scope", payload)
         self.assertIn("scopePayload", payload)
@@ -1287,7 +1292,7 @@ class WebConsoleTests(unittest.TestCase):
                     "display_name": "helix.htb",
                     "profile": "hack_the_box",
                     "assets": ["helix.htb"],
-                    "active_ip": "10.129.54.140",
+                    "active_ip": HELIX_IP,
                     "in_scope": True,
                 }
             ).encode("utf-8"),
@@ -1297,12 +1302,12 @@ class WebConsoleTests(unittest.TestCase):
 
         self.assertEqual(response.status, 200)
         self.assertEqual(payload["result"]["target"]["handle"], "helix.htb")
-        self.assertEqual(payload["result"]["target"]["metadata"]["active_ip"], "10.129.54.140")
+        self.assertEqual(payload["result"]["target"]["metadata"]["active_ip"], HELIX_IP)
         self.assertIsNotNone(target)
         assert target is not None
         assets = {item.asset for item in self.runtime.store.list_scope_assets(target.id)}
         self.assertIn("helix.htb", assets)
-        self.assertIn("10.129.54.140", assets)
+        self.assertIn(HELIX_IP, assets)
 
     def test_target_registration_can_replace_scope_assets_when_active_ip_changes(self) -> None:
         first = self.app.dispatch(
@@ -1313,8 +1318,8 @@ class WebConsoleTests(unittest.TestCase):
                     "handle": "helix.htb",
                     "display_name": "helix.htb",
                     "profile": "hack_the_box",
-                    "assets": ["helix.htb", "10.129.54.140"],
-                    "active_ip": "10.129.54.140",
+                    "assets": ["helix.htb", HELIX_IP],
+                    "active_ip": HELIX_IP,
                     "in_scope": True,
                     "replace_scope_assets": True,
                 }
@@ -1329,7 +1334,7 @@ class WebConsoleTests(unittest.TestCase):
                     "display_name": "helix.htb",
                     "profile": "hack_the_box",
                     "assets": ["helix.htb"],
-                    "active_ip": "10.129.99.99",
+                    "active_ip": REPLACEMENT_IP,
                     "in_scope": True,
                     "replace_scope_assets": True,
                 }
@@ -1342,11 +1347,11 @@ class WebConsoleTests(unittest.TestCase):
         self.assertIsNotNone(target)
         assert target is not None
         assets = {item.asset for item in self.runtime.store.list_scope_assets(target.id)}
-        self.assertEqual(assets, {"helix.htb", "10.129.99.99"})
-        self.assertEqual(target.metadata["active_ip"], "10.129.99.99")
+        self.assertEqual(assets, {"helix.htb", REPLACEMENT_IP})
+        self.assertEqual(target.metadata["active_ip"], REPLACEMENT_IP)
         self.assertEqual(target.metadata["active_ip_generation"], 2)
         notes = self.runtime.store.list_notes(target_id=target.id, limit=10)
-        self.assertTrue(any(note.metadata.get("previous_ip") == "10.129.54.140" for note in notes))
+        self.assertTrue(any(note.metadata.get("previous_ip") == HELIX_IP for note in notes))
 
     def test_target_registration_rejects_invalid_active_ip(self) -> None:
         response = self.app.dispatch(
@@ -1422,7 +1427,7 @@ class WebConsoleTests(unittest.TestCase):
                     "source": "web-test.json",
                     "scope": {
                         "targets": [
-                            {"handle": "alpha.htb", "assets": ["alpha.htb", "10.10.10.10"]},
+                            {"handle": "alpha.htb", "assets": ["alpha.htb", ALPHA_IP]},
                             {"handle": "beta.htb", "assets": [{"asset": "https://beta.htb", "asset_type": "webapp"}]},
                         ]
                     },
@@ -1970,7 +1975,7 @@ class WebConsoleTests(unittest.TestCase):
         self.runtime.register_target(
             handle="pirate.htb",
             profile=ScopeProfile.HACK_THE_BOX,
-            assets=[{"asset": "10.129.47.117", "asset_type": "ip"}],
+            assets=[{"asset": PIRATE_IP, "asset_type": "ip"}],
             emit_event=False,
         )
         self.runtime.store.insert_evidence(
@@ -1978,14 +1983,14 @@ class WebConsoleTests(unittest.TestCase):
                 target_id=target.id,
                 type=EvidenceType.TOOL_OUTPUT,
                 title="TCP service discovery",
-                summary="Observed services on 10.129.47.117.",
+                summary="Observed services on " + PIRATE_IP + ".",
                 source_ref="fixture://old-service",
                 verification_status=VerificationStatus.VERIFIED,
                 confidence=0.8,
                 freshness=0.9,
                 metadata={
                     "kind": "tcp_service_discovery",
-                    "open_services": [{"host": "10.129.47.117", "port": 445, "service": "smb"}],
+                    "open_services": [{"host": PIRATE_IP, "port": 445, "service": "smb"}],
                 },
             )
         )
@@ -1999,7 +2004,7 @@ class WebConsoleTests(unittest.TestCase):
             update_response = self.app.dispatch(
                 "POST",
                 "/api/chat",
-                json.dumps({"message": "You should be using 10.129.244.95", "target": "pirate.htb"}).encode("utf-8"),
+                json.dumps({"message": "You should be using " + UPDATED_IP, "target": "pirate.htb"}).encode("utf-8"),
             )
             followup_response = self.app.dispatch(
                 "POST",
@@ -2015,11 +2020,11 @@ class WebConsoleTests(unittest.TestCase):
         assert refreshed is not None
         ip_assets = [asset.asset for asset in self.runtime.store.list_scope_assets(refreshed.id) if asset.asset_type == "ip"]
 
-        self.assertIn("10.129.47.117", question_answer)
+        self.assertIn(PIRATE_IP, question_answer)
         self.assertIn("Target IP Updated", update_answer)
-        self.assertEqual(refreshed.metadata["active_ip"], "10.129.244.95")
-        self.assertIn("10.129.244.95", ip_assets)
-        self.assertIn("10.129.244.95", followup_answer)
+        self.assertEqual(refreshed.metadata["active_ip"], UPDATED_IP)
+        self.assertIn(UPDATED_IP, ip_assets)
+        self.assertIn(UPDATED_IP, followup_answer)
         self.assertIn("historical", followup_answer.lower())
         generate.assert_not_called()
 
