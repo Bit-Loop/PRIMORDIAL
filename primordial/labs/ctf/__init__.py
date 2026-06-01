@@ -5,6 +5,7 @@ from primordial.labs.ctf.applicability import (
     validate_vulhub_exploit_applicability,
 )
 from primordial.labs.ctf.benchmark import BenchmarkRun
+from primordial.labs.ctf.cicd import CICDGoatPhaseControlResult, verify_cicd_goat_phase_controls
 from primordial.labs.ctf.closed_book import ClosedBookPackage
 from primordial.labs.ctf.ctfd import FakeCTFdClient
 from primordial.labs.ctf.environment import (
@@ -45,6 +46,7 @@ from primordial.labs.ctf.verification import SolveVerificationResult, SolveVerif
 
 __all__ = [
     "BenchmarkRun",
+    "CICDGoatPhaseControlResult",
     "CTFTarget",
     "CTFHarnessIntegrity",
     "CTFIntegrityResult",
@@ -76,6 +78,7 @@ __all__ = [
     "VulhubEnvironmentProof",
     "compute_scoring_summary",
     "validate_scoring_results_evidence_refs",
+    "verify_cicd_goat_phase_controls",
     "load_ctf_target_manifest",
     "load_ctf_target_manifest_file",
     "load_ctf_lab_phase_catalog",
