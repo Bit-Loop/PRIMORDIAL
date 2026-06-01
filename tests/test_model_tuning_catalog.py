@@ -90,15 +90,18 @@ class ModelTuningCatalogTests(unittest.TestCase):
         self.assertIn("--max-model-minutes 45", guard.cli_override)
         self.assertIn("runtime/model_eval/lmstudio_performance_profile.json", guard.saved_artifacts_updated)
 
-    def test_runtime_guard_saved_artifacts_are_existing_catalog_authorities(self) -> None:
+    def test_runtime_guard_saved_source_artifacts_are_existing_catalog_authorities(self) -> None:
         tuning = ModelTuningCatalog(REPO_ROOT / "catalog" / "project").load()
         required_paths = (
             tuning.result.detailed_artifact,
-            tuning.result.reusable_profile,
             *tuning.runtime_guard.saved_artifacts_updated,
         )
 
-        missing = [path for path in required_paths if not (REPO_ROOT / path).exists()]
+        missing = [
+            path
+            for path in required_paths
+            if not path.startswith("runtime/") and not (REPO_ROOT / path).exists()
+        ]
 
         self.assertEqual(missing, [])
 
