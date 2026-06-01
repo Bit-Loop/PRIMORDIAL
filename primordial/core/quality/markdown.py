@@ -296,8 +296,6 @@ def _is_generated_markdown_path(rel_path: str) -> bool:
 
 def _is_non_source_markdown_path(rel_path: str) -> bool:
     normalized = rel_path.replace("\\", "/")
-    if normalized.startswith(f"{QUARANTINE_MARKDOWN_ROOT.as_posix()}/"):
-        return False
     return any(normalized.startswith(prefix) for prefix in NON_SOURCE_MARKDOWN_PATH_PREFIXES)
 
 
