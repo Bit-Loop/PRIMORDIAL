@@ -125,6 +125,31 @@ class StructureQualityTests(unittest.TestCase):
         ]
         self.assertEqual(records, [])
 
+    def test_runtime_module_and_class_are_bounded_after_composition_extraction(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+
+        audit = audit_structure(root)
+
+        records = [
+            record
+            for record in audit.records
+            if record.path == "primordial/app/runtime.py"
+            and record.kind in {"module", "class"}
+        ]
+        self.assertEqual(records, [])
+
+    def test_runtime_composition_modules_have_no_structure_violations(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+
+        audit = audit_structure(root)
+
+        records = [
+            record
+            for record in audit.records
+            if record.path.startswith("primordial/app/runtime_")
+        ]
+        self.assertEqual(records, [])
+
     def test_runtime_set_target_active_ip_is_not_oversized(self) -> None:
         root = Path(__file__).resolve().parents[1]
 
