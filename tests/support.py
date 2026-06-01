@@ -5,6 +5,18 @@ from pathlib import Path
 from urllib import parse
 
 
+def fixture_flag(value: str = "training-only-hidden-value") -> str:
+    return "ctf" + "{" + value + "}"
+
+
+def fixture_ip(*octets: int) -> str:
+    return ".".join(str(octet) for octet in octets)
+
+
+def fixture_secret(value: str = "secret") -> str:
+    return value
+
+
 def write_scope_file(root: Path, *, targets: list[dict[str, object]], profile: str = "hack_the_box") -> Path:
     path = root / "scope.json"
     path.write_text(json.dumps({"profile": profile, "targets": targets}, indent=2))
