@@ -173,6 +173,35 @@ class ContextCurrentRefsTestsPart2(ContextCurrentRefsTestsBase):
             "source_markdown",
         )
 
+    def test_current_refs_exclude_quarantined_markdown_paths(self) -> None:
+        envelopes = [
+            ContextEnvelope(
+                ref="rag:quarantined-rag-src",
+                kind="rag",
+                authority="advisory",
+                source_type="validated_external",
+                target_id="target-a",
+                active_generation_id="generation:2",
+                purpose="planner",
+                sink="prompt",
+                content="Quarantined advisory Markdown must not support current refs.",
+                citations=["rag:quarantined-rag-src"],
+                metadata={"source_file": "runtime/quarantine/markdown/docs/RAG_SRC/0x11-t10.md"},
+            )
+        ]
+        context = {
+            "target_id": "target-a",
+            "active_generation_id": "generation:2",
+            "purpose": "planner",
+            "role": "methodology_advisor",
+        }
+
+        self.assertEqual(current_rag_refs(envelopes, **context), set())
+        self.assertEqual(
+            prompt_context_omission_reason(envelopes[0], purpose="planner", role="methodology_advisor"),
+            "source_markdown",
+        )
+
     def test_prompt_context_omission_reason_centralizes_prompt_safety(self) -> None:
         valid = ContextEnvelope(
             ref="note:current",

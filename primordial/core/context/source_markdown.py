@@ -18,6 +18,7 @@ SOURCE_MARKDOWN_PATH_KEYS = (
     "source_path",
     "source_url",
 )
+QUARANTINED_MARKDOWN_PATH_PARTS = ("runtime", "quarantine", "markdown")
 
 
 def has_source_markdown_path(envelope: ContextEnvelope) -> bool:
@@ -46,7 +47,15 @@ def is_source_markdown_path(value: object) -> bool:
 
 def _path_is_source_markdown(path: str) -> bool:
     parts = tuple(part for part in path.split("/") if part)
-    return len(parts) >= 3 and parts[0:2] == ("docs", "rag_src") and parts[-1].endswith(".md")
+    if not parts or not parts[-1].endswith(".md"):
+        return False
+    return parts[0:2] == ("docs", "rag_src") or _contains_path_parts(parts, QUARANTINED_MARKDOWN_PATH_PARTS)
+
+
+def _contains_path_parts(parts: tuple[str, ...], expected: tuple[str, ...]) -> bool:
+    if len(parts) < len(expected):
+        return False
+    return any(parts[index : index + len(expected)] == expected for index in range(len(parts) - len(expected) + 1))
 
 
 def _normalized_paths(value: object) -> tuple[str, ...]:
