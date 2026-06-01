@@ -191,4 +191,33 @@ class ContextReportWriterTestsPart2(ContextReportWriterTestsBase):
         self.assertEqual(result.rejected_refs, ["model:export-path-report-summary"])
         self.assertTrue(any("generated export" in error for error in result.errors))
 
+    def test_report_sink_rejects_source_markdown_path(self) -> None:
+        envelope = ContextEnvelope(
+            ref="model:source-markdown-report-summary",
+            kind="model_summary",
+            authority="derived",
+            source_type="ai_output",
+            target_id="target-a",
+            active_generation_id="generation:2",
+            purpose="report_generation",
+            sink="report",
+            content="AI prose sourced from quarantined Markdown must not feed report output.",
+            citations=["evidence:http-banner"],
+            metadata={
+                "source_file": "runtime/quarantine/markdown/docs/RAG_SRC/0x11-t10.md",
+                "source_refs": ["evidence:http-banner"],
+            },
+        )
+
+        result = ContextSinkValidator().validate(
+            "report",
+            [envelope],
+            known_evidence_refs={"evidence:http-banner"},
+        )
+
+        self.assertFalse(result.valid)
+        self.assertEqual(result.accepted_refs, [])
+        self.assertEqual(result.rejected_refs, ["model:source-markdown-report-summary"])
+        self.assertTrue(any("source_markdown" in error for error in result.errors))
+
 __all__ = ["ContextReportWriterTestsPart2"]
