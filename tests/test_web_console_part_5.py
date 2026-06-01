@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+
 from tests.test_web_console_common import *
 
 
@@ -160,7 +162,10 @@ class WebConsoleTestsPart5(WebConsoleTestsBase):
         self.assertIn("Collect current service/version evidence before Searchsploit research", answer)
 
     def test_generated_web_bundle_has_no_fixture_switch_or_payload(self) -> None:
-        generated = Path("primordial/core/web/frontend/src/generated-gui.jsx").read_text(encoding="utf-8")
+        generated_path = Path("primordial/core/web/frontend/src/generated-gui.jsx")
+        if not generated_path.exists():
+            subprocess.run(["node", "scripts/build-gui.mjs"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        generated = generated_path.read_text(encoding="utf-8")
         static_assets = Path("primordial/core/web/static/assets")
         bundle_text = "\n".join(path.read_text(encoding="utf-8") for path in static_assets.glob("*.js"))
         forbidden = [
