@@ -2,16 +2,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import re
 from typing import Any, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from primordial.labs.ctf.applicability import ExploitApplicabilityResult, validate_vulhub_exploit_applicability
 from primordial.labs.ctf.hidden_material import normalized_hidden_material_key, reject_hidden_flag_material
 from primordial.labs.ctf.targets import CTFTarget
 
 
 LOCAL_CONTAINER_MODES = frozenset({"container", "docker", "podman"})
 LOCAL_CONTAINER_EXIT_GATES = ("local_container_environment_verified",)
+_SERVER_PRODUCT_VERSION = re.compile(r"(?P<product>[A-Za-z][A-Za-z0-9_.-]*)/(?P<version>[0-9][A-Za-z0-9_.-]*)")
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +42,28 @@ class EnvironmentProof:
             "exit_gates": list(self.exit_gates),
             "provisioning": _plain_mapping(self.provisioning),
             "observations": _plain_mapping(self.observations),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class VulhubEnvironmentProof:
+    target_id: str
+    observed_product: str
+    observed_version: str
+    evidence_refs: tuple[str, ...]
+    exit_gates: tuple[str, ...]
+    environment_proof: EnvironmentProof
+    applicability: ExploitApplicabilityResult
+
+    def as_payload(self) -> dict[str, Any]:
+        return {
+            "target_id": self.target_id,
+            "observed_product": self.observed_product,
+            "observed_version": self.observed_version,
+            "evidence_refs": list(self.evidence_refs),
+            "exit_gates": list(self.exit_gates),
+            "environment_proof": self.environment_proof.as_payload(),
+            "applicability": self.applicability.as_payload(),
         }
 
 
@@ -108,6 +133,42 @@ def probe_local_container_environment(
     )
 
 
+def probe_vulhub_cve_environment(
+    target: CTFTarget,
+    *,
+    reset_evidence_ref: str,
+    profile: str,
+    timeout_seconds: float = 5.0,
+    body_limit_bytes: int = 4096,
+) -> VulhubEnvironmentProof:
+    proof = probe_local_container_environment(
+        target,
+        reset_evidence_ref=reset_evidence_ref,
+        profile=profile,
+        timeout_seconds=timeout_seconds,
+        body_limit_bytes=body_limit_bytes,
+    )
+    observed_product, observed_version = _observed_vulhub_product_version(target, proof)
+    if not observed_version:
+        raise ValueError("Vulhub environment proof requires observed version evidence")
+    applicability = validate_vulhub_exploit_applicability(
+        target,
+        observed_product=observed_product,
+        observed_version=observed_version,
+        evidence_refs=proof.evidence_refs,
+        observations=proof.observations,
+    )
+    return VulhubEnvironmentProof(
+        target_id=target.id,
+        observed_product=observed_product,
+        observed_version=observed_version,
+        evidence_refs=proof.evidence_refs,
+        exit_gates=proof.exit_gates + applicability.exit_gates,
+        environment_proof=proof,
+        applicability=applicability,
+    )
+
+
 def _validate_local_container_target(target: CTFTarget) -> None:
     mode = _token(target.reset.mode or target.platform)
     if mode not in LOCAL_CONTAINER_MODES:
@@ -174,6 +235,7 @@ def _probe_http_asset(asset: str, *, timeout_seconds: float, body_limit_bytes: i
             status_code = int(getattr(response, "status", response.getcode()))
             body = response.read(max(body_limit_bytes, 0) + 1)
             content_type = response.headers.get("Content-Type", "")
+            server_banner = response.headers.get("Server", "")
     except HTTPError as exc:
         exc.close()
         raise ValueError(f"EnvironmentProof asset did not return healthy HTTP response: {asset}") from exc
@@ -189,8 +251,39 @@ def _probe_http_asset(asset: str, *, timeout_seconds: float, body_limit_bytes: i
         "body_sha256": hashlib.sha256(body).hexdigest(),
         "body_bytes_sampled": len(body),
     }
+    _add_server_banner_observation(observation, server_banner)
     reject_hidden_flag_material(observation, path="ctf_environment_probe", label="EnvironmentProof")
     return observation
+
+
+def _add_server_banner_observation(observation: dict[str, Any], server_banner: str) -> None:
+    banner = str(server_banner or "").strip()
+    if not banner:
+        return
+    observation["server_banner_sha256"] = hashlib.sha256(banner.encode("utf-8")).hexdigest()
+    match = _SERVER_PRODUCT_VERSION.search(banner)
+    if match:
+        observation["server_product_token"] = match.group("product").strip()
+        observation["server_version"] = match.group("version").strip()
+
+
+def _observed_vulhub_product_version(target: CTFTarget, proof: EnvironmentProof) -> tuple[str, str]:
+    observations = proof.observations.get("http", ())
+    if not isinstance(observations, tuple | list):
+        return target.vulnerability.product, ""
+    expected_product = target.vulnerability.product
+    expected_token = _token(expected_product)
+    for observation in observations:
+        if not isinstance(observation, Mapping):
+            continue
+        product_token = str(observation.get("server_product_token", "")).strip()
+        version = str(observation.get("server_version", "")).strip()
+        if not product_token or not version:
+            continue
+        normalized_product = _token(product_token)
+        if normalized_product in expected_token or expected_token in normalized_product:
+            return expected_product, version
+    return expected_product, ""
 
 
 def _observation_evidence_ref(observation: Mapping[str, Any]) -> str:

@@ -9,7 +9,9 @@ from primordial.labs.ctf.closed_book import ClosedBookPackage
 from primordial.labs.ctf.ctfd import FakeCTFdClient
 from primordial.labs.ctf.environment import (
     EnvironmentProof,
+    VulhubEnvironmentProof,
     probe_local_container_environment,
+    probe_vulhub_cve_environment,
     verify_local_container_environment,
 )
 from primordial.labs.ctf.failures import FailureAnalysis
@@ -60,11 +62,13 @@ __all__ = [
     "SolveVerifier",
     "TargetScope",
     "VulnerabilityMetadata",
+    "VulhubEnvironmentProof",
     "compute_scoring_summary",
     "load_ctf_target_manifest",
     "load_ctf_target_manifest_file",
     "load_ctf_lab_phase_catalog",
     "probe_local_container_environment",
+    "probe_vulhub_cve_environment",
     "validate_vulhub_exploit_applicability",
     "verify_local_container_environment",
 ]
