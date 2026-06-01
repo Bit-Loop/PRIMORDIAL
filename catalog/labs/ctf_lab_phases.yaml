@@ -78,7 +78,7 @@ phases:
   - number: 3
     id: phase_3_mbptl
     name: Phase 3 MBPTL
-    status: in_progress
+    status: ready_for_review
     target_families:
       - mbptl
     allowed_profiles:
@@ -91,8 +91,15 @@ phases:
       - scoring_results_include_evidence_refs
     validation_commands:
       - python3 -m unittest tests.test_ctf_harness_phase_targets tests.test_ctf_harness_phase_scoring tests.test_ctf_harness_environment tests.test_ctf_lab_phases -q
+      - python3 -m unittest tests.test_ctf_harness_phase_targets tests.test_ctf_harness_phase_scoring tests.test_ctf_harness_environment tests.test_ctf_harness_applicability tests.test_ctf_harness_targets tests.test_ctf_harness_closed_book tests.test_ctf_harness_ctfd_client tests.test_ctf_harness_sessions tests.test_ctf_harness_hardcode_scan tests.test_ctf_harness_solve_verification tests.test_ctf_harness_benchmark tests.test_ctf_harness_integrity tests.test_ctf_harness_failure_analysis tests.test_ctf_harness_mutation tests.test_ctf_harness_postmortem tests.test_ctf_harness_patch_proposal tests.test_ctf_lab_phases -q
+      - python3 -m primordial.core.quality.hardcode
+    verified_environment_refs:
+      - evidence:local-container:a40e526e82df0f07
+      - evidence:mbptl-compose-reset-teardown
     evidence_refs:
       - github_pr:36
+      - evidence:local-container:a40e526e82df0f07
+      - evidence:mbptl-compose-reset-teardown
   - number: 4
     id: phase_4_ci_cd_goat
     name: Phase 4 CI/CD Goat
