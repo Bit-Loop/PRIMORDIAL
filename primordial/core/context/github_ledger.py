@@ -6,6 +6,7 @@ from primordial.core.context.bindings import TARGET_FACT_METADATA_KEYS
 from primordial.core.context.envelopes import ContextEnvelope
 from primordial.core.context.normalization import normalized_context_key, normalized_context_keys
 from primordial.core.context.poison import has_context_flag
+from primordial.core.context.source_markdown import is_source_markdown_context
 from primordial.core.context.source_types import TRUTH_LIKE_AUTHORITIES
 
 
@@ -88,6 +89,11 @@ def validate_github_ledger_envelope(envelope: ContextEnvelope) -> GitHubLedgerDe
         return GitHubLedgerDecision(
             "reject",
             f"github_ledger rejects {envelope.ref}: unsupported source_type={unsupported_source_type}",
+        )
+    if is_source_markdown_context(envelope):
+        return GitHubLedgerDecision(
+            "reject",
+            f"github_ledger rejects {envelope.ref}: source_markdown",
         )
     if _has_sensitive_unredacted_material(envelope):
         return GitHubLedgerDecision(

@@ -83,6 +83,13 @@ class WebConsoleTestsBase(unittest.TestCase):
         root = Path(self.temp_dir.name)
         self.root = root
         config = AppConfig.from_env(project_root=root)
+        config.runtime_dir = root / "runtime"
+        config.artifacts_dir = config.runtime_dir / "artifacts"
+        config.checkpoints_dir = config.runtime_dir / "checkpoints"
+        config.crash_journal_path = config.runtime_dir / "crash.journal"
+        config.exports_dir = config.runtime_dir / "exports"
+        config.secrets_dir = config.runtime_dir / "secrets"
+        config.credentials_path = config.secrets_dir / "credentials.json"
         config.manifests_dir = MANIFESTS_DIR
         config.rag.embeddings.provider = "deterministic_hash"
         config.ensure_directories()

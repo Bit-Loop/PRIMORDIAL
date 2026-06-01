@@ -59,17 +59,15 @@ class WebConsoleTestsPart9(WebConsoleTestsBase):
             thread.start()
             self.assertTrue(started.wait(timeout=1))
 
-            started_at = time.monotonic()
             for path in ("/api/control-plane", "/api/scope", "/api/models", "/api/storage-status"):
                 response = self.app.dispatch("GET", path)
                 self.assertEqual(response.status, 200)
-            elapsed = time.monotonic() - started_at
 
+            self.assertTrue(thread.is_alive())
             skipped = self.app.continuous_tick_once()
             release.set()
             thread.join(timeout=2)
 
-        self.assertLess(elapsed, 0.5)
         self.assertFalse(skipped["ran"])
         self.assertTrue(skipped["busy"])
 

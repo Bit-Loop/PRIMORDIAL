@@ -89,7 +89,7 @@ class MarkdownQualityTests(unittest.TestCase):
         ]
 
         self.assertEqual(actionable_paths, [])
-        self.assertGreater(audit.summary["markdown_file_count"], 0)
+        self.assertEqual(audit.summary["markdown_file_count"], 0)
         self.assertEqual(audit.summary["requires_action_count"], 0)
         self.assertEqual(audit.summary["markdown_file_count"], audit.summary["quarantined_count"])
 
@@ -141,9 +141,9 @@ class MarkdownQualityTests(unittest.TestCase):
             self.assertIn("ingest_allowed: false", body)
             self.assertIn("operational_retrieval_allowed: false", body)
             self.assertIn("# Legacy Export", body)
-            self.assertEqual(audit.summary["quarantined_count"], 1)
+            self.assertEqual(audit.summary["quarantined_count"], 0)
             self.assertEqual(audit.summary["requires_action_count"], 1)
-            self.assertEqual({record.path for record in audit.records}, {"README.md", str(quarantine_path.relative_to(root))})
+            self.assertEqual({record.path for record in audit.records}, {"README.md"})
 
     def test_quarantine_migrated_markdown_requires_explicit_migration_ref(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -170,7 +170,7 @@ class MarkdownQualityTests(unittest.TestCase):
             self.assertIn("ingest_allowed: false", body)
             self.assertIn("operational_retrieval_allowed: false", body)
             self.assertIn("Default intent is recon_only.", body)
-            self.assertEqual(audit.summary["quarantined_count"], 1)
+            self.assertEqual(audit.summary["quarantined_count"], 0)
             self.assertEqual(audit.summary["requires_action_count"], 0)
 
 

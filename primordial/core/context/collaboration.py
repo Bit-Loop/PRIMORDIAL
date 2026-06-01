@@ -15,6 +15,7 @@ from primordial.core.context.source_refs import (
     source_refs_metadata_values,
     unresolved_ai_derived_source_ref_errors,
 )
+from primordial.core.context.source_markdown import is_source_markdown_context
 from primordial.core.context.source_types import (
     COLLABORATION_SOURCE_TYPES,
     EVIDENCE_PROOF_KINDS,
@@ -87,6 +88,10 @@ class CollaborationSinkDecision:
     message: str = ""
 
 
+def _discord_reject(reason: str, ref: str) -> CollaborationSinkDecision:
+    return CollaborationSinkDecision("reject", f"discord_notification rejects {reason} ref={ref}")
+
+
 def validate_collaboration_sink(
     sink: str,
     envelope: ContextEnvelope,
@@ -116,10 +121,9 @@ def _validate_discord_notification(
     known_rag_refs: Iterable[str] | None,
 ) -> CollaborationSinkDecision:
     if is_generated_export_context(envelope) or has_generated_export_path(envelope):
-        return CollaborationSinkDecision(
-            "reject",
-            f"discord_notification rejects generated export recursion ref={envelope.ref}",
-        )
+        return _discord_reject("generated export recursion", envelope.ref)
+    if is_source_markdown_context(envelope):
+        return _discord_reject("source_markdown", envelope.ref)
     if has_context_flag(envelope, DISCORD_EVIDENCE_RENDERING_FLAGS):
         return CollaborationSinkDecision(
             "reject",
@@ -237,6 +241,8 @@ def _validate_github_issue(envelope: ContextEnvelope) -> CollaborationSinkDecisi
             "reject",
             f"github_issue rejects generated export recursion ref={envelope.ref}",
         )
+    if is_source_markdown_context(envelope):
+        return CollaborationSinkDecision("reject", f"github_issue rejects source_markdown ref={envelope.ref}")
     if _has_evidence_proof_kind(envelope) or _has_truth_like_authority(envelope) or has_context_flag(
         envelope,
         GITHUB_AUTHORITY_FLAGS,
