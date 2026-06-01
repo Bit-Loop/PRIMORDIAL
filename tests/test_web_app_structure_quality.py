@@ -21,6 +21,20 @@ class WebAppStructureQualityTests(unittest.TestCase):
         ]
         self.assertEqual(records, [])
 
+    def test_web_payload_wrappers_are_not_oversized_after_extraction(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+
+        audit = audit_structure(root)
+
+        records = [
+            record
+            for record in audit.records
+            if record.path == "primordial/core/web/app.py"
+            and record.kind == "function"
+            and record.name in {"_control_plane_payload", "_traces_view"}
+        ]
+        self.assertEqual(records, [])
+
     def test_web_route_modules_have_no_structure_violations(self) -> None:
         root = Path(__file__).resolve().parents[1]
 
@@ -28,6 +42,7 @@ class WebAppStructureQualityTests(unittest.TestCase):
 
         route_paths = {
             "primordial/core/web/control_routes.py",
+            "primordial/core/web/payload_views.py",
             "primordial/core/web/rag_routes.py",
             "primordial/core/web/routing.py",
         }
