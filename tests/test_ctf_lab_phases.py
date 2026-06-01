@@ -116,13 +116,27 @@ class CTFLabPhaseCatalogTests(unittest.TestCase):
         phase = load_ctf_lab_phase_catalog(CATALOG_PATH).phase(4)
         commands = "\n".join(phase.validation_commands)
 
-        self.assertEqual(phase.status, "in_progress")
+        self.assertEqual(phase.status, "ready_for_review")
         self.assertIn("local_container_environment_verified", phase.exit_gates)
         self.assertIn("ci_cd_attack_paths_bound_to_lab_scope", phase.exit_gates)
         self.assertIn("no_external_pipeline_mutation_without_verified_lab", phase.exit_gates)
+        self.assertEqual(
+            phase.verified_environment_refs,
+            (
+                "evidence:local-container:25b6e4a57ca5f06a",
+                "evidence:local-container:0b034b3310edd0bb",
+                "evidence:cicd-goat-compose-reset-teardown",
+            ),
+        )
         self.assertIn("github_pr:37", phase.evidence_refs)
+        self.assertIn("github_pr:38", phase.evidence_refs)
+        self.assertIn("evidence:local-container:25b6e4a57ca5f06a", phase.evidence_refs)
+        self.assertIn("evidence:local-container:0b034b3310edd0bb", phase.evidence_refs)
+        self.assertIn("evidence:cicd-goat-compose-reset-teardown", phase.evidence_refs)
         self.assertIn("tests.test_ctf_harness_cicd_goat", commands)
         self.assertIn("tests.test_ctf_lab_phases", commands)
+        self.assertIn("tests.test_ctf_harness_integrity", commands)
+        self.assertIn("primordial.core.quality.hardcode", commands)
 
     def test_lab_phase_catalog_rejects_missing_required_phase(self) -> None:
         payload = load_yaml_file(CATALOG_PATH)
