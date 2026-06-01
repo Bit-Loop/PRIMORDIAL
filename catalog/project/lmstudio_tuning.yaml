@@ -138,7 +138,6 @@ runtime_guard:
   saved_artifacts_updated:
     - runtime/model_eval/lmstudio_performance_profile.json
     - artifacts/model_eval/lmstudio_tuning_live_20260509T000055Z/lmstudio_tuning_20260509T001430Z.json
-    - artifacts/model_eval/lmstudio_role_eval_20260509T001954Z/model_eval_20260509T002846Z.json
 usage_commands:
   - python ./cli.py models evaluate --providers lmstudio --context-size 1024
   - python ./cli.py models evaluate --providers lmstudio --context-size 1024 --lmstudio-profile runtime/model_eval/lmstudio_performance_profile.json

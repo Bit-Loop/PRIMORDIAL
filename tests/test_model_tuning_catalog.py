@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from primordial.core.catalog.loader import CatalogValidationError
+from primordial.core.catalog.loader import CatalogValidationError, load_yaml_file
 from primordial.core.catalog.model_tuning import ModelTuningCatalog
 
 
@@ -89,6 +89,35 @@ class ModelTuningCatalogTests(unittest.TestCase):
         self.assertIn("eval_config.runtime_estimates", guard.eval_metadata_fields)
         self.assertIn("--max-model-minutes 45", guard.cli_override)
         self.assertIn("runtime/model_eval/lmstudio_performance_profile.json", guard.saved_artifacts_updated)
+
+    def test_runtime_guard_saved_artifacts_are_existing_catalog_authorities(self) -> None:
+        tuning = ModelTuningCatalog(REPO_ROOT / "catalog" / "project").load()
+        required_paths = (
+            tuning.result.detailed_artifact,
+            tuning.result.reusable_profile,
+            *tuning.runtime_guard.saved_artifacts_updated,
+        )
+
+        missing = [path for path in required_paths if not (REPO_ROOT / path).exists()]
+
+        self.assertEqual(missing, [])
+
+    def test_model_eval_artifact_cleanup_manifest_tracks_removed_generated_json(self) -> None:
+        manifest = load_yaml_file(REPO_ROOT / "catalog" / "project" / "model_eval_artifact_cleanup.yaml")
+        removed = manifest["removed_artifacts"]
+
+        self.assertEqual(manifest["status"], "generated_artifact_cleanup_manifest")
+        self.assertEqual(len(removed), 2)
+        for record in removed:
+            self.assertFalse((REPO_ROOT / record["path"]).exists())
+            self.assertRegex(record["sha256"], r"^[0-9a-f]{64}$")
+            self.assertGreater(record["bytes"], 0)
+            self.assertTrue(record["reason"])
+            self.assertTrue(record["retained_refs"])
+            self.assertEqual(
+                [ref for ref in record["retained_refs"] if not (REPO_ROOT / ref).exists()],
+                [],
+            )
 
     def test_model_tuning_catalog_rejects_unknown_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
