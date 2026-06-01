@@ -88,6 +88,7 @@ class CTFLabPhaseCatalogTests(unittest.TestCase):
         self.assertTrue(phase.deterministic_fixture_required)
         self.assertIn("phase_targets_loaded_from_manifests", phase.exit_gates)
         self.assertEqual(phase.verified_environment_refs, ())
+        self.assertIn("github_pr:36", phase.evidence_refs)
         self.assertIn("tests.test_ctf_harness_phase_targets", commands)
 
     def test_remaining_lab_phases_require_verified_environment_proof_before_completion(self) -> None:

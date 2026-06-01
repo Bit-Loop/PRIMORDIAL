@@ -91,6 +91,8 @@ phases:
       - scoring_results_include_evidence_refs
     validation_commands:
       - python3 -m unittest tests.test_ctf_harness_phase_targets tests.test_ctf_lab_phases -q
+    evidence_refs:
+      - github_pr:36
   - number: 4
     id: phase_4_ci_cd_goat
     name: Phase 4 CI/CD Goat
