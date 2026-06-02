@@ -20,7 +20,9 @@ from primordial.labs.ctf.sessions import SolveSession
 
 DEFAULT_LAB_ROOT = Path("/run/media/bitloop/DREAD/primordial-labs")
 DEFAULT_KUBERNETES_GOAT_KUBECONFIG = DEFAULT_LAB_ROOT / "kubeconfigs" / "phase5-kind.yaml"
-READY_PHASES = frozenset({1, 2, 5, 7})
+READY_PHASES = frozenset({1, 2, 5, 7, 8})
+NYU_LITTLEQUERY_RELATIVE_COMPOSE = Path("assets/phase8-nyu-ctf-bench/test/2017/CSAW-Quals/web/littlequery/docker-compose.yml")
+NYU_LITTLEQUERY_PROJECT = "primordial-nyu-littlequery"
 
 CommandRunner = Callable[[tuple[str, ...]], subprocess.CompletedProcess[str]]
 AttemptCommandRunner = Callable[[tuple[str, ...], Mapping[str, str]], subprocess.CompletedProcess[str]]
@@ -35,6 +37,8 @@ class LiveLabRunResult:
     evidence_path: str
     evidence_ref: str
     blocker: str = ""
+    target_url: str = ""
+    cleanup_command: tuple[str, ...] = ()
 
     def as_payload(self) -> dict[str, object]:
         return {
@@ -44,6 +48,8 @@ class LiveLabRunResult:
             "evidence_path": self.evidence_path,
             "evidence_ref": self.evidence_ref,
             "blocker": self.blocker,
+            "target_url": self.target_url,
+            "cleanup_command": list(self.cleanup_command),
         }
 
 
@@ -124,6 +130,14 @@ def run_phase(
             command_runner=command_runner,
             kubeconfig=lab_root / "kubeconfigs" / "phase5-kind.yaml",
         )
+    if phase == 8:
+        return _run_nyu_littlequery_lab(
+            lab_root=lab_root,
+            command_runner=command_runner,
+            http_getter=http_getter,
+            timeout_seconds=timeout_seconds,
+            keep_running=keep_running,
+        )
     return _blocked_phase_result(phase, lab_root=lab_root)
 
 
@@ -167,7 +181,7 @@ def run_autonomous_attempt(
             blocker=blocker,
         )
 
-    target_url = _target_url_for_phase(phase)
+    target_url = readiness.target_url or _target_url_for_phase(phase)
     lines.append(f"target_url={target_url}")
     session = session.record_policy_decision(
         decision_id="policy:local-ctf-autonomous-allow",
@@ -445,6 +459,93 @@ def _run_kubernetes_goat_lab(
     return _write_result(phase=phase, status=status, lab_id=lab_id, evidence=evidence, lines=lines, blocker=blocker)
 
 
+def _run_nyu_littlequery_lab(
+    *,
+    lab_root: Path,
+    command_runner: CommandRunner | None,
+    http_getter: HttpGetter | None,
+    timeout_seconds: float,
+    keep_running: bool,
+) -> LiveLabRunResult:
+    phase = 8
+    lab_id = "nyu-ctf-bench-littlequery"
+    evidence = _evidence_file(lab_root, phase=phase, lab_id=lab_id)
+    compose_file = lab_root / NYU_LITTLEQUERY_RELATIVE_COMPOSE
+    lines = _evidence_header(phase=phase, lab_id=lab_id) + [
+        "upstream_lab=https://github.com/NYU-LLM-CTF/NYU_CTF_Bench",
+        f"compose_file={compose_file}",
+        "challenge_path=test/2017/CSAW-Quals/web/littlequery",
+    ]
+    status = "blocked"
+    blocker = ""
+    target_url = ""
+    started = False
+    down_command = ("docker", "compose", "-f", str(compose_file), "-p", NYU_LITTLEQUERY_PROJECT, "down", "--remove-orphans")
+    try:
+        if not compose_file.is_file():
+            raise RuntimeError(f"compose file is missing: {compose_file}")
+        network = _run(("docker", "network", "create", "ctfnet"), command_runner=command_runner, check=False)
+        lines.extend(_command_lines("docker_network_create", network))
+        up = _run(
+            (
+                "docker",
+                "compose",
+                "-f",
+                str(compose_file),
+                "-p",
+                NYU_LITTLEQUERY_PROJECT,
+                "up",
+                "-d",
+            ),
+            command_runner=command_runner,
+        )
+        started = True
+        lines.extend(_command_lines("docker_compose_up", up))
+        ps = _run(
+            ("docker", "compose", "-f", str(compose_file), "-p", NYU_LITTLEQUERY_PROJECT, "ps", "--format", "json"),
+            command_runner=command_runner,
+        )
+        lines.extend(_command_lines("docker_compose_ps", ps))
+        target = _run(
+            (
+                "docker",
+                "inspect",
+                f"{NYU_LITTLEQUERY_PROJECT}-littlequery-1",
+                "--format",
+                "{{range .NetworkSettings.Networks}}http://{{.IPAddress}}/{{end}}",
+            ),
+            command_runner=command_runner,
+        )
+        lines.extend(_command_lines("docker_inspect_target", target))
+        target_url = target.stdout.strip()
+        if not target_url.startswith("http://"):
+            raise RuntimeError("NYU littlequery target URL was not discovered")
+        lines.append(f"target_url={target_url}")
+        body = _wait_http(target_url, timeout_seconds=timeout_seconds, http_getter=http_getter)
+        lines.extend(_http_lines(target_url, body))
+        status = "ready"
+    except Exception as exc:  # noqa: BLE001 - lab readiness failures must be recorded as blockers
+        status = "blocked"
+        blocker = str(exc)
+        lines.append(f"blocker={blocker}")
+    finally:
+        if keep_running and started and status == "ready":
+            lines.append("cleanup_deferred=true")
+        else:
+            down = _run(down_command, command_runner=command_runner, check=False)
+            lines.extend(_command_lines("docker_compose_down", down))
+    return _write_result(
+        phase=phase,
+        status=status,
+        lab_id=lab_id,
+        evidence=evidence,
+        lines=lines,
+        blocker=blocker,
+        target_url=target_url,
+        cleanup_command=down_command,
+    )
+
+
 def _blocked_phase_result(phase: int, *, lab_root: Path) -> LiveLabRunResult:
     blockers = {
         0: "Phase 0 is harness/source validation only; use the CTF unit and hardcode gates.",
@@ -506,7 +607,7 @@ def _run_attempt_command(
 
 
 def _cleanup_live_lab_lines(readiness: LiveLabRunResult) -> list[str]:
-    command = _cleanup_command_for_phase(readiness.phase)
+    command = readiness.cleanup_command or _cleanup_command_for_phase(readiness.phase)
     if not command:
         return ["cleanup.skipped=true"]
     result = _run(command, command_runner=None, check=False)
@@ -562,6 +663,8 @@ def _write_result(
     evidence: Path,
     lines: list[str],
     blocker: str,
+    target_url: str = "",
+    cleanup_command: tuple[str, ...] = (),
 ) -> LiveLabRunResult:
     evidence.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
     evidence_ref = f"evidence:live-lab:{_sha256_bytes(evidence.read_bytes())[:16]}"
@@ -572,6 +675,8 @@ def _write_result(
         evidence_path=str(evidence),
         evidence_ref=evidence_ref,
         blocker=blocker,
+        target_url=target_url,
+        cleanup_command=cleanup_command,
     )
 
 

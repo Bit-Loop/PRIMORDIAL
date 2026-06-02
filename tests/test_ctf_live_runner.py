@@ -81,6 +81,33 @@ class CTFLiveRunnerTests(unittest.TestCase):
         self.assertIn("kubectl_pods.stdout_sha256=", evidence)
         self.assertNotIn("metadata", evidence)
 
+    def test_phase_eight_runner_starts_nyu_littlequery_compose_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lab_root = Path(temp_dir)
+            compose_file = lab_root / "assets/phase8-nyu-ctf-bench/test/2017/CSAW-Quals/web/littlequery/docker-compose.yml"
+            compose_file.parent.mkdir(parents=True)
+            compose_file.write_text("services:\n  littlequery:\n    image: local\n", encoding="utf-8")
+
+            result = run_phase(
+                8,
+                lab_root=lab_root,
+                command_runner=_runner(stdout='{"State":"running"}'),
+                http_getter=lambda _url: b"nyu littlequery ready",
+                timeout_seconds=0.01,
+                keep_running=True,
+            )
+
+            evidence = Path(result.evidence_path).read_text(encoding="utf-8")
+
+        self.assertEqual(result.status, "ready")
+        self.assertEqual(result.lab_id, "nyu-ctf-bench-littlequery")
+        self.assertEqual(result.target_url, "http://127.0.0.1:8080/")
+        self.assertIn("challenge_path=test/2017/CSAW-Quals/web/littlequery", evidence)
+        self.assertIn("docker_compose_up.returncode=0", evidence)
+        self.assertIn("docker_inspect_target.stdout_sha256=", evidence)
+        self.assertIn("cleanup_deferred=true", evidence)
+        self.assertNotIn("nyu littlequery ready", evidence)
+
     def test_run_all_includes_every_phase(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             results = run_all(
@@ -193,8 +220,14 @@ def _runner(stdout: str = "ok"):
     def run(command: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
         if command[:3] == ("docker", "rm", "-f"):
             selected_stdout = command[-1]
+        elif command[:3] == ("docker", "network", "create"):
+            selected_stdout = "network-id"
+        elif command[:2] == ("docker", "compose"):
+            selected_stdout = stdout
         elif command[:2] == ("docker", "run"):
             selected_stdout = "container-id"
+        elif command[:3] == ("docker", "inspect", "primordial-nyu-littlequery-littlequery-1"):
+            selected_stdout = "http://127.0.0.1:8080/"
         elif command[:2] == ("docker", "inspect"):
             selected_stdout = "container-id running image:tag"
         else:
