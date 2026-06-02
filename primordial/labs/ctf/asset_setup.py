@@ -142,8 +142,11 @@ def setup_asset(
     asset_dir = lab_root / "assets" / asset.dest_name
     evidence = _evidence_file(lab_root, phase=asset.phase, lab_id=asset.lab_id)
     lines = _evidence_header(asset) + [f"asset_path={asset_dir}", f"update={str(update).lower()}"]
-    missing_tools = _missing_tools(asset.required_tools)
-    lines.append(f"missing_tools={','.join(missing_tools)}")
+    tool_results = _probe_tools(asset.required_tools, command_runner=command_runner)
+    unavailable_tools = tuple(name for name, result in tool_results if result.returncode != 0)
+    lines.append(f"missing_tools={','.join(unavailable_tools)}")
+    for name, result in tool_results:
+        lines.extend(_command_lines(f"tool_{_label(name)}", result))
     lines.extend(f"denied_path={path}" for path in asset.denied_paths)
     if asset.provisioning_note:
         lines.append(f"provisioning_note={asset.provisioning_note}")
@@ -156,8 +159,8 @@ def setup_asset(
         head = _git_head(asset_dir, command_runner=command_runner)
         if head:
             lines.append(f"repo_head={head}")
-        status = "asset_ready" if not missing_tools else "tooling_blocked"
-        blocker = "" if not missing_tools else f"missing local tool(s): {', '.join(missing_tools)}"
+        status = "asset_ready" if not unavailable_tools else "tooling_blocked"
+        blocker = "" if not unavailable_tools else f"missing or unusable local tool(s): {', '.join(unavailable_tools)}"
         lines.append(f"status={status}")
         if blocker:
             lines.append(f"blocker={blocker}")
@@ -173,7 +176,7 @@ def setup_asset(
         asset_path=asset_dir,
         evidence=evidence,
         lines=lines,
-        missing_tools=missing_tools,
+        missing_tools=unavailable_tools,
         blocker=blocker,
     )
 
@@ -274,8 +277,44 @@ def _remove_denied_paths(asset: LabAsset, asset_dir: Path) -> tuple[str, ...]:
     return tuple(removed)
 
 
-def _missing_tools(tools: tuple[str, ...]) -> tuple[str, ...]:
-    return tuple(tool for tool in tools if shutil.which(tool) is None)
+def _probe_tools(
+    tools: tuple[str, ...],
+    *,
+    command_runner: CommandRunner | None,
+) -> tuple[tuple[str, subprocess.CompletedProcess[str]], ...]:
+    return tuple((tool, _probe_tool(tool, command_runner=command_runner)) for tool in tools)
+
+
+def _probe_tool(tool: str, *, command_runner: CommandRunner | None) -> subprocess.CompletedProcess[str]:
+    path = shutil.which(tool)
+    if path is None:
+        return subprocess.CompletedProcess((tool, "--version"), 127, "", "not found")
+    command = _tool_probe_command(tool, path)
+    if command_runner is not None:
+        return command_runner(command)
+    return subprocess.run(command, check=False, capture_output=True, text=True)
+
+
+def _tool_probe_command(tool: str, path: str) -> tuple[str, ...]:
+    if tool in {"kubectl", "helm", "terraform", "tofu", "kind", "vagrant"}:
+        return (path, "version")
+    if tool == "docker-compose":
+        return (path, "version")
+    if tool == "docker":
+        return (path, "version")
+    if tool == "ansible-playbook":
+        return (path, "--version")
+    if tool == "qemu-system-x86_64":
+        return (path, "--version")
+    if tool == "virsh":
+        return (path, "--version")
+    if tool == "python3":
+        return (path, "--version")
+    return (path, "--version")
+
+
+def _label(value: str) -> str:
+    return "".join(ch if ch.isalnum() else "_" for ch in value)
 
 
 def _blocked_phase_result(phase: int, *, lab_root: Path) -> LabAssetSetupResult:

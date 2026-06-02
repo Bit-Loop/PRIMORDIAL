@@ -19,8 +19,9 @@ class CTFAssetSetupTests(unittest.TestCase):
             evidence = Path(result.evidence_path).read_text(encoding="utf-8")
 
         self.assertEqual(result.status, "asset_ready")
-        self.assertEqual(calls[0][:5], ("git", "clone", "--filter=blob:none", "--depth", "1"))
-        self.assertIn("--no-checkout", calls[0])
+        clone = next(command for command in calls if command[:2] == ("git", "clone"))
+        self.assertEqual(clone[:5], ("git", "clone", "--filter=blob:none", "--depth", "1"))
+        self.assertIn("--no-checkout", clone)
         self.assertTrue(any(command[:4] == ("git", "-C", result.asset_path, "sparse-checkout") for command in calls))
         self.assertIn("denied_path=writeup/", evidence)
         self.assertIn("denied_path_removed=writeup/", evidence)
