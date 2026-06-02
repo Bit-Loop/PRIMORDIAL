@@ -262,6 +262,24 @@ class SolveSessionContractTests(unittest.TestCase):
                 policy_decision_id="policy:block-flag",
             )
 
+    def test_solve_session_rejects_raw_flag_material_in_blocked_action_policy_ref(self) -> None:
+        session = SolveSession.start(
+            id="solve-juice-1",
+            target_id="juice-shop-foundation",
+            engagement_profile="co_internal_lab",
+            active_intent="recon_only",
+            policy_version="policy:v1",
+            code_version="git:abc123",
+            model_versions={},
+        )
+
+        with self.assertRaisesRegex(ValueError, "hidden flag material"):
+            session.record_blocked_action(
+                action_id="action:blocked",
+                reason="recon_only blocks flag submission",
+                policy_decision_id="policy-" + fixture_flag(),
+            )
+
     def test_solve_session_rejects_raw_flag_material_in_policy_decision_payload(self) -> None:
         session = SolveSession.start(
             id="solve-juice-1",
@@ -278,6 +296,24 @@ class SolveSessionContractTests(unittest.TestCase):
                 decision_id="policy-" + fixture_flag(),
                 action="ctfd_submit_flag",
                 decision="blocked",
+            )
+
+    def test_solve_session_rejects_raw_flag_material_in_submission_policy_ref(self) -> None:
+        session = SolveSession.start(
+            id="solve-juice-1",
+            target_id="juice-shop-foundation",
+            engagement_profile="co_internal_lab",
+            active_intent="ctf_solve_assisted",
+            policy_version="policy:v1",
+            code_version="git:abc123",
+            model_versions={},
+        )
+
+        with self.assertRaisesRegex(ValueError, "hidden flag material"):
+            session.record_flag_submission(
+                challenge_id="juice-login",
+                captured_flag_ref="evidence:captured-flag",
+                policy_decision_id="policy-" + fixture_flag(),
             )
 
     def test_solve_session_cannot_mark_solved_without_evidence(self) -> None:

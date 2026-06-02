@@ -97,9 +97,10 @@ class SolveSession:
         blocked = {
             "action_id": _required(action_id, "action_id"),
             "reason": _required(reason, "reason"),
-            "policy_decision_id": _policy_ref(policy_decision_id, "policy_decision_id"),
+            "policy_decision_id": _required(policy_decision_id, "policy_decision_id"),
         }
         reject_hidden_flag_material(blocked, path="solve_session.blocked_action", label="SolveSession")
+        blocked["policy_decision_id"] = _policy_ref(blocked["policy_decision_id"], "policy_decision_id")
         return replace(self, blocked_actions=self.blocked_actions + (blocked,))
 
     def record_policy_decision(
@@ -110,11 +111,12 @@ class SolveSession:
         decision: str,
     ) -> SolveSession:
         policy_decision = {
-            "decision_id": _policy_ref(decision_id, "decision_id"),
+            "decision_id": _required(decision_id, "decision_id"),
             "action": _required(action, "action"),
             "decision": _required(decision, "decision"),
         }
         reject_hidden_flag_material(policy_decision, path="solve_session.policy_decision", label="SolveSession")
+        policy_decision["decision_id"] = _policy_ref(policy_decision["decision_id"], "decision_id")
         return replace(self, policy_decisions=self.policy_decisions + (policy_decision,))
 
     def record_flag_submission(
@@ -127,9 +129,10 @@ class SolveSession:
         submission = {
             "challenge_id": _required(challenge_id, "challenge_id"),
             "captured_flag_ref": _required(captured_flag_ref, "captured_flag_ref"),
-            "policy_decision_id": _policy_ref(policy_decision_id, "policy_decision_id"),
+            "policy_decision_id": _required(policy_decision_id, "policy_decision_id"),
         }
         reject_hidden_flag_material(submission, path="solve_session.flag_submission", label="SolveSession")
+        submission["policy_decision_id"] = _policy_ref(submission["policy_decision_id"], "policy_decision_id")
         if self.active_intent not in CTF_SOLVE_INTENTS:
             raise ValueError("flag submission requires active intent that allows CTF solving")
         captured_evidence_ref = _evidence_ref(submission["captured_flag_ref"], "captured_flag_ref")

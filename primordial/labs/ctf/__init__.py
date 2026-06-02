@@ -24,6 +24,12 @@ from primordial.labs.ctf.environment import (
     verify_benchmark_environment,
     verify_sandbox_cloud_environment,
 )
+from primordial.labs.ctf.environment_probes import (
+    probe_benchmark_environment,
+    probe_local_ad_lab_environment,
+    probe_local_cluster_environment,
+    probe_localstack_cloud_environment,
+)
 from primordial.labs.ctf.failures import FailureAnalysis
 from primordial.labs.ctf.goad import GOADPhaseControlResult, verify_goad_phase_controls
 from primordial.labs.ctf.hardcode import HardcodeFinding, HardcodeScanResult, HardcodeScanner
@@ -100,7 +106,11 @@ __all__ = [
     "load_ctf_lab_phase_catalog",
     "load_ctf_phase_target_manifests",
     "probe_phase_local_lab_environment",
+    "probe_benchmark_environment",
+    "probe_local_ad_lab_environment",
+    "probe_local_cluster_environment",
     "probe_local_container_environment",
+    "probe_localstack_cloud_environment",
     "probe_vulhub_cve_environment",
     "validate_vulhub_exploit_applicability",
     "verify_benchmark_environment",
