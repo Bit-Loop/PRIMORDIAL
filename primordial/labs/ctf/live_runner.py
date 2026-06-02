@@ -901,6 +901,12 @@ def _run_localstack_lab(
             },
         )
         lines.extend(_command_lines("localstack_sts", sts))
+        lines.extend(
+            _seed_cloudgoat_localstack_objective(
+                lab_root=lab_root,
+                command_runner=command_runner,
+            )
+        )
         status = "ready"
         blocker = ""
     except Exception as exc:  # noqa: BLE001 - lab probe records any failure as a blocker rather than crashing
@@ -914,6 +920,64 @@ def _run_localstack_lab(
             removed = _run(("docker", "rm", "-f", container_name), command_runner=command_runner, check=False)
             lines.extend(_command_lines("docker_rm", removed))
     return _write_result(phase=phase, status=status, lab_id=lab_id, evidence=evidence, lines=lines, blocker=blocker, target_url=target_url)
+
+
+def _seed_cloudgoat_localstack_objective(*, lab_root: Path, command_runner: CommandRunner | None) -> list[str]:
+    runtime_dir = lab_root / "runtime" / "phase7-cloudgoat-localstack"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    seed = hashlib.sha256(f"phase7-cloudgoat:{time.time_ns()}".encode("utf-8")).hexdigest()
+    bucket = f"primordial-cloudgoat-{seed[:12]}"
+    key = f"objective-{seed[12:24]}.txt"
+    flag_value = "ctf" + "{" + f"phase7-cloudgoat-{seed[24:48]}" + "}"
+    flag_path = runtime_dir / f"localstack-objective-{seed[:12]}.txt"
+    env = {
+        "AWS_ACCESS_KEY_ID": "test",
+        "AWS_SECRET_ACCESS_KEY": "test",
+        "AWS_DEFAULT_REGION": "us-east-1",
+    }
+    lines = [
+        f"objective_bucket_sha256={_sha256_text(bucket)}",
+        f"objective_key_sha256={_sha256_text(key)}",
+        f"flag_value_sha256={_sha256_text(flag_value)}",
+        "flag_value_redacted=true",
+    ]
+    try:
+        flag_path.write_text(flag_value, encoding="utf-8")
+        create_bucket = _run(
+            (
+                "aws",
+                "--endpoint-url",
+                "http://127.0.0.1:4566",
+                "s3api",
+                "create-bucket",
+                "--bucket",
+                bucket,
+            ),
+            command_runner=command_runner,
+            env=env,
+        )
+        put_object = _run(
+            (
+                "aws",
+                "--endpoint-url",
+                "http://127.0.0.1:4566",
+                "s3api",
+                "put-object",
+                "--bucket",
+                bucket,
+                "--key",
+                key,
+                "--body",
+                str(flag_path),
+            ),
+            command_runner=command_runner,
+            env=env,
+        )
+        lines.extend(_command_lines("localstack_s3_create_bucket", create_bucket))
+        lines.extend(_command_lines("localstack_s3_put_object", put_object))
+    finally:
+        flag_path.unlink(missing_ok=True)
+    return lines
 
 
 def _run_kubernetes_goat_lab(

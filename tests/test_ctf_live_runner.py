@@ -85,17 +85,19 @@ class CTFLiveRunnerTests(unittest.TestCase):
         self.assertNotIn(raw_flag, evidence)
 
     def test_phase_seven_runner_uses_localstack_and_hashes_cli_output(self) -> None:
+        calls: list[tuple[str, ...]] = []
         with tempfile.TemporaryDirectory() as temp_dir:
             result = run_phase(
                 7,
                 lab_root=Path(temp_dir),
-                command_runner=_runner(stdout='{"Account":"000000000000"}'),
+                command_runner=_runner(stdout='{"Account":"000000000000"}', calls=calls),
                 http_getter=lambda _url: b'{"services":{"sts":"running"}}',
                 timeout_seconds=0.01,
             )
 
             evidence = Path(result.evidence_path).read_text(encoding="utf-8")
 
+        aws_calls = [command for command in calls if command[:3] == ("aws", "--endpoint-url", "http://127.0.0.1:4566")]
         self.assertEqual(result.status, "ready")
         self.assertEqual(result.lab_id, "cloudgoat-localstack-adaptation")
         self.assertEqual(result.target_url, "http://127.0.0.1:4566/")
@@ -103,7 +105,16 @@ class CTFLiveRunnerTests(unittest.TestCase):
         self.assertIn("readiness_only=true", evidence)
         self.assertIn("upstream_lab=https://github.com/rhinosecuritylabs/cloudgoat", evidence)
         self.assertIn("localstack_sts.stdout_sha256=", evidence)
+        self.assertIn("localstack_s3_create_bucket.stdout_sha256=", evidence)
+        self.assertIn("localstack_s3_put_object.stdout_sha256=", evidence)
+        self.assertIn("objective_bucket_sha256=", evidence)
+        self.assertIn("objective_key_sha256=", evidence)
+        self.assertIn("flag_value_sha256=", evidence)
+        self.assertIn("flag_value_redacted=true", evidence)
+        self.assertTrue(any(command[3:5] == ("s3api", "create-bucket") for command in aws_calls))
+        self.assertTrue(any(command[3:5] == ("s3api", "put-object") for command in aws_calls))
         self.assertNotIn("000000000000", evidence)
+        self.assertNotIn("ctf{", evidence)
 
     def test_unsupported_phases_record_concrete_blockers(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
