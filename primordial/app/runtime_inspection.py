@@ -238,14 +238,14 @@ class RuntimeInspectionMixin:
             for key in ("error", "last_error", "failure_reason"):
                 value = item.get(key) or metadata.get(key)
                 if value:
-                    messages.append({"source": source, "key": key, "message": str(value)})
+                    messages.append({"source": source, "key": key, "message": redact_sensitive_text(str(value))})
             for key in ("traceback", "stack", "stack_trace"):
                 value = metadata.get(key) or item.get(key)
                 if value:
-                    tracebacks.append({"source": source, "key": key, "traceback": str(value)})
+                    tracebacks.append({"source": source, "key": key, "traceback": redact_sensitive_text(str(value))})
             exception_type = metadata.get("exception_type") or item.get("exception_type")
             if exception_type:
-                messages.append({"source": source, "key": "exception_type", "message": str(exception_type)})
+                messages.append({"source": source, "key": "exception_type", "message": redact_sensitive_text(str(exception_type))})
 
         scan(payload, "record")
         for key, value in related.items():
