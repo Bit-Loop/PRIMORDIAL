@@ -7,6 +7,7 @@ import re
 from typing import Any, Iterable
 
 from primordial.core.context.normalization import canonical_rag_domain, normalized_context_key
+from primordial.core.sensitive_text import redact_sensitive_text
 
 try:
     import psycopg
@@ -118,13 +119,49 @@ _DOCUMENT_CHUNK_NUMERIC_FILTER_KEYS = {
     "epss_probability": "epss_probability",
     "epss_percentile": "epss_percentile",
 }
+_RAW_CONTENT_METADATA_KEYS = {
+    "raw_text",
+    "request_body",
+    "response_body",
+    "raw_request",
+    "raw_response",
+    "request_payload",
+    "response_payload",
+}
 
 
 def _dump(value: Any) -> Any:
-    ready = json_ready(value)
+    ready = json_ready(_sanitize_storage_metadata(value))
     if Jsonb is not None:
         return Jsonb(ready)
     return json.dumps(ready, sort_keys=True)
+
+
+def _sanitize_storage_metadata(value: Any) -> Any:
+    if isinstance(value, dict):
+        sanitized: dict[str, Any] = {}
+        for key, item in value.items():
+            text_key = str(key)
+            if normalized_context_key(text_key) in _RAW_CONTENT_METADATA_KEYS:
+                sanitized[text_key] = "[redacted]"
+            else:
+                sanitized[text_key] = _sanitize_storage_metadata(item)
+        return sanitized
+    if isinstance(value, list):
+        return [_sanitize_storage_metadata(item) for item in value]
+    if isinstance(value, tuple):
+        return [_sanitize_storage_metadata(item) for item in value]
+    if isinstance(value, set):
+        return [_sanitize_storage_metadata(item) for item in value]
+    if isinstance(value, bytes):
+        return redact_sensitive_text(value.decode("utf-8", errors="replace"))
+    if isinstance(value, str):
+        return redact_sensitive_text(value)
+    return value
+
+
+def _storage_text(value: Any) -> str:
+    return redact_sensitive_text(str(value or ""))
 
 
 def _load(value: Any | None, default: Any) -> Any:
