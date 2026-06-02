@@ -134,15 +134,35 @@ class WorkflowExecutionPersistenceMixin:
             )
 
     def _queue_notion_sync_for_meaningful_updates(self, task: Task, result) -> None:
-        if task.target_id and (result.notes or result.findings) and not self._notion_sync_auth_blocked():
-            self.store.insert_external_sync_job(
-                ExternalSyncJob(
-                    kind=ExternalSyncKind.NOTION,
+        if not task.target_id or not (result.notes or result.findings):
+            return
+        sync_job = ExternalSyncJob(
+            kind=ExternalSyncKind.NOTION,
+            target_id=task.target_id,
+            summary="Sync meaningful note/finding updates to Notion",
+            payload={"target_id": task.target_id, "task_id": task.id, "kind": task.kind.value},
+        )
+        if self._notion_sync_auth_blocked():
+            self.store.insert_event(
+                EventRecord(
+                    type=EventType.SYNC_FAILED,
+                    summary="Notion sync suppressed after authentication failure",
                     target_id=task.target_id,
-                    summary="Sync meaningful note/finding updates to Notion",
-                    payload={"target_id": task.target_id, "task_id": task.id, "kind": task.kind.value},
+                    task_id=task.id,
+                    metadata={"kind": sync_job.kind.value, "auth_blocked": True, "automatic": True},
                 )
             )
+            return
+        self.store.insert_external_sync_job(sync_job)
+        self.store.insert_event(
+            EventRecord(
+                type=EventType.SYNC_QUEUED,
+                summary=sync_job.summary,
+                target_id=task.target_id,
+                task_id=task.id,
+                metadata={"kind": sync_job.kind.value, "automatic": True},
+            )
+        )
 
     def _persist_result_next_tasks_and_events(self, task: Task, result, report: OrchestrationReport) -> None:
         for next_task in result.next_tasks:
