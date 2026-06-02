@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import subprocess
 import unittest
@@ -242,7 +243,7 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
             side_effect=OSError,
         ), patch(
             "primordial.modes.security.execution_ctf_handler.request.build_opener",
-            return_value=_FakeQueryRunnerOpener(raw_flag),
+            return_value=_FakeQueryRunnerOpener(raw_flag, phrase=hashlib.sha1(b"demo").hexdigest()),
         ):
             result = self.runtime.executor.execute(task, None)
 
@@ -254,6 +255,60 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
         self.assertTrue(evidence.metadata["captured_flag_ref"].startswith("evidence:captured-flag:"))
         self.assertEqual(evidence.metadata["captured_flag_length"], len(raw_flag))
         self.assertNotIn(raw_flag, artifact_text)
+        self.assertNotIn(raw_flag, json.dumps(evidence.as_payload()))
+
+    def test_executor_uses_transient_api_credentials_for_query_runner(self) -> None:
+        private_url = "http://" + ".".join(("172", "23", "0", "2")) + "/"
+        account = "demo"
+        phrase = "stored-phrase"
+        target = self.runtime.register_target(
+            handle="nyu-ctf-bench-littlequery",
+            profile=ScopeProfile.HACK_THE_BOX,
+            assets=[private_url],
+            metadata={
+                "ctf_completion_indicator": "autonomous_flags",
+                "ctf_target_url": private_url,
+                "ctf_allow_private_http": True,
+                "ctf_benchmark_api_paths": ["api/db_explore.php"],
+                "ctf_login_paths": ["login.php"],
+                "ctf_login_hash_algorithms": ["raw", "sha1"],
+                "ctf_query_runner_paths": ["query.php"],
+                "target_family": "nyu_ctf_bench",
+                "local_ctf_autonomous": True,
+            },
+        )
+        task = Task(
+            target_id=target.id,
+            phase=MethodologyPhase.ANALYSIS,
+            kind=TaskKind.CTF_FLAG_CAPTURE,
+            title="Run closed-book benchmark credential CTF flag capture",
+            summary="Search local benchmark API and query runner state for a redacted flag reference.",
+            role=AgentRole.ANALYSIS_WORKER,
+            risk_tier=RiskTier.MODERATE,
+            required_capabilities=["ctf-flag-capture", "flag-collection"],
+            metadata={"primitive_hint": "ctf-flag-capture"},
+        )
+        raw_flag = fixture_flag("nyu-api-credential-chain")
+
+        with patch(
+            "primordial.modes.security.execution_ctf_handler.request.urlopen",
+            side_effect=_benchmark_api_credential_urlopen(account, phrase),
+        ), patch(
+            "primordial.modes.security.execution_ctf_handler.request.build_opener",
+            return_value=_FakeQueryRunnerOpener(raw_flag, account=account, phrase=phrase),
+        ):
+            result = self.runtime.executor.execute(task, None)
+
+        artifact_text = Path(result.artifacts[0].path).read_text(encoding="utf-8")
+        evidence = result.evidence[0]
+
+        self.assertTrue(result.success)
+        self.assertGreaterEqual(evidence.metadata["benchmark_api_probe_count"], 5)
+        self.assertGreaterEqual(evidence.metadata["query_runner_interaction_count"], 2)
+        self.assertTrue(evidence.metadata["captured_flag_ref"].startswith("evidence:captured-flag:"))
+        self.assertNotIn(raw_flag, artifact_text)
+        self.assertNotIn(account, artifact_text)
+        self.assertNotIn(phrase, artifact_text)
         self.assertNotIn(raw_flag, json.dumps(evidence.as_payload()))
 
     def test_executor_records_browser_benchmark_solve_without_flag_material(self) -> None:
@@ -550,14 +605,16 @@ class _FakeHttpResponse:
 
 
 class _FakeQueryRunnerOpener:
-    def __init__(self, raw_flag: str) -> None:
+    def __init__(self, raw_flag: str, *, account: str = "demo", phrase: str = "demo") -> None:
         self.raw_flag = raw_flag
+        self.account = account.encode("utf-8")
+        self.phrase = phrase.encode("utf-8")
         self.authenticated = False
 
     def open(self, request_obj, *args, **kwargs):
         url = request_obj.full_url if hasattr(request_obj, "full_url") else str(request_obj)
         data = getattr(request_obj, "data", b"") or b""
-        if url.endswith("/login.php") and b"username=demo" in data:
+        if url.endswith("/login.php") and b"username=" + self.account in data and b"password=" + self.phrase in data:
             self.authenticated = True
             return _FakeHttpResponse(url.rsplit("/", 1)[0] + "/query.php", b'<textarea name="code" id="editor"></textarea>')
         if url.endswith("/query.php") and self.authenticated:
@@ -628,6 +685,22 @@ def _benchmark_api_urlopen(raw_flag: str):
             return _FakeHttpResponse(url, json.dumps({"columns": {"result": "varchar(255)"}}).encode("utf-8"))
         if "db=" in url:
             return _FakeHttpResponse(url, json.dumps({"tables": ["results"]}).encode("utf-8"))
+        return _FakeHttpResponse(url, json.dumps({"dbs": ["benchmark"]}).encode("utf-8"))
+
+    return open_url
+
+
+def _benchmark_api_credential_urlopen(account: str, phrase: str):
+    def open_url(request_obj, *args, **kwargs):
+        url = request_obj.full_url if hasattr(request_obj, "full_url") else str(request_obj)
+        if "mode=preview" in url and "%60" in url:
+            return _FakeHttpResponse(url, json.dumps([{"username": account, "credential": phrase}]).encode("utf-8"))
+        if "mode=preview" in url:
+            return _FakeHttpResponse(url, b"blocked")
+        if "table=" in url:
+            return _FakeHttpResponse(url, json.dumps({"columns": {"username": "varchar(255)", "credential": "varchar(255)"}}).encode("utf-8"))
+        if "db=" in url:
+            return _FakeHttpResponse(url, json.dumps({"tables": ["accounts"]}).encode("utf-8"))
         return _FakeHttpResponse(url, json.dumps({"dbs": ["benchmark"]}).encode("utf-8"))
 
     return open_url

