@@ -225,6 +225,7 @@ class RuntimeRagAnswersMixin:
                 limit=5,
             )
         except Exception as exc:  # noqa: BLE001 - retrieval must not break operator Q&A
+            error = redact_sensitive_text(str(exc))
             return {
                 "query": redact_sensitive_text(question),
                 "purpose": purpose,
@@ -232,7 +233,7 @@ class RuntimeRagAnswersMixin:
                 "target_id": target_id,
                 "chunks": [
                     {
-                        "error": str(exc),
+                        "error": error,
                         "retrieval_source": "rag_error",
                         "chunk_id": "",
                         "evidence_refs": [],
@@ -240,7 +241,7 @@ class RuntimeRagAnswersMixin:
                 ],
                 "citation_map": [],
                 "omitted_sources": [],
-                "warnings": [str(exc)],
+                "warnings": [error],
                 "prompt_context": "",
             }
 

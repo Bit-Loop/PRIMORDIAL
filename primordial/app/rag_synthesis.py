@@ -10,6 +10,7 @@ from primordial.core.domain.models import json_ready
 from primordial.core.providers.lmstudio import LMStudioClient
 from primordial.core.providers.wrapper_prompts import build_wrapper_system_prompt
 from primordial.core.rag.citations import disallowed_rag_synthesis_model, validate_rag_citations
+from primordial.core.sensitive_text import redact_sensitive_text
 
 
 CitationId = Callable[[dict[str, object]], str]
@@ -171,7 +172,7 @@ def provider_error_response(
         "ok": False,
         "status": "provider_error",
         "answer": "",
-        "error": str(exc),
+        "error": redact_sensitive_text(str(exc)),
         "retrieved_ids": _citation_ids(chunks, citation_id_for_chunk),
         "citation_map": citation_map,
     }
@@ -204,7 +205,7 @@ def validate_operational_rag_synthesis_context(chunks: list[dict[str, object]], 
         try:
             envelopes.append(ContextEnvelope.from_rag_chunk(item, purpose=mode, sink="prompt"))
         except ValueError as exc:
-            errors.append(str(exc))
+            errors.append(redact_sensitive_text(str(exc)))
     result = ContextSinkValidator().validate("prompt", envelopes)
     if errors:
         result.valid = False
