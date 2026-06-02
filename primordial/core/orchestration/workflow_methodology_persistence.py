@@ -140,8 +140,6 @@ class WorkflowMethodologyPersistenceMixin:
     def _methodology_task_block_reason(self, task: Task, target: Target | None) -> str:
         if task.kind == TaskKind.CREDENTIALED_ACCESS_CHECK:
             return self._credentialed_access_task_block_reason(task, target)
-        if target is None:
-            return "target record is missing"
         if task.kind not in {
             TaskKind.EXPLOIT_RESEARCH,
             TaskKind.POC_APPLICABILITY_VALIDATION,
@@ -149,6 +147,8 @@ class WorkflowMethodologyPersistenceMixin:
             TaskKind.KERBEROS_ATTACK_CHECK,
         }:
             return ""
+        if target is None:
+            return "target record is missing"
         active_generation = self._target_active_generation(target)
         if active_generation is not None:
             task_generation = task.metadata.get("active_ip_generation")

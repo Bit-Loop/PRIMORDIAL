@@ -135,9 +135,9 @@ class WorkflowLifecycleMixin:
                 )
             )
             return task
-        if approved and task.kind == TaskKind.CREDENTIALED_ACCESS_CHECK:
+        if approved:
             target = self.store.get_target(task.target_id) if task.target_id else None
-            block_reason = self._credentialed_access_task_block_reason(task, target)
+            block_reason = self._methodology_task_block_reason(task, target)
             if block_reason:
                 self._invalidate_task(task, block_reason, event_summary=f"Task approval blocked: {task.title}")
                 return task
