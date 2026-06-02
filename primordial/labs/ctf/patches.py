@@ -132,13 +132,15 @@ def _has_passing_result(results: tuple[dict[str, str], ...]) -> bool:
 
 
 def _has_passing_hardcode_scan(hardcode_scan_result: Mapping[str, Any]) -> bool:
-    return str(hardcode_scan_result.get("status", "")).strip().lower() in PASS_STATUSES
+    findings = hardcode_scan_result.get("findings", ())
+    return str(hardcode_scan_result.get("status", "")).strip().lower() in PASS_STATUSES and not findings
 
 
 def _has_reviewable_hardcode_scan(hardcode_scan_result: Mapping[str, Any]) -> bool:
-    if _has_passing_hardcode_scan(hardcode_scan_result):
-        return True
+    scan_status = str(hardcode_scan_result.get("status", "")).strip().lower()
     findings = hardcode_scan_result.get("findings", ())
+    if scan_status in PASS_STATUSES and not findings:
+        return True
     if not isinstance(findings, (list, tuple)) or not findings:
         return False
     return all(_finding_severity(finding) == "review" for finding in findings)
