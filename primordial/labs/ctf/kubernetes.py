@@ -15,6 +15,25 @@ KUBERNETES_GOAT_EXIT_GATES = (
     "namespace_scope_enforced",
     "cluster_mutations_reset_between_runs",
 )
+CLUSTER_SCOPED_RESOURCE_KINDS = frozenset(
+    {
+        "clusterrole",
+        "clusterrolebinding",
+        "customresourcedefinition",
+        "namespace",
+        "node",
+        "persistentvolume",
+        "storageclass",
+    }
+)
+NAMESPACE_RESET_ACTIONS = frozenset(
+    {
+        "delete_namespace_and_reapply",
+        "helm_uninstall_and_install",
+        "kubectl_apply_clean_manifest",
+        "namespace_recreate",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,7 +134,7 @@ def _validate_scoped_resources(
             raise ValueError(f"Kubernetes Goat controls duplicate resource id: {resource_id}")
         _validate_target_id(target, item.get("target_id"), source=f"scoped_resources[{index}].target_id")
         _validate_namespace(namespace, item.get("namespace"), source=f"scoped_resources[{index}].namespace")
-        _required_text(item.get("kind"), f"scoped_resources[{index}].kind")
+        _validate_namespaced_resource_kind(item.get("kind"), source=f"scoped_resources[{index}].kind")
         _required_text(item.get("name"), f"scoped_resources[{index}].name")
         _validate_asset(target, item.get("asset"), source=f"scoped_resources[{index}].asset")
         _text_refs(item.get("source_refs"), source=f"scoped_resources[{index}].source_refs")
@@ -141,7 +160,7 @@ def _validate_mutation_resets(
             raise ValueError(f"Kubernetes Goat controls duplicate reset id: {reset_id}")
         _validate_target_id(target, item.get("target_id"), source=f"mutation_resets[{index}].target_id")
         _validate_namespace(namespace, item.get("namespace"), source=f"mutation_resets[{index}].namespace")
-        _required_text(item.get("action"), f"mutation_resets[{index}].action")
+        _validate_namespace_reset_action(item.get("action"), source=f"mutation_resets[{index}].action")
         if bool(item.get("cluster_scope", False)):
             raise ValueError("Kubernetes Goat controls mutation reset must stay inside namespace")
         reset_ref = _evidence_ref(item.get("reset_evidence_ref"), source=f"mutation_resets[{index}].reset_evidence_ref")
@@ -171,6 +190,18 @@ def _validate_namespace(expected: str, value: Any, *, source: str) -> None:
     observed = _namespace(_required_text(value, source))
     if observed != expected:
         raise ValueError(f"Kubernetes Goat controls {source} must match namespace")
+
+
+def _validate_namespaced_resource_kind(value: Any, *, source: str) -> None:
+    kind = _normalized(_required_text(value, source))
+    if kind in CLUSTER_SCOPED_RESOURCE_KINDS:
+        raise ValueError(f"Kubernetes Goat controls {source} must be namespace-scoped")
+
+
+def _validate_namespace_reset_action(value: Any, *, source: str) -> None:
+    action = _normalized(_required_text(value, source))
+    if action not in NAMESPACE_RESET_ACTIONS:
+        raise ValueError(f"Kubernetes Goat controls {source} must reset the local namespace")
 
 
 def _validate_asset(target: CTFTarget, value: Any, *, source: str) -> None:
@@ -214,6 +245,10 @@ def _namespace(value: str) -> str:
     if namespace in {"*", "all", "default", "kube-node-lease", "kube-public", "kube-system"}:
         raise ValueError("Kubernetes Goat controls namespace must be dedicated to the local lab")
     return namespace
+
+
+def _normalized(value: str) -> str:
+    return value.strip().lower().replace("-", "_").replace(" ", "_")
 
 
 def _required_text(value: Any, source: str) -> str:
