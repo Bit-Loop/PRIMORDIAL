@@ -166,6 +166,9 @@ def _closed_book_source_ref_errors(run: BenchmarkRun) -> list[str]:
     for solve_result in run.solve_results:
         target_id = str(solve_result.get("target_id", "")).strip()
         source_refs = solve_result.get("source_refs", ())
+        if not isinstance(source_refs, (list, tuple)):
+            errors.append(f"closed-book solve result source_refs malformed: {target_id}")
+            continue
         if _normalized(str(solve_result.get("solve_status", ""))) in {"solved", "complete", "completed"} and not source_refs:
             errors.append(f"closed-book solved result missing source_refs: {target_id}")
         for source_ref in _source_ref_tuple(source_refs):
