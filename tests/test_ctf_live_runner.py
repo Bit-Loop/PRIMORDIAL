@@ -24,6 +24,7 @@ class CTFLiveRunnerTests(unittest.TestCase):
 
         self.assertEqual(result.status, "ready")
         self.assertEqual(result.lab_id, "juice-shop")
+        self.assertEqual(result.target_url, "http://127.0.0.1:3100/")
         self.assertTrue(result.evidence_ref.startswith("evidence:live-lab:"))
         self.assertIn("completion_indicator=autonomous_flags", evidence)
         self.assertIn("readiness_only=true", evidence)
@@ -46,6 +47,7 @@ class CTFLiveRunnerTests(unittest.TestCase):
 
         self.assertEqual(result.status, "ready")
         self.assertEqual(result.lab_id, "cloudgoat-localstack-adaptation")
+        self.assertEqual(result.target_url, "http://127.0.0.1:4566/")
         self.assertIn("completion_indicator=autonomous_flags", evidence)
         self.assertIn("readiness_only=true", evidence)
         self.assertIn("upstream_lab=https://github.com/RhinoSecurityLabs/cloudgoat", evidence)

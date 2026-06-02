@@ -374,7 +374,7 @@ def _run_docker_http_lab(
         else:
             removed = _run(("docker", "rm", "-f", container_name), command_runner=command_runner, check=False)
             lines.extend(_command_lines("docker_rm", removed))
-    return _write_result(phase=phase, status=status, lab_id=lab_id, evidence=evidence, lines=lines, blocker=blocker)
+    return _write_result(phase=phase, status=status, lab_id=lab_id, evidence=evidence, lines=lines, blocker=blocker, target_url=url)
 
 
 def _run_mbptl_lab(
@@ -613,9 +613,11 @@ def _run_localstack_lab(
     lab_id = "cloudgoat-localstack-adaptation"
     evidence = _evidence_file(lab_root, phase=phase, lab_id=lab_id)
     container_name = "primordial-live-localstack"
-    url = "http://127.0.0.1:4566/_localstack/health"
+    target_url = "http://127.0.0.1:4566/"
+    health_url = f"{target_url}_localstack/health"
     lines = _evidence_header(phase=phase, lab_id=lab_id) + [
         "upstream_lab=https://github.com/RhinoSecurityLabs/cloudgoat",
+        f"target_url={target_url}",
     ]
     status = "blocked"
     started = False
@@ -639,8 +641,8 @@ def _run_localstack_lab(
         )
         started = True
         lines.extend(_command_lines("docker_run", run))
-        body = _wait_http(url, timeout_seconds=timeout_seconds, http_getter=http_getter)
-        lines.extend(_http_lines(url, body))
+        body = _wait_http(health_url, timeout_seconds=timeout_seconds, http_getter=http_getter)
+        lines.extend(_http_lines(health_url, body))
         sts = _run(
             (
                 "aws",
@@ -669,7 +671,7 @@ def _run_localstack_lab(
         else:
             removed = _run(("docker", "rm", "-f", container_name), command_runner=command_runner, check=False)
             lines.extend(_command_lines("docker_rm", removed))
-    return _write_result(phase=phase, status=status, lab_id=lab_id, evidence=evidence, lines=lines, blocker=blocker)
+    return _write_result(phase=phase, status=status, lab_id=lab_id, evidence=evidence, lines=lines, blocker=blocker, target_url=target_url)
 
 
 def _run_kubernetes_goat_lab(
