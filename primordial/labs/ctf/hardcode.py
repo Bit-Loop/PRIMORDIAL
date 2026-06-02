@@ -7,7 +7,7 @@ import hashlib
 import re
 
 
-FLAG_PATTERN = re.compile(r"\b(?:flag|ctf)\{[^}\s]{4,}\}", re.IGNORECASE)
+FLAG_PATTERN = re.compile(r"\b(?:(?i:flag|ctf)|(?:[A-Z][A-Z0-9_-]{1,31}-\d+))\{[^}\s]{4,}\}")
 TARGET_IP_PATTERN = re.compile(r"\b(?:10|172|192)\.(?:\d{1,3}\.){2}\d{1,3}\b")
 CHALLENGE_CONDITIONAL_PATTERN = re.compile(
     r"\b(?:if|elif)\s+[^:\n]*"

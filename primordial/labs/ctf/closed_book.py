@@ -6,7 +6,7 @@ import re
 from primordial.labs.ctf.targets import CTFTarget
 
 
-FLAG_PATTERN = re.compile(r"\b(?:flag|ctf)\{[^}\s]{4,}\}", re.IGNORECASE)
+FLAG_PATTERN = re.compile(r"\b(?:(?i:flag|ctf)|(?:[A-Z][A-Z0-9_-]{1,31}-\d+))\{[^}\s]{4,}\}")
 DEFAULT_STRIP_MARKERS = (
     "expected_flag",
     "expected_flags",

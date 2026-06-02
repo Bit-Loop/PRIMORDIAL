@@ -186,6 +186,45 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
         self.assertNotIn(raw_flag, artifact_text)
         self.assertNotIn(raw_flag, json.dumps(evidence.as_payload()))
 
+    def test_executor_captures_redacted_lab_prefixed_flag_format(self) -> None:
+        target = self.runtime.register_target(
+            handle="local-mbptl-lab",
+            profile=ScopeProfile.HACK_THE_BOX,
+            assets=["http://127.0.0.1:3183/"],
+            metadata={
+                "ctf_completion_indicator": "autonomous_flags",
+                "ctf_target_url": "http://127.0.0.1:3183/",
+                "local_ctf_autonomous": True,
+            },
+        )
+        task = Task(
+            target_id=target.id,
+            phase=MethodologyPhase.ANALYSIS,
+            kind=TaskKind.CTF_FLAG_CAPTURE,
+            title="Run closed-book lab-prefixed CTF flag capture",
+            summary="Search local CTF surfaces for a redacted lab-prefixed flag reference.",
+            role=AgentRole.ANALYSIS_WORKER,
+            risk_tier=RiskTier.MODERATE,
+            required_capabilities=["ctf-flag-capture", "flag-collection"],
+            metadata={"primitive_hint": "ctf-flag-capture"},
+        )
+        raw_flag = "MBPTL-" + "9" + "{" + "synthetic-lab-format" + "}"
+
+        with patch(
+            "primordial.modes.security.execution_ctf_handler.request.urlopen",
+            return_value=_FakeHttpResponse("http://127.0.0.1:3183/", b"body " + raw_flag.encode("utf-8")),
+        ):
+            result = self.runtime.executor.execute(task, None)
+
+        artifact_text = Path(result.artifacts[0].path).read_text(encoding="utf-8")
+        evidence = result.evidence[0]
+
+        self.assertTrue(result.success)
+        self.assertTrue(evidence.metadata["captured_flag_ref"].startswith("evidence:captured-flag:"))
+        self.assertEqual(evidence.metadata["captured_flag_length"], len(raw_flag))
+        self.assertNotIn(raw_flag, artifact_text)
+        self.assertNotIn(raw_flag, json.dumps(evidence.as_payload()))
+
 
 class _FakeHttpResponse:
     def __init__(self, url: str, body: bytes) -> None:

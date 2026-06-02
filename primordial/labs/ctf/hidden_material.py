@@ -16,7 +16,7 @@ HIDDEN_FLAG_KEYS = frozenset(
         "hidden_flags",
     }
 )
-FLAG_PATTERN = re.compile(r"\b(?:flag|ctf)\{[^}\s]{4,}\}", re.IGNORECASE)
+FLAG_PATTERN = re.compile(r"\b(?:(?i:flag|ctf)|(?:[A-Z][A-Z0-9_-]{1,31}-\d+))\{[^}\s]{4,}\}")
 
 
 def reject_hidden_flag_material(value: Any, *, path: str, label: str) -> None:
