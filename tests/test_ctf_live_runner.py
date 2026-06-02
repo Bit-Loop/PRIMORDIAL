@@ -127,16 +127,18 @@ class CTFLiveRunnerTests(unittest.TestCase):
         self.assertIn("blocker=", evidence)
 
     def test_phase_five_runner_hashes_kubernetes_goat_cluster_evidence(self) -> None:
+        calls: list[tuple[str, ...]] = []
         with tempfile.TemporaryDirectory() as temp_dir:
             result = run_phase(
                 5,
                 lab_root=Path(temp_dir),
-                command_runner=_runner(stdout='{"items":[{"metadata":{"name":"pod"}}]}'),
+                command_runner=_runner(stdout='{"items":[{"metadata":{"name":"pod"}}]}', calls=calls),
                 timeout_seconds=0.01,
             )
 
             evidence = Path(result.evidence_path).read_text(encoding="utf-8")
 
+        kubectl_calls = [command for command in calls if command[:1] == ("kubectl",)]
         self.assertEqual(result.status, "ready")
         self.assertEqual(result.lab_id, "kubernetes-goat")
         self.assertIn("cluster=kind-primordial-k8s", evidence)
@@ -144,7 +146,13 @@ class CTFLiveRunnerTests(unittest.TestCase):
         self.assertIn("kubectl_nodes.stdout_sha256=", evidence)
         self.assertIn("kubectl_wait_deployments.stdout_sha256=", evidence)
         self.assertIn("kubectl_pods.stdout_sha256=", evidence)
+        self.assertIn("kubectl_apply_objective.stdout_sha256=", evidence)
+        self.assertIn("objective_secret_sha256=", evidence)
+        self.assertIn("flag_value_sha256=", evidence)
+        self.assertIn("flag_value_redacted=true", evidence)
+        self.assertTrue(any("apply" in command and "-f" in command for command in kubectl_calls))
         self.assertNotIn("metadata", evidence)
+        self.assertNotIn("ctf{", evidence)
 
     def test_phase_six_runner_records_goad_provider_preflight_blockers(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

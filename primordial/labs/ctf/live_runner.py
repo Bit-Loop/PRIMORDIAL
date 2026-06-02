@@ -1016,6 +1016,14 @@ def _run_kubernetes_goat_lab(
         lines.extend(_command_lines("kubectl_wait_deployments", wait))
         pods = _run(("kubectl", "--kubeconfig", str(kubeconfig), "get", "pods", "-A", "-o", "json"), command_runner=command_runner, env=env)
         lines.extend(_command_lines("kubectl_pods", pods))
+        lines.extend(
+            _seed_kubernetes_goat_objective(
+                lab_root=lab_root,
+                kubeconfig=kubeconfig,
+                command_runner=command_runner,
+                env=env,
+            )
+        )
         status = "ready"
         blocker = ""
     except Exception as exc:  # noqa: BLE001 - live cluster readiness failures must be recorded as blockers
@@ -1023,6 +1031,55 @@ def _run_kubernetes_goat_lab(
         blocker = str(exc)
         lines.append(f"blocker={blocker}")
     return _write_result(phase=phase, status=status, lab_id=lab_id, evidence=evidence, lines=lines, blocker=blocker)
+
+
+def _seed_kubernetes_goat_objective(
+    *,
+    lab_root: Path,
+    kubeconfig: Path,
+    command_runner: CommandRunner | None,
+    env: dict[str, str],
+) -> list[str]:
+    runtime_dir = lab_root / "runtime" / "phase5-kubernetes-goat"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    seed = hashlib.sha256(f"phase5-kubernetes-goat:{time.time_ns()}".encode("utf-8")).hexdigest()
+    secret_name = f"primordial-kubernetes-goat-{seed[:12]}"
+    flag_value = "ctf" + "{" + f"phase5-kubernetes-goat-{seed[12:36]}" + "}"
+    manifest = runtime_dir / f"objective-{seed[:12]}.yaml"
+    lines = [
+        f"objective_secret_sha256={_sha256_text(secret_name)}",
+        f"flag_value_sha256={_sha256_text(flag_value)}",
+        "flag_value_redacted=true",
+    ]
+    try:
+        manifest.write_text(
+            "\n".join(
+                [
+                    "apiVersion: v1",
+                    "kind: Secret",
+                    "metadata:",
+                    f"  name: {secret_name}",
+                    "  namespace: default",
+                    "  labels:",
+                    "    app.kubernetes.io/part-of: kubernetes-goat",
+                    "    primordial.local/objective: ctf",
+                    "type: Opaque",
+                    "stringData:",
+                    f"  flag: {flag_value}",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        apply = _run(
+            ("kubectl", "--kubeconfig", str(kubeconfig), "apply", "-f", str(manifest)),
+            command_runner=command_runner,
+            env=env,
+        )
+        lines.extend(_command_lines("kubectl_apply_objective", apply))
+    finally:
+        manifest.unlink(missing_ok=True)
+    return lines
 
 
 def _run_goad_light_lab(
