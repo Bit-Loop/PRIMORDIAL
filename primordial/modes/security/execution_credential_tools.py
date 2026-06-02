@@ -210,9 +210,13 @@ class PrimitiveCredentialToolMixin:
             )
             if not local_path.exists():
                 continue
-            value = local_path.read_text(encoding="utf-8", errors="replace").strip()
+            content = local_path.read_bytes()
             local_path.chmod(0o600)
-            if not value:
+            try:
+                local_path.unlink()
+            except OSError:
+                pass
+            if not content.strip():
                 continue
             flag_hits.append(
                 {
@@ -221,8 +225,11 @@ class PrimitiveCredentialToolMixin:
                     "remote_path": remote_path,
                     "flag_name": flag_name,
                     "content_collected": True,
-                    "value": value,
-                    "local_path": str(local_path),
+                    "content_sha256": hashlib.sha256(content).hexdigest(),
+                    "content_bytes": len(content),
+                    "raw_value_stored": False,
+                    "local_file_retained": False,
+                    "redacted": True,
                     "tool_returncode": result.get("returncode"),
                 }
             )

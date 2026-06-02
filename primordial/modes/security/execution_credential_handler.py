@@ -118,6 +118,8 @@ class PrimitiveCredentialHandlerMixin:
                 "command_results": command_results,
                 "guardrails": {
                     "password_redacted": True,
+                    "flag_values_redacted": True,
+                    "flag_files_retained": False,
                     "uses_configured_known_credentials": True,
                     "winrm_password_arg_tools_require_env_opt_in": True,
                 },
