@@ -88,6 +88,8 @@ def _has_hard_fail_finding(value: Mapping[str, Any]) -> bool:
 
 
 def _has_review_finding(value: Mapping[str, Any]) -> bool:
+    if not isinstance(value, Mapping):
+        return False
     return any(_finding_severity(finding) == "review" for finding in tuple(dict(value).get("findings", ())))
 
 
