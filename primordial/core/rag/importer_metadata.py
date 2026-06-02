@@ -48,7 +48,7 @@ class RagImporterMetadataMixin:
 
     def _metadata(self, record: dict[str, Any], *, domain: str) -> dict[str, Any]:
         nested = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
-        metadata = {**nested, **self._base_metadata(record, domain=domain)}
+        metadata = {**self._scrub_raw_content_metadata(nested), **self._base_metadata(record, domain=domain)}
         metadata.update(self._optional_metadata(record))
         if domain == "mitre_attack":
             metadata.update(self._mitre_attack_metadata())
@@ -81,9 +81,17 @@ class RagImporterMetadataMixin:
             "allowed_use_modes": self._list_or_empty(self._record_value(record, "allowed_use_modes")),
             "allowed_contexts": self._list_or_empty(self._record_value(record, "allowed_contexts")),
             "license_status": self._record_value(record, "license_status"),
-            "raw_text": raw_text,
             "raw_text_sha256": hashlib.sha256(raw_text.encode("utf-8")).hexdigest() if raw_text else "",
+            "raw_text_stored": False,
             "source_sha256": self._record_value(record, "source_sha256"),
+        }
+
+    def _scrub_raw_content_metadata(self, metadata: dict[str, Any]) -> dict[str, Any]:
+        raw_content_keys = {"raw_text", "request_body", "response_body", "raw_request", "raw_response"}
+        return {
+            key: value
+            for key, value in metadata.items()
+            if normalized_context_key(key) not in raw_content_keys
         }
 
     def _optional_metadata(self, record: dict[str, Any]) -> dict[str, Any]:
