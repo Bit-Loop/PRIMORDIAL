@@ -20,7 +20,7 @@ class WorkflowMethodologyStateMixin:
         if not target.handle.strip():
             self._record_invalid_target_block(target, report)
             return
-        invalidated_tasks = self._invalidate_contradicted_credentialed_access_tasks(target, report)
+        invalidated_tasks = self._invalidate_contradicted_methodology_tasks(target, report)
         methodology_state = self._evaluate_target_methodology_state(target)
         self._persist_target_methodology_state(target, methodology_state, report)
         planned_any = False

@@ -109,24 +109,22 @@ class WorkflowMethodologyPersistenceMixin:
         self.store.insert_event(event)
         report.events.append(event)
 
-    def _invalidate_contradicted_credentialed_access_tasks(
+    def _invalidate_contradicted_methodology_tasks(
         self,
         target: Target,
         report: OrchestrationReport,
     ) -> list[dict[str, object]]:
         invalidated: list[dict[str, object]] = []
         for task in self.store.list_tasks(target_id=target.id, limit=500):
-            if task.kind != TaskKind.CREDENTIALED_ACCESS_CHECK:
-                continue
             if task.status not in {TaskStatus.PENDING, TaskStatus.WAITING, TaskStatus.NEEDS_APPROVAL}:
                 continue
-            reason = self._credentialed_access_task_block_reason(task, target)
+            reason = self._methodology_task_block_reason(task, target)
             if not reason:
                 continue
             event = self._invalidate_task(
                 task,
                 reason,
-                event_summary=f"Credentialed access task invalidated: {task.title}",
+                event_summary=f"Methodology task invalidated: {task.title}",
             )
             report.events.append(event)
             invalidated.append(
@@ -138,6 +136,58 @@ class WorkflowMethodologyPersistenceMixin:
                 }
             )
         return invalidated
+
+    def _methodology_task_block_reason(self, task: Task, target: Target | None) -> str:
+        if task.kind == TaskKind.CREDENTIALED_ACCESS_CHECK:
+            return self._credentialed_access_task_block_reason(task, target)
+        if target is None:
+            return "target record is missing"
+        if task.kind not in {
+            TaskKind.EXPLOIT_RESEARCH,
+            TaskKind.POC_APPLICABILITY_VALIDATION,
+            TaskKind.KERBEROS_USER_DISCOVERY,
+            TaskKind.KERBEROS_ATTACK_CHECK,
+        }:
+            return ""
+        active_generation = self._target_active_generation(target)
+        if active_generation is not None:
+            task_generation = task.metadata.get("active_ip_generation")
+            if str(task_generation or "") != active_generation:
+                return "task was planned for a stale target evidence generation"
+        return self._operator_intent_task_block_reason(task)
+
+    def _operator_intent_task_block_reason(self, task: Task) -> str:
+        policy = self._active_intent_policy()
+        if policy is None:
+            return ""
+        if task.kind == TaskKind.EXPLOIT_RESEARCH:
+            if not (policy.public_poc_research and policy.searchsploit_allowed):
+                return "active operator intent does not allow public PoC research"
+        elif task.kind == TaskKind.POC_APPLICABILITY_VALIDATION:
+            if not policy.poc_applicability_validation:
+                return "active operator intent does not allow public PoC applicability validation"
+        elif task.kind == TaskKind.KERBEROS_USER_DISCOVERY:
+            if not (
+                policy.kerberos_policy.asrep_roast_check_allowed
+                or policy.kerberos_policy.kerberoast_check_allowed
+            ):
+                return "active operator intent does not allow Kerberos principal discovery"
+        elif task.kind == TaskKind.KERBEROS_ATTACK_CHECK:
+            requested = {
+                str(item).strip().lower()
+                for item in task.metadata.get("kerberos_checks", [])
+                if str(item).strip()
+            } if isinstance(task.metadata.get("kerberos_checks"), list) else set()
+            if "asrep_roast" in requested and not policy.kerberos_policy.asrep_roast_check_allowed:
+                return "active operator intent does not allow AS-REP roast checks"
+            if "kerberoast" in requested and not policy.kerberos_policy.kerberoast_check_allowed:
+                return "active operator intent does not allow Kerberoast candidate checks"
+            if not requested and not (
+                policy.kerberos_policy.asrep_roast_check_allowed
+                or policy.kerberos_policy.kerberoast_check_allowed
+            ):
+                return "active operator intent does not allow Kerberos attack-path checks"
+        return ""
 
     def _credentialed_access_task_block_reason(self, task: Task, target: Target | None) -> str:
         if target is None:
@@ -201,7 +251,7 @@ class WorkflowMethodologyPersistenceMixin:
             reasons.append(
                 {
                     "code": "contradictory_existing_task",
-                    "summary": "Current evidence contradicted an existing credentialed-access task or approval.",
+                    "summary": "Current evidence or operator intent contradicted existing methodology work.",
                     "tasks": invalidated_tasks,
                 }
             )
