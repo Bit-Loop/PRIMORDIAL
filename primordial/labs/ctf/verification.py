@@ -57,9 +57,11 @@ def _scan_status(value: Mapping[str, Any]) -> str:
 
 
 def _has_hard_fail_finding(value: Mapping[str, Any]) -> bool:
-    if _scan_status(value) in PASS_STATUSES:
-        return False
+    if not isinstance(value, Mapping):
+        return True
     findings = tuple(dict(value).get("findings", ()))
+    if _scan_status(value) in PASS_STATUSES and not findings:
+        return False
     if not findings:
         return True
     return any(_finding_severity(finding) != "review" for finding in findings)
