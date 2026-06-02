@@ -22,6 +22,7 @@ from primordial.core.orchestration.workflow_deps import (
     utc_now,
     ValidationStage,
 )
+from primordial.core.sensitive_text import redact_sensitive_text
 
 class WorkflowExceptionValidationMixin:
     @staticmethod
@@ -50,7 +51,10 @@ class WorkflowExceptionValidationMixin:
     ) -> None:
         now = utc_now()
         exception_type = type(exc).__name__
-        traceback_text = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        error_text = self._redact_exception_text(str(exc))
+        traceback_text = self._redact_exception_text(
+            "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        )
         timed_out, transient = self._execution_exception_flags(exc)
         if timed_out:
             task.attempts += 1
@@ -62,15 +66,15 @@ class WorkflowExceptionValidationMixin:
             task.attempts += 1
             task.status = TaskStatus.PENDING if task.attempts < task.max_attempts else TaskStatus.FAILED
         task.updated_at = now
-        task.metadata["execution_exception"] = str(exc)
+        task.metadata["execution_exception"] = error_text
         task.metadata["exception_type"] = exception_type
         task.metadata["traceback"] = traceback_text
         task.metadata["last_exception_transient"] = transient
         if timed_out:
             task.metadata["last_run_timed_out"] = True
         run.status = TaskRunStatus.TIMED_OUT if timed_out else TaskRunStatus.FAILED
-        run.error = str(exc)
-        run.trace_summary = f"execution crashed: {exc}"
+        run.error = error_text
+        run.trace_summary = f"execution crashed: {error_text}"
         run.finished_at = now
         run.heartbeat_at = now
         run.metadata["execution_exception"] = True
@@ -83,10 +87,10 @@ class WorkflowExceptionValidationMixin:
                 task_id=task.id,
                 role=task.role,
                 status="failed",
-                summary=f"Execution crashed before result persistence: {exc}",
+                summary=f"Execution crashed before result persistence: {error_text}",
                 metadata={
                     "execution_exception": True,
-                    "error": str(exc),
+                    "error": error_text,
                     "exception_type": exception_type,
                     "traceback": traceback_text,
                     "model": task.provider_model,
@@ -102,7 +106,7 @@ class WorkflowExceptionValidationMixin:
             payload={
                 "task": task.as_payload(),
                 "run": run.as_payload(),
-                "error": str(exc),
+                "error": error_text,
                 "exception_type": exception_type,
                 "traceback": traceback_text,
             },
@@ -131,12 +135,15 @@ class WorkflowExceptionValidationMixin:
             target_id=task.target_id,
             task_id=task.id,
             metadata={
-                "error": str(exc),
+                "error": self._redact_exception_text(str(exc)),
                 "execution_exception": True,
                 "exception_type": exception_type,
                 "traceback": traceback_text,
             },
         )
+
+    def _redact_exception_text(self, value: object) -> str:
+        return redact_sensitive_text(str(value or "")).strip()
 
     def _annotate_result_metadata(self, task: Task, metadata: dict[str, object]) -> None:
         if task.metadata.get("active_ip_generation") is not None:
