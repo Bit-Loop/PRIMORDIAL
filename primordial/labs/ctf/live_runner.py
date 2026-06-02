@@ -20,10 +20,14 @@ from primordial.labs.ctf.sessions import SolveSession
 
 DEFAULT_LAB_ROOT = Path("/run/media/bitloop/DREAD/primordial-labs")
 DEFAULT_KUBERNETES_GOAT_KUBECONFIG = DEFAULT_LAB_ROOT / "kubeconfigs" / "phase5-kind.yaml"
-READY_PHASES = frozenset({1, 2, 3, 5, 7, 8})
+READY_PHASES = frozenset({1, 2, 3, 4, 5, 7, 8})
 MBPTL_RELATIVE_COMPOSE = Path("assets/phase3-mbptl/mbptl/docker-compose.yml")
 MBPTL_PROJECT = "primordial-mbptl"
 MBPTL_MAIN_URL = "http://127.0.0.1:3183/"
+CICD_GOAT_RELATIVE_COMPOSE = Path("assets/phase4-cicd-goat/docker-compose.yaml")
+CICD_GOAT_OVERRIDE_RELATIVE = Path("runtime/phase4-cicd-goat-port-override.yml")
+CICD_GOAT_PROJECT = "primordial-cicd-goat"
+CICD_GOAT_TARGET_URL = "http://127.0.0.1:38000/"
 NYU_LITTLEQUERY_RELATIVE_COMPOSE = Path("assets/phase8-nyu-ctf-bench/test/2017/CSAW-Quals/web/littlequery/docker-compose.yml")
 NYU_LITTLEQUERY_PROJECT = "primordial-nyu-littlequery"
 
@@ -121,6 +125,14 @@ def run_phase(
         )
     if phase == 3:
         return _run_mbptl_lab(
+            lab_root=lab_root,
+            command_runner=command_runner,
+            http_getter=http_getter,
+            timeout_seconds=timeout_seconds,
+            keep_running=keep_running,
+        )
+    if phase == 4:
+        return _run_cicd_goat_lab(
             lab_root=lab_root,
             command_runner=command_runner,
             http_getter=http_getter,
@@ -451,6 +463,132 @@ def _run_mbptl_lab(
         target_url=MBPTL_MAIN_URL,
         cleanup_command=down_command,
     )
+
+
+def _run_cicd_goat_lab(
+    *,
+    lab_root: Path,
+    command_runner: CommandRunner | None,
+    http_getter: HttpGetter | None,
+    timeout_seconds: float,
+    keep_running: bool,
+) -> LiveLabRunResult:
+    phase = 4
+    lab_id = "cicd-goat"
+    evidence = _evidence_file(lab_root, phase=phase, lab_id=lab_id)
+    compose_file = lab_root / CICD_GOAT_RELATIVE_COMPOSE
+    override_file = lab_root / CICD_GOAT_OVERRIDE_RELATIVE
+    down_command = (
+        "docker",
+        "compose",
+        "-f",
+        str(compose_file),
+        "-f",
+        str(override_file),
+        "-p",
+        CICD_GOAT_PROJECT,
+        "down",
+        "--remove-orphans",
+    )
+    lines = _evidence_header(phase=phase, lab_id=lab_id) + [
+        "upstream_lab=https://github.com/cider-security-research/cicd-goat",
+        f"compose_file={compose_file}",
+        f"override_file={override_file}",
+        f"target_url={CICD_GOAT_TARGET_URL}",
+        "jenkins_url=http://127.0.0.1:38080/",
+        "gitea_url=http://127.0.0.1:33000/",
+        "gitlab_url=http://127.0.0.1:34000/",
+        "prod_url=http://127.0.0.1:38008/",
+    ]
+    status = "blocked"
+    blocker = ""
+    started = False
+    try:
+        if not compose_file.is_file():
+            raise RuntimeError(f"compose file is missing: {compose_file}")
+        override_file.parent.mkdir(parents=True, exist_ok=True)
+        override_file.write_text(_cicd_goat_port_override(), encoding="utf-8")
+        lines.append(f"override_sha256={_sha256_bytes(override_file.read_bytes())}")
+        up = _run(
+            (
+                "docker",
+                "compose",
+                "-f",
+                str(compose_file),
+                "-f",
+                str(override_file),
+                "-p",
+                CICD_GOAT_PROJECT,
+                "up",
+                "-d",
+            ),
+            command_runner=command_runner,
+        )
+        started = True
+        lines.extend(_command_lines("docker_compose_up", up))
+        ps = _run(
+            (
+                "docker",
+                "compose",
+                "-f",
+                str(compose_file),
+                "-f",
+                str(override_file),
+                "-p",
+                CICD_GOAT_PROJECT,
+                "ps",
+                "--format",
+                "json",
+            ),
+            command_runner=command_runner,
+        )
+        lines.extend(_command_lines("docker_compose_ps", ps))
+        body = _wait_http(CICD_GOAT_TARGET_URL, timeout_seconds=timeout_seconds, http_getter=http_getter)
+        lines.extend(_http_lines(CICD_GOAT_TARGET_URL, body))
+        status = "ready"
+    except Exception as exc:  # noqa: BLE001 - lab readiness failures must be recorded as blockers
+        status = "blocked"
+        blocker = str(exc)
+        lines.append(f"blocker={blocker}")
+    finally:
+        if keep_running and started and status == "ready":
+            lines.append("cleanup_deferred=true")
+        else:
+            down = _run(down_command, command_runner=command_runner, check=False)
+            lines.extend(_command_lines("docker_compose_down", down))
+    return _write_result(
+        phase=phase,
+        status=status,
+        lab_id=lab_id,
+        evidence=evidence,
+        lines=lines,
+        blocker=blocker,
+        target_url=CICD_GOAT_TARGET_URL,
+        cleanup_command=down_command,
+    )
+
+
+def _cicd_goat_port_override() -> str:
+    return """services:
+  jenkins-server:
+    ports: !override
+      - "127.0.0.1:38080:8080"
+      - "127.0.0.1:35000:50000"
+  gitea:
+    ports: !override
+      - "127.0.0.1:33000:3000"
+  ctfd:
+    ports: !override
+      - "127.0.0.1:38000:8000"
+  prod:
+    ports: !override
+      - "127.0.0.1:38008:80"
+      - "127.0.0.1:32222:22"
+  gitlab:
+    ports: !override
+      - "127.0.0.1:34000:80"
+      - "127.0.0.1:35050:5050"
+"""
 
 
 def _run_localstack_lab(
@@ -945,6 +1083,7 @@ def _target_url_for_phase(phase: int) -> str:
         1: "http://127.0.0.1:3100/",
         2: "http://127.0.0.1:3180/",
         3: MBPTL_MAIN_URL,
+        4: CICD_GOAT_TARGET_URL,
         5: "kubernetes://kind-primordial-k8s",
         7: "http://127.0.0.1:4566/",
     }

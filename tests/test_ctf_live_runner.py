@@ -108,6 +108,36 @@ class CTFLiveRunnerTests(unittest.TestCase):
         self.assertIn("cleanup_deferred=true", evidence)
         self.assertNotIn("mbptl ready body", evidence)
 
+    def test_phase_four_runner_starts_cicd_goat_with_local_port_override(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lab_root = Path(temp_dir)
+            compose_file = lab_root / "assets/phase4-cicd-goat/docker-compose.yaml"
+            compose_file.parent.mkdir(parents=True)
+            compose_file.write_text("services:\n  ctfd:\n    image: local\n", encoding="utf-8")
+
+            result = run_phase(
+                4,
+                lab_root=lab_root,
+                command_runner=_runner(stdout='{"Service":"ctfd","State":"running"}'),
+                http_getter=lambda _url: b"cicd goat ready body",
+                timeout_seconds=0.01,
+                keep_running=True,
+            )
+
+            evidence = Path(result.evidence_path).read_text(encoding="utf-8")
+            override = lab_root / "runtime/phase4-cicd-goat-port-override.yml"
+            override_exists = override.is_file()
+
+        self.assertEqual(result.status, "ready")
+        self.assertEqual(result.lab_id, "cicd-goat")
+        self.assertEqual(result.target_url, "http://127.0.0.1:38000/")
+        self.assertTrue(override_exists)
+        self.assertIn("override_sha256=", evidence)
+        self.assertIn("docker_compose_up.returncode=0", evidence)
+        self.assertIn("http.body_sha256=", evidence)
+        self.assertIn("cleanup_deferred=true", evidence)
+        self.assertNotIn("cicd goat ready body", evidence)
+
     def test_phase_eight_runner_starts_nyu_littlequery_compose_target(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             lab_root = Path(temp_dir)
