@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import re
 from urllib import parse
 
 from primordial.adapters.caido_constants import SENSITIVE_HEADER_RE, SENSITIVE_PARAM_RE
 from primordial.core.sensitive_text import redact_sensitive_text
+
+HTTPQL_QUOTED_PATH_RE = re.compile(r'(?P<quote>["\'])(?P<path>/[^"\'\s]*\?[^"\'\s]*)(?P=quote)')
 
 
 def redacted_snippet(value: str, max_chars: int) -> dict[str, object]:
@@ -41,6 +44,16 @@ def redact_query_string(query: object) -> str:
     if not pairs:
         return "[redacted]"
     return parse.urlencode([(key, "[redacted]") for key, _ in pairs])
+
+
+def redact_httpql_text(value: object) -> str:
+    text = redact_sensitive_text(str(value or ""))
+
+    def replace(match: re.Match[str]) -> str:
+        quote = match.group("quote")
+        return f"{quote}{redact_request_path(match.group('path'))}{quote}"
+
+    return HTTPQL_QUOTED_PATH_RE.sub(replace, text)
 
 
 def _split_request_target(path: str) -> tuple[str, str]:

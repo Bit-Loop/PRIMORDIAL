@@ -10,6 +10,7 @@ from primordial.app.runtime_deps import (
     urlparse,
     utc_now,
 )
+from primordial.adapters.caido_redaction import redact_httpql_text
 
 class RuntimeCaidoCaptureMixin:
     def _caido_scope_terms(self, target: Target) -> list[str]:
@@ -67,6 +68,7 @@ class RuntimeCaidoCaptureMixin:
         httpql: str,
     ) -> ArtifactRecord:
         request_id = str(request_payload.get("id") or "unknown")
+        stored_httpql = redact_httpql_text(httpql)
         artifact_dir = self.config.artifacts_dir / "caido" / self._safe_log_fragment(target.handle)
         artifact_dir.mkdir(parents=True, exist_ok=True)
         path = artifact_dir / f"{self._safe_log_fragment(request_id)}.json"
@@ -75,7 +77,7 @@ class RuntimeCaidoCaptureMixin:
             "kind": ArtifactKind.CAIDO_CAPTURE.value,
             "target": target.as_payload(),
             "caido_request_id": request_id,
-            "httpql": httpql,
+            "httpql": stored_httpql,
             "imported_at": utc_now().isoformat(),
             "raw_bodies_stored": False,
             "snippets_stored": False,
@@ -106,7 +108,7 @@ class RuntimeCaidoCaptureMixin:
             size_bytes=len(content),
             metadata={
                 "caido_request_id": request_id,
-                "httpql": httpql,
+                "httpql": stored_httpql,
                 "raw_bodies_stored": False,
                 "snippets_stored": False,
             },

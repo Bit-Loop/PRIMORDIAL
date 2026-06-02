@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from primordial.core.domain.enums import ArtifactKind, EvidenceType, EventType, VerificationStatus
 from primordial.core.domain.models import ArtifactRecord, EvidenceRecord, EventRecord, Target
+from primordial.adapters.caido_redaction import redact_httpql_text
 
 
 def selected_caido_request_ids(request_ids: list[str], *, limit: int = 50) -> list[str]:
@@ -55,13 +56,14 @@ def caido_import_row(request_id: str, evidence: EvidenceRecord, artifact: Artifa
 
 
 def caido_import_event(target: Target, imported: list[dict[str, object]], httpql: str) -> EventRecord:
+    stored_httpql = redact_httpql_text(httpql)
     return EventRecord(
         type=EventType.CAIDO_IMPORT,
         summary=f"Imported {len(imported)} Caido capture(s)",
         target_id=target.id,
         metadata={
             "request_ids": [item["request_id"] for item in imported],
-            "httpql": httpql,
+            "httpql": stored_httpql,
             "artifact_ids": [item["artifact"]["id"] for item in imported],
             "evidence_ids": [item["evidence"]["id"] for item in imported],
             "raw_bodies_stored": False,
@@ -92,10 +94,11 @@ def _caido_capture_metadata(
     artifact: ArtifactRecord,
     httpql: str,
 ) -> dict[str, object]:
+    stored_httpql = redact_httpql_text(httpql)
     metadata = {
         "kind": ArtifactKind.CAIDO_CAPTURE.value,
         "caido_request_id": request_id,
-        "httpql": httpql,
+        "httpql": stored_httpql,
         "method": str(request_payload.get("method") or "HTTP").upper(),
         "host": str(request_payload.get("host") or ""),
         "path": str(request_payload.get("path") or "/"),
