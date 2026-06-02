@@ -20,7 +20,7 @@ from primordial.labs.ctf.sessions import SolveSession
 
 DEFAULT_LAB_ROOT = Path("/run/media/bitloop/DREAD/primordial-labs")
 DEFAULT_KUBERNETES_GOAT_KUBECONFIG = DEFAULT_LAB_ROOT / "kubeconfigs" / "phase5-kind.yaml"
-READY_PHASES = frozenset({1, 2, 3, 4, 5, 7, 8})
+READY_PHASES = frozenset({1, 2, 3, 4, 5, 6, 7, 8})
 MBPTL_RELATIVE_COMPOSE = Path("assets/phase3-mbptl/mbptl/docker-compose.yml")
 MBPTL_PROJECT = "primordial-mbptl"
 MBPTL_MAIN_URL = "http://127.0.0.1:3183/"
@@ -30,6 +30,11 @@ CICD_GOAT_PROJECT = "primordial-cicd-goat"
 CICD_GOAT_TARGET_URL = "http://127.0.0.1:38000/"
 NYU_LITTLEQUERY_RELATIVE_COMPOSE = Path("assets/phase8-nyu-ctf-bench/test/2017/CSAW-Quals/web/littlequery/docker-compose.yml")
 NYU_LITTLEQUERY_PROJECT = "primordial-nyu-littlequery"
+GOAD_RELATIVE_ROOT = Path("assets/phase6-goad")
+GOAD_RUNTIME_HOME_RELATIVE = Path("runtime/goad-home")
+GOAD_TOOLS_BIN_RELATIVE = Path("tools/bin")
+GOAD_PYTHON_DEPS_RELATIVE = Path("tools/python-goad-deps")
+GOAD_ANSIBLE_CORE_RELATIVE = Path("tools/python-ansible-core")
 
 CommandRunner = Callable[[tuple[str, ...]], subprocess.CompletedProcess[str]]
 AttemptCommandRunner = Callable[[tuple[str, ...], Mapping[str, str]], subprocess.CompletedProcess[str]]
@@ -152,6 +157,11 @@ def run_phase(
             lab_root=lab_root,
             command_runner=command_runner,
             kubeconfig=lab_root / "kubeconfigs" / "phase5-kind.yaml",
+        )
+    if phase == 6:
+        return _run_goad_light_lab(
+            lab_root=lab_root,
+            command_runner=command_runner,
         )
     if phase == 8:
         return _run_nyu_littlequery_lab(
@@ -706,6 +716,166 @@ def _run_kubernetes_goat_lab(
     return _write_result(phase=phase, status=status, lab_id=lab_id, evidence=evidence, lines=lines, blocker=blocker)
 
 
+def _run_goad_light_lab(
+    *,
+    lab_root: Path,
+    command_runner: CommandRunner | None,
+) -> LiveLabRunResult:
+    phase = 6
+    lab_id = "goad-light"
+    evidence = _evidence_file(lab_root, phase=phase, lab_id=lab_id)
+    goad_dir = lab_root / GOAD_RELATIVE_ROOT
+    runtime_home = lab_root / GOAD_RUNTIME_HOME_RELATIVE
+    goad_config = runtime_home / ".goad" / "goad.ini"
+    env = _goad_env(lab_root=lab_root, runtime_home=runtime_home)
+    lines = _evidence_header(phase=phase, lab_id=lab_id) + [
+        "upstream_lab=https://github.com/Orange-Cyberdefense/GOAD",
+        "lab_variant=GOAD-Light",
+        "provider=virtualbox",
+        "provisioner=docker",
+        "readiness_scope=provider_preflight",
+        f"asset_path={goad_dir}",
+        f"runtime_home={runtime_home}",
+    ]
+    blocker = ""
+    try:
+        if not (goad_dir / "goad.py").is_file():
+            raise RuntimeError(f"GOAD checkout is missing: {goad_dir}")
+        goad_config.parent.mkdir(parents=True, exist_ok=True)
+        if not goad_config.is_file():
+            goad_config.write_text(_goad_runtime_config(), encoding="utf-8")
+        lines.append(f"goad_config_sha256={_sha256_bytes(goad_config.read_bytes())}")
+
+        vagrant_version = _run(("vagrant", "version"), command_runner=command_runner, check=False, env=env, cwd=goad_dir)
+        vagrant_plugins = _run(("vagrant", "plugin", "list"), command_runner=command_runner, check=False, env=env, cwd=goad_dir)
+        ansible_playbook = _run(("ansible-playbook", "--version"), command_runner=command_runner, check=False, env=env, cwd=goad_dir)
+        ansible_galaxy = _run(("ansible-galaxy", "--version"), command_runner=command_runner, check=False, env=env, cwd=goad_dir)
+        virtualbox = _run(("VBoxManage", "--version"), command_runner=command_runner, check=False, env=env, cwd=goad_dir)
+        image = _run(("docker", "image", "inspect", "goadansible:latest"), command_runner=command_runner, check=False, env=env, cwd=goad_dir)
+        goad_check = _run(
+            ("python3", "goad.py", "-t", "check", "-l", "GOAD-Light", "-p", "virtualbox", "-m", "docker"),
+            command_runner=command_runner,
+            check=False,
+            env=env,
+            cwd=goad_dir,
+        )
+        lines.extend(_command_lines("vagrant_version", vagrant_version))
+        lines.extend(_command_lines("vagrant_plugin_list", vagrant_plugins))
+        lines.extend(_command_lines("ansible_playbook_version", ansible_playbook))
+        lines.extend(_command_lines("ansible_galaxy_version", ansible_galaxy))
+        lines.extend(_command_lines("virtualbox_version", virtualbox))
+        lines.extend(_command_lines("goadansible_image", image))
+        lines.extend(_command_lines("goad_check", goad_check))
+
+        blockers = _goad_preflight_blockers(
+            vagrant_version=vagrant_version,
+            vagrant_plugins=vagrant_plugins,
+            ansible_playbook=ansible_playbook,
+            ansible_galaxy=ansible_galaxy,
+            virtualbox=virtualbox,
+            image=image,
+            goad_check=goad_check,
+        )
+        blocker = "; ".join(blockers)
+        status = "blocked" if blocker else "ready"
+        if blocker:
+            lines.append(f"blocker={blocker}")
+    except Exception as exc:  # noqa: BLE001 - GOAD readiness failures must be evidence, not process crashes
+        status = "blocked"
+        blocker = str(exc)
+        lines.append(f"blocker={blocker}")
+    return _write_result(phase=phase, status=status, lab_id=lab_id, evidence=evidence, lines=lines, blocker=blocker)
+
+
+def _goad_env(*, lab_root: Path, runtime_home: Path) -> dict[str, str]:
+    python_paths = (
+        str(lab_root / GOAD_PYTHON_DEPS_RELATIVE),
+        str(lab_root / GOAD_ANSIBLE_CORE_RELATIVE),
+    )
+    return {
+        "HOME": str(runtime_home),
+        "PATH": f"{lab_root / GOAD_TOOLS_BIN_RELATIVE}{os.pathsep}{os.environ.get('PATH', '')}",
+        "PYTHONPATH": os.pathsep.join(python_paths),
+    }
+
+
+def _goad_runtime_config() -> str:
+    return """[default]
+lab = GOAD-Light
+provider = virtualbox
+provisioner = docker
+ip_range = 192.168.56
+
+[aws]
+aws_region =
+aws_zone =
+
+[azure]
+az_location =
+
+[proxmox]
+pm_api_url =
+pm_user =
+pm_node =
+pm_pool =
+pm_full_clone = false
+pm_storage =
+pm_vlan =
+pm_network_bridge =
+pm_network_model =
+
+[proxmox_templates_id]
+
+[ludus]
+ludus_api_key =
+use_impersonation = yes
+
+[vmware_esxi]
+esxi_hostname =
+esxi_username =
+esxi_password =
+esxi_net_nat =
+esxi_net_domain =
+esxi_datastore =
+"""
+
+
+def _goad_preflight_blockers(
+    *,
+    vagrant_version: subprocess.CompletedProcess[str],
+    vagrant_plugins: subprocess.CompletedProcess[str],
+    ansible_playbook: subprocess.CompletedProcess[str],
+    ansible_galaxy: subprocess.CompletedProcess[str],
+    virtualbox: subprocess.CompletedProcess[str],
+    image: subprocess.CompletedProcess[str],
+    goad_check: subprocess.CompletedProcess[str],
+) -> tuple[str, ...]:
+    blockers: list[str] = []
+    combined_check = f"{goad_check.stdout or ''}\n{goad_check.stderr or ''}".lower()
+    plugin_output = f"{vagrant_plugins.stdout or ''}\n{vagrant_plugins.stderr or ''}".lower()
+    if vagrant_version.returncode != 0:
+        blockers.append("vagrant unusable")
+    if "vagrant-reload" not in plugin_output:
+        blockers.append("vagrant-reload plugin missing")
+    if "vagrant-vbguest" not in plugin_output:
+        blockers.append("vagrant-vbguest plugin missing")
+    if ansible_playbook.returncode != 0:
+        blockers.append("ansible-playbook missing")
+    if ansible_galaxy.returncode != 0:
+        blockers.append("ansible-galaxy missing")
+    if virtualbox.returncode != 0:
+        blockers.append("VBoxManage missing")
+    if image.returncode != 0:
+        blockers.append("goadansible image missing")
+    if "missing ansible-galaxy collection" in combined_check:
+        blockers.append("GOAD Ansible collections missing")
+    if "no instance found" in combined_check:
+        blockers.append("GOAD-Light instance not provisioned")
+    if goad_check.returncode != 0:
+        blockers.append("GOAD check failed")
+    return tuple(dict.fromkeys(blockers))
+
+
 def _run_nyu_littlequery_lab(
     *,
     lab_root: Path,
@@ -815,10 +985,14 @@ def _run(
     command_runner: CommandRunner | None,
     check: bool = True,
     env: dict[str, str] | None = None,
+    cwd: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     if command_runner is None:
         selected_env = {**os.environ, **(env or {})}
-        completed = subprocess.run(command, check=False, capture_output=True, text=True, env=selected_env)
+        try:
+            completed = subprocess.run(command, check=False, capture_output=True, text=True, env=selected_env, cwd=cwd)
+        except OSError as exc:
+            completed = subprocess.CompletedProcess(command, 127, "", str(exc))
     else:
         completed = command_runner(command)
     if check and completed.returncode != 0:

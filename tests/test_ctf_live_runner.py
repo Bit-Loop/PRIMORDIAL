@@ -54,12 +54,12 @@ class CTFLiveRunnerTests(unittest.TestCase):
 
     def test_unsupported_phases_record_concrete_blockers(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            result = run_phase(6, lab_root=Path(temp_dir), command_runner=_runner())
+            result = run_phase(0, lab_root=Path(temp_dir), command_runner=_runner())
 
             evidence = Path(result.evidence_path).read_text(encoding="utf-8")
 
         self.assertEqual(result.status, "blocked")
-        self.assertIn("GOAD", result.blocker)
+        self.assertIn("Phase 0", result.blocker)
         self.assertIn("blocker=", evidence)
 
     def test_phase_five_runner_hashes_kubernetes_goat_cluster_evidence(self) -> None:
@@ -80,6 +80,37 @@ class CTFLiveRunnerTests(unittest.TestCase):
         self.assertIn("kubectl_wait_deployments.stdout_sha256=", evidence)
         self.assertIn("kubectl_pods.stdout_sha256=", evidence)
         self.assertNotIn("metadata", evidence)
+
+    def test_phase_six_runner_records_goad_provider_preflight_blockers(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lab_root = Path(temp_dir)
+            goad_py = lab_root / "assets/phase6-goad/goad.py"
+            goad_py.parent.mkdir(parents=True)
+            goad_py.write_text("print('check')\n", encoding="utf-8")
+
+            result = run_phase(
+                6,
+                lab_root=lab_root,
+                command_runner=_goad_runner(),
+                timeout_seconds=0.01,
+            )
+
+            evidence = Path(result.evidence_path).read_text(encoding="utf-8")
+            goad_config = lab_root / "runtime/goad-home/.goad/goad.ini"
+            goad_config_exists = goad_config.is_file()
+
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(result.lab_id, "goad-light")
+        self.assertIn("VBoxManage missing", result.blocker)
+        self.assertIn("vagrant-vbguest plugin missing", result.blocker)
+        self.assertIn("GOAD Ansible collections missing", result.blocker)
+        self.assertIn("GOAD-Light instance not provisioned", result.blocker)
+        self.assertTrue(goad_config_exists)
+        self.assertIn("readiness_scope=provider_preflight", evidence)
+        self.assertIn("goad_config_sha256=", evidence)
+        self.assertIn("goad_check.stdout_sha256=", evidence)
+        self.assertNotIn("Missing ansible-galaxy collection", evidence)
+        self.assertNotIn("No instance found", evidence)
 
     def test_phase_three_runner_starts_mbptl_compose_target(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -290,6 +321,23 @@ def _runner(stdout: str = "ok"):
         else:
             selected_stdout = stdout
         return subprocess.CompletedProcess(command, 0, selected_stdout, "")
+
+    return run
+
+
+def _goad_runner():
+    def run(command: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
+        if command[:2] == ("vagrant", "version"):
+            return subprocess.CompletedProcess(command, 0, "Installed Version: 2.4.9\n", "")
+        if command[:3] == ("vagrant", "plugin", "list"):
+            return subprocess.CompletedProcess(command, 0, "vagrant-reload (0.0.1)\n", "")
+        if command[:2] == ("VBoxManage", "--version"):
+            return subprocess.CompletedProcess(command, 127, "", "not found")
+        if command[:3] == ("docker", "image", "inspect"):
+            return subprocess.CompletedProcess(command, 0, "[]", "")
+        if command[:2] == ("python3", "goad.py"):
+            return subprocess.CompletedProcess(command, 0, "No instance found\nMissing ansible-galaxy collection community.general\n", "")
+        return subprocess.CompletedProcess(command, 0, "ok", "")
 
     return run
 
