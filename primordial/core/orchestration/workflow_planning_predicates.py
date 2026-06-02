@@ -97,6 +97,8 @@ class WorkflowPlanningPredicatesMixin:
             for item in evidence
         ):
             return False
+        if target.metadata.get("ctf_kubeconfig") and str(target.metadata.get("target_family", "")) == "kubernetes_goat":
+            return True
         return any(
             self._ctf_capture_evidence_signal(target, item)
             for item in evidence
@@ -106,6 +108,8 @@ class WorkflowPlanningPredicatesMixin:
         if not self._evidence_matches_active_generation(target, evidence):
             return False
         if evidence.metadata.get("kind") in {"http_probe", "web_content_discovery", "recon_scan"}:
+            return True
+        if target.metadata.get("ctf_kubeconfig") and str(target.metadata.get("target_family", "")) == "kubernetes_goat":
             return True
         effective_url = evidence.metadata.get("effective_url")
         if isinstance(effective_url, str) and effective_url.startswith(("http://", "https://")):

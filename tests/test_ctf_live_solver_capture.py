@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import json
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -31,6 +33,40 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
                 confidence=0.8,
                 freshness=0.9,
                 metadata={"kind": "http_probe", "effective_url": "http://127.0.0.1:3100/", "status_code": 200},
+            )
+        )
+
+        report = self.runtime.run_tick(max_executions=0)
+
+        capture_tasks = [task for task in report.created_tasks if task.kind == TaskKind.CTF_FLAG_CAPTURE]
+        self.assertEqual(len(capture_tasks), 1)
+        self.assertEqual(capture_tasks[0].metadata["primitive_hint"], "ctf-flag-capture")
+        self.assertTrue(capture_tasks[0].metadata["closed_book"])
+
+    def test_planner_schedules_ctf_flag_capture_for_local_kubernetes_lab_metadata(self) -> None:
+        target = self.runtime.register_target(
+            handle="local-kubernetes-goat-lab",
+            profile=ScopeProfile.HACK_THE_BOX,
+            assets=["kubernetes://kind-primordial-k8s"],
+            metadata={
+                "ctf_completion_indicator": "autonomous_flags",
+                "ctf_target_url": "kubernetes://kind-primordial-k8s",
+                "ctf_kubeconfig": "/tmp/phase5-kind.yaml",
+                "target_family": "kubernetes_goat",
+                "local_ctf_autonomous": True,
+            },
+        )
+        self.runtime.store.insert_evidence(
+            EvidenceRecord(
+                target_id=target.id,
+                type=EvidenceType.TOOL_OUTPUT,
+                title="Kubernetes readiness",
+                summary="Local Kubernetes Goat cluster is reachable.",
+                source_ref="fixture://local-kubernetes-readiness",
+                verification_status=VerificationStatus.VERIFIED,
+                confidence=0.8,
+                freshness=0.9,
+                metadata={"kind": "kubernetes_cluster_readiness", "kubeconfig": "/tmp/phase5-kind.yaml"},
             )
         )
 
@@ -266,6 +302,52 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
         self.assertNotIn(raw_flag, artifact_text)
         self.assertNotIn(raw_flag, json.dumps(evidence.as_payload()))
 
+    def test_executor_captures_redacted_kubernetes_secret_flag(self) -> None:
+        target = self.runtime.register_target(
+            handle="local-kubernetes-goat-lab",
+            profile=ScopeProfile.HACK_THE_BOX,
+            assets=["kubernetes://kind-primordial-k8s"],
+            metadata={
+                "ctf_completion_indicator": "autonomous_flags",
+                "ctf_target_url": "kubernetes://kind-primordial-k8s",
+                "ctf_kubeconfig": "/tmp/phase5-kind.yaml",
+                "ctf_tools_bin": "/tmp/tools/bin",
+                "target_family": "kubernetes_goat",
+                "local_ctf_autonomous": True,
+            },
+        )
+        task = Task(
+            target_id=target.id,
+            phase=MethodologyPhase.ANALYSIS,
+            kind=TaskKind.CTF_FLAG_CAPTURE,
+            title="Run closed-book Kubernetes CTF flag capture",
+            summary="Search local Kubernetes lab state for a redacted flag reference.",
+            role=AgentRole.ANALYSIS_WORKER,
+            risk_tier=RiskTier.MODERATE,
+            required_capabilities=["ctf-flag-capture", "flag-collection"],
+            metadata={"primitive_hint": "ctf-flag-capture"},
+        )
+        raw_flag = fixture_flag("kubernetes-secret")
+
+        with patch(
+            "primordial.modes.security.execution_ctf_handler.Path.is_file",
+            return_value=True,
+        ), patch(
+            "primordial.modes.security.execution_ctf_handler.subprocess.run",
+            side_effect=_kubectl_run(raw_flag),
+        ):
+            result = self.runtime.executor.execute(task, None)
+
+        artifact_text = Path(result.artifacts[0].path).read_text(encoding="utf-8")
+        evidence = result.evidence[0]
+
+        self.assertTrue(result.success)
+        self.assertEqual(evidence.metadata["kubernetes_probe_count"], 2)
+        self.assertTrue(evidence.metadata["captured_flag_ref"].startswith("evidence:captured-flag:"))
+        self.assertEqual(evidence.metadata["captured_flag_length"], len(raw_flag))
+        self.assertNotIn(raw_flag, artifact_text)
+        self.assertNotIn(raw_flag, json.dumps(evidence.as_payload()))
+
 
 class _FakeHttpResponse:
     def __init__(self, url: str, body: bytes) -> None:
@@ -339,6 +421,24 @@ def _service_urlopen(raw_flag: str, requested_urls: list[str]):
         return _FakeHttpResponse(url, b"local service")
 
     return open_url
+
+
+def _kubectl_run(raw_flag: str):
+    def run(command, *args, **kwargs):
+        if "secrets" in command:
+            body = {
+                "items": [
+                    {
+                        "data": {
+                            "flag": base64.b64encode(raw_flag.encode("utf-8")).decode("ascii"),
+                        }
+                    }
+                ]
+            }
+            return subprocess.CompletedProcess(command, 0, json.dumps(body), "")
+        return subprocess.CompletedProcess(command, 0, json.dumps({"items": []}), "")
+
+    return run
 
 
 if __name__ == "__main__":

@@ -129,6 +129,7 @@ class CTFLiveRunnerTests(unittest.TestCase):
         self.assertEqual(result.status, "ready")
         self.assertEqual(result.lab_id, "kubernetes-goat")
         self.assertIn("cluster=kind-primordial-k8s", evidence)
+        self.assertIn("tools_bin=", evidence)
         self.assertIn("kubectl_nodes.stdout_sha256=", evidence)
         self.assertIn("kubectl_wait_deployments.stdout_sha256=", evidence)
         self.assertIn("kubectl_pods.stdout_sha256=", evidence)

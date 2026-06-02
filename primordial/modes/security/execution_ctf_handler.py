@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import base64
+import binascii
+
 from primordial.labs.ctf.hardcode import FLAG_PATTERN
 from primordial.modes.security.execution_common import *
 
@@ -31,6 +34,9 @@ class PrimitiveCtfHandlerMixin:
         max_urls = self._ctf_capture_max_urls(task)
         probes = self._ctf_capture_probe_urls(candidates[:max_urls])
         hit = next((probe for probe in probes if probe.get("captured_flag_ref")), None)
+        kubernetes_probes = [] if hit else self._ctf_kubernetes_probes(target)
+        kubernetes_hit = next((probe for probe in kubernetes_probes if probe.get("captured_flag_ref")), None)
+        hit = hit or kubernetes_hit
         browser_interactions = [] if hit else self._ctf_browser_interactions(target)
         browser_hit = next((item for item in browser_interactions if item.get("captured_flag_ref")), None)
         benchmark_hit = next((item for item in browser_interactions if item.get("benchmark_solve_ref")), None)
@@ -42,6 +48,8 @@ class PrimitiveCtfHandlerMixin:
             "candidate_count": len(candidates),
             "searched_url_count": len(probes),
             "searched_urls": [probe["url"] for probe in probes],
+            "kubernetes_probe_count": len(kubernetes_probes),
+            "kubernetes_probes": kubernetes_probes,
             "browser_interaction_count": len(browser_interactions),
             "browser_interactions": browser_interactions,
             "captured_flag_ref": str(hit.get("captured_flag_ref", "")) if hit else "",
@@ -76,6 +84,7 @@ class PrimitiveCtfHandlerMixin:
                 "raw_flags_redacted": True,
                 "candidate_count": payload["candidate_count"],
                 "searched_url_count": payload["searched_url_count"],
+                "kubernetes_probe_count": payload["kubernetes_probe_count"],
                 "browser_interaction_count": payload["browser_interaction_count"],
                 "captured_flag_ref": payload["captured_flag_ref"],
                 "captured_flag_sha256": payload["captured_flag_sha256"],
@@ -99,6 +108,7 @@ class PrimitiveCtfHandlerMixin:
                     "captured_flag_ref": payload["captured_flag_ref"],
                     "benchmark_solve_ref": payload["benchmark_solve_ref"],
                     "searched_url_count": payload["searched_url_count"],
+                    "kubernetes_probe_count": payload["kubernetes_probe_count"],
                     "browser_interaction_count": payload["browser_interaction_count"],
                     "raw_flags_redacted": True,
                 },
@@ -114,6 +124,7 @@ class PrimitiveCtfHandlerMixin:
                     "captured_flag_ref": payload["captured_flag_ref"],
                     "benchmark_solve_ref": payload["benchmark_solve_ref"],
                     "searched_url_count": payload["searched_url_count"],
+                    "kubernetes_probe_count": payload["kubernetes_probe_count"],
                     "browser_interaction_count": payload["browser_interaction_count"],
                     "raw_flags_redacted": True,
                 },
@@ -279,6 +290,78 @@ class PrimitiveCtfHandlerMixin:
             "captured_flag_length": len(raw),
         }
 
+    def _ctf_kubernetes_probes(self, target) -> list[dict[str, object]]:
+        kubeconfig = str(target.metadata.get("ctf_kubeconfig") or "").strip()
+        if not kubeconfig:
+            return []
+        kubectl = self._ctf_kubectl_binary(target)
+        env = {**os.environ, "KUBECONFIG": kubeconfig}
+        probes: list[dict[str, object]] = []
+        for label, command in (
+            ("kubernetes_configmaps", (kubectl, "--kubeconfig", kubeconfig, "get", "configmaps", "-A", "-o", "json")),
+            ("kubernetes_secrets", (kubectl, "--kubeconfig", kubeconfig, "get", "secrets", "-A", "-o", "json")),
+            ("kubernetes_pods", (kubectl, "--kubeconfig", kubeconfig, "get", "pods", "-A", "-o", "json")),
+        ):
+            probe = self._ctf_kubernetes_probe_command(label, command, env=env)
+            probes.append(probe)
+            if probe.get("captured_flag_ref"):
+                break
+        return probes
+
+    def _ctf_kubernetes_probe_command(
+        self,
+        label: str,
+        command: tuple[str, ...],
+        *,
+        env: dict[str, str],
+    ) -> dict[str, object]:
+        try:
+            completed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=20, env=env)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {"kind": label, "returncode": 127, "error": type(exc).__name__}
+        stdout = completed.stdout or ""
+        captured = self._ctf_capture_redacted_flag(stdout.encode("utf-8", "replace"))
+        if not captured.get("captured_flag_ref") and label == "kubernetes_secrets":
+            captured = self._ctf_capture_kubernetes_secret_data(stdout)
+        return {
+            "kind": label,
+            "returncode": completed.returncode,
+            "stdout_sha256": hashlib.sha256(stdout.encode("utf-8")).hexdigest(),
+            "stdout_bytes": len(stdout.encode("utf-8")),
+            "stderr_sha256": hashlib.sha256((completed.stderr or "").encode("utf-8")).hexdigest(),
+            "stderr_bytes": len((completed.stderr or "").encode("utf-8")),
+            **captured,
+        }
+
+    def _ctf_capture_kubernetes_secret_data(self, text: str) -> dict[str, object]:
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            return {"captured_flag_ref": "", "captured_flag_sha256": "", "captured_flag_length": 0}
+        for item in payload.get("items", []) if isinstance(payload, dict) else []:
+            data = item.get("data", {}) if isinstance(item, dict) else {}
+            if not isinstance(data, dict):
+                continue
+            for value in data.values():
+                if not isinstance(value, str):
+                    continue
+                try:
+                    decoded = base64.b64decode(value, validate=True)
+                except (ValueError, binascii.Error):
+                    continue
+                captured = self._ctf_capture_redacted_flag(decoded)
+                if captured.get("captured_flag_ref"):
+                    return captured
+        return {"captured_flag_ref": "", "captured_flag_sha256": "", "captured_flag_length": 0}
+
+    def _ctf_kubectl_binary(self, target) -> str:
+        tools_bin = str(target.metadata.get("ctf_tools_bin") or "").strip()
+        if tools_bin:
+            candidate = Path(tools_bin) / "kubectl"
+            if candidate.is_file():
+                return str(candidate)
+        return shutil.which("kubectl") or "kubectl"
+
     def _ctf_browser_interactions(self, target) -> list[dict[str, object]]:
         interactions: list[dict[str, object]] = []
         for base in self._ctf_capture_base_urls(target):
@@ -425,7 +508,8 @@ class PrimitiveCtfHandlerMixin:
             return f"Closed-book local CTF browser interaction solved {payload['benchmark_solved_count']} benchmark challenge(s) for {handle}."
         return (
             "Closed-book local CTF flag capture searched "
-            f"{payload['searched_url_count']} URL(s) and ran {payload['browser_interaction_count']} browser interaction(s) "
+            f"{payload['searched_url_count']} URL(s), ran {payload['kubernetes_probe_count']} Kubernetes probe(s), "
+            f"and ran {payload['browser_interaction_count']} browser interaction(s) "
             f"for {handle} without finding a flag or benchmark solve."
         )
 
@@ -434,6 +518,7 @@ class PrimitiveCtfHandlerMixin:
             "Mode: closed-book local CTF flag capture.",
             f"Candidate URLs: {payload['candidate_count']}",
             f"Searched URLs: {payload['searched_url_count']}",
+            f"Kubernetes probes: {payload['kubernetes_probe_count']}",
             f"Browser interactions: {payload['browser_interaction_count']}",
         ]
         if payload["captured_flag_ref"]:

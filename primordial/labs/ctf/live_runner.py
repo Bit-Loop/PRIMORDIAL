@@ -39,6 +39,7 @@ CICD_GOAT_SERVICE_URLS = (
     "http://127.0.0.1:34000/",
     "http://127.0.0.1:38008/",
 )
+GOAD_TOOLS_BIN_RELATIVE = Path("tools/bin")
 VULHUB_HTTPD_CVE_2021_41773_LAB_ID = "vulhub-httpd-cve-2021-41773"
 VULHUB_HTTPD_CVE_2021_41773_FLAG_CONTAINER_PATH = "/primordial_flag.txt"
 ATTEMPT_METADATA_BY_LAB_ID = {
@@ -48,12 +49,16 @@ ATTEMPT_METADATA_BY_LAB_ID = {
         "ctf_flag_container_path": VULHUB_HTTPD_CVE_2021_41773_FLAG_CONTAINER_PATH,
     },
     "cicd-goat": {"ctf_service_urls": list(CICD_GOAT_SERVICE_URLS)},
+    "kubernetes-goat": {
+        "target_family": "kubernetes_goat",
+        "ctf_kubeconfig": str(DEFAULT_KUBERNETES_GOAT_KUBECONFIG),
+        "ctf_tools_bin": str(DEFAULT_LAB_ROOT / GOAD_TOOLS_BIN_RELATIVE),
+    },
 }
 NYU_LITTLEQUERY_RELATIVE_COMPOSE = Path("assets/phase8-nyu-ctf-bench/test/2017/CSAW-Quals/web/littlequery/docker-compose.yml")
 NYU_LITTLEQUERY_PROJECT = "primordial-nyu-littlequery"
 GOAD_RELATIVE_ROOT = Path("assets/phase6-goad")
 GOAD_RUNTIME_HOME_RELATIVE = Path("runtime/goad-home")
-GOAD_TOOLS_BIN_RELATIVE = Path("tools/bin")
 GOAD_PYTHON_DEPS_RELATIVE = Path("tools/python-goad-deps")
 GOAD_ANSIBLE_CORE_RELATIVE = Path("tools/python-ansible-core")
 
@@ -908,8 +913,9 @@ def _run_kubernetes_goat_lab(
     lines = _evidence_header(phase=phase, lab_id=lab_id) + [
         "cluster=kind-primordial-k8s",
         f"kubeconfig={kubeconfig}",
+        f"tools_bin={lab_root / GOAD_TOOLS_BIN_RELATIVE}",
     ]
-    env = {"KUBECONFIG": str(kubeconfig)}
+    env = _lab_tool_env(lab_root=lab_root, extra={"KUBECONFIG": str(kubeconfig)})
     try:
         node = _run(("kubectl", "--kubeconfig", str(kubeconfig), "get", "nodes", "-o", "json"), command_runner=command_runner, env=env)
         lines.extend(_command_lines("kubectl_nodes", node))
@@ -1019,12 +1025,20 @@ def _goad_env(*, lab_root: Path, runtime_home: Path) -> dict[str, str]:
     user_state_root = Path(os.environ.get("PRIMORDIAL_LABS_USER_STATE_ROOT", str(Path.home() / ".local" / "share" / "primordial-labs")))
     return {
         "HOME": str(runtime_home),
-        "PATH": f"{lab_root / GOAD_TOOLS_BIN_RELATIVE}{os.pathsep}{os.environ.get('PATH', '')}",
+        "PATH": _lab_tool_path(lab_root=lab_root),
         "PYTHONPATH": os.pathsep.join(python_paths),
         "ANSIBLE_COLLECTIONS_PATH": str(user_state_root / "ansible" / "collections"),
         "ANSIBLE_ROLES_PATH": str(user_state_root / "ansible" / "roles"),
         "VAGRANT_HOME": str(user_state_root / "goad-vagrant"),
     }
+
+
+def _lab_tool_env(*, lab_root: Path, extra: dict[str, str] | None = None) -> dict[str, str]:
+    return {"PATH": _lab_tool_path(lab_root=lab_root), **(extra or {})}
+
+
+def _lab_tool_path(*, lab_root: Path) -> str:
+    return f"{lab_root / GOAD_TOOLS_BIN_RELATIVE}{os.pathsep}{os.environ.get('PATH', '')}"
 
 
 def _goad_runtime_config() -> str:
@@ -1543,6 +1557,9 @@ def _primordial_attempt_env(
         "PRIMORDIAL_ALLOW_REMOTE_PREMIUM": "false",
         "PRIMORDIAL_CTF_AUTONOMOUS_ATTEMPT": "true",
     }
+    if lab_root is not None:
+        env["PATH"] = _lab_tool_path(lab_root=lab_root)
+        env.update(_attempt_env_by_lab_id(lab_root=lab_root).get(lab_id, {}))
     database_url = _primordial_database_url()
     if database_url and lab_root is not None and lab_id:
         schema = _ctf_attempt_schema(lab_id)
@@ -1555,6 +1572,10 @@ def _primordial_attempt_env(
             }
         )
     return env
+
+
+def _attempt_env_by_lab_id(*, lab_root: Path) -> dict[str, dict[str, str]]:
+    return {"kubernetes-goat": {"KUBECONFIG": str(lab_root / "kubeconfigs" / "phase5-kind.yaml")}}
 
 
 def _primordial_database_url() -> str:
