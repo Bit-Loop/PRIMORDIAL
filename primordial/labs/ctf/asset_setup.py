@@ -161,7 +161,7 @@ def setup_asset(
         lines.append(f"status={status}")
         if blocker:
             lines.append(f"blocker={blocker}")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - asset setup records any clone or filesystem failure as a blocker
         status = "blocked"
         blocker = str(exc)
         lines.append(f"status={status}")

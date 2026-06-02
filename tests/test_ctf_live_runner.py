@@ -54,13 +54,32 @@ class CTFLiveRunnerTests(unittest.TestCase):
 
     def test_unsupported_phases_record_concrete_blockers(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            result = run_phase(5, lab_root=Path(temp_dir), command_runner=_runner())
+            result = run_phase(6, lab_root=Path(temp_dir), command_runner=_runner())
 
             evidence = Path(result.evidence_path).read_text(encoding="utf-8")
 
         self.assertEqual(result.status, "blocked")
-        self.assertIn("Kubernetes Goat", result.blocker)
+        self.assertIn("GOAD", result.blocker)
         self.assertIn("blocker=", evidence)
+
+    def test_phase_five_runner_hashes_kubernetes_goat_cluster_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = run_phase(
+                5,
+                lab_root=Path(temp_dir),
+                command_runner=_runner(stdout='{"items":[{"metadata":{"name":"pod"}}]}'),
+                timeout_seconds=0.01,
+            )
+
+            evidence = Path(result.evidence_path).read_text(encoding="utf-8")
+
+        self.assertEqual(result.status, "ready")
+        self.assertEqual(result.lab_id, "kubernetes-goat")
+        self.assertIn("cluster=kind-primordial-k8s", evidence)
+        self.assertIn("kubectl_nodes.stdout_sha256=", evidence)
+        self.assertIn("kubectl_wait_deployments.stdout_sha256=", evidence)
+        self.assertIn("kubectl_pods.stdout_sha256=", evidence)
+        self.assertNotIn("metadata", evidence)
 
     def test_run_all_includes_every_phase(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -72,7 +91,7 @@ class CTFLiveRunnerTests(unittest.TestCase):
             )
 
         self.assertEqual([result.phase for result in results], list(range(9)))
-        self.assertEqual([result.status for result in results if result.phase in {1, 2, 7}], ["ready"] * 3)
+        self.assertEqual([result.status for result in results if result.phase in {1, 2, 5, 7}], ["ready"] * 4)
 
     def test_phase_runner_can_defer_cleanup_while_autonomous_attempt_uses_live_lab(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -19,7 +19,8 @@ from urllib.request import urlopen
 from primordial.labs.ctf.sessions import SolveSession
 
 DEFAULT_LAB_ROOT = Path("/run/media/bitloop/DREAD/primordial-labs")
-READY_PHASES = frozenset({1, 2, 7})
+DEFAULT_KUBERNETES_GOAT_KUBECONFIG = DEFAULT_LAB_ROOT / "kubeconfigs" / "phase5-kind.yaml"
+READY_PHASES = frozenset({1, 2, 5, 7})
 
 CommandRunner = Callable[[tuple[str, ...]], subprocess.CompletedProcess[str]]
 AttemptCommandRunner = Callable[[tuple[str, ...], Mapping[str, str]], subprocess.CompletedProcess[str]]
@@ -117,6 +118,12 @@ def run_phase(
             timeout_seconds=timeout_seconds,
             keep_running=keep_running,
         )
+    if phase == 5:
+        return _run_kubernetes_goat_lab(
+            lab_root=lab_root,
+            command_runner=command_runner,
+            kubeconfig=lab_root / "kubeconfigs" / "phase5-kind.yaml",
+        )
     return _blocked_phase_result(phase, lab_root=lab_root)
 
 
@@ -183,7 +190,7 @@ def run_autonomous_attempt(
             lines.extend(_attempt_command_lines(index, result))
             if result.returncode != 0:
                 raise RuntimeError(f"primordial command {index} failed")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - any subprocess or runtime failure must be recorded as a blocker, not raised
         blocker = str(exc)
         lines.append(f"blocker={blocker}")
         lines.extend(_cleanup_live_lab_lines(readiness) if cleanup_live_lab else ())
@@ -310,7 +317,7 @@ def _run_docker_http_lab(
         lines.extend(_command_lines("docker_inspect", inspect))
         status = "ready"
         blocker = ""
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - lab probe records any failure as a blocker rather than crashing
         status = "blocked"
         blocker = str(exc)
         lines.append(f"blocker={blocker}")
@@ -381,7 +388,7 @@ def _run_localstack_lab(
         lines.extend(_command_lines("localstack_sts", sts))
         status = "ready"
         blocker = ""
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - lab probe records any failure as a blocker rather than crashing
         status = "blocked"
         blocker = str(exc)
         lines.append(f"blocker={blocker}")
@@ -391,6 +398,50 @@ def _run_localstack_lab(
         else:
             removed = _run(("docker", "rm", "-f", container_name), command_runner=command_runner, check=False)
             lines.extend(_command_lines("docker_rm", removed))
+    return _write_result(phase=phase, status=status, lab_id=lab_id, evidence=evidence, lines=lines, blocker=blocker)
+
+
+def _run_kubernetes_goat_lab(
+    *,
+    lab_root: Path,
+    command_runner: CommandRunner | None,
+    kubeconfig: Path = DEFAULT_KUBERNETES_GOAT_KUBECONFIG,
+) -> LiveLabRunResult:
+    phase = 5
+    lab_id = "kubernetes-goat"
+    evidence = _evidence_file(lab_root, phase=phase, lab_id=lab_id)
+    lines = _evidence_header(phase=phase, lab_id=lab_id) + [
+        "cluster=kind-primordial-k8s",
+        f"kubeconfig={kubeconfig}",
+    ]
+    env = {"KUBECONFIG": str(kubeconfig)}
+    try:
+        node = _run(("kubectl", "--kubeconfig", str(kubeconfig), "get", "nodes", "-o", "json"), command_runner=command_runner, env=env)
+        lines.extend(_command_lines("kubectl_nodes", node))
+        wait = _run(
+            (
+                "kubectl",
+                "--kubeconfig",
+                str(kubeconfig),
+                "wait",
+                "--for=condition=available",
+                "--timeout=60s",
+                "deployment",
+                "--all",
+                "-A",
+            ),
+            command_runner=command_runner,
+            env=env,
+        )
+        lines.extend(_command_lines("kubectl_wait_deployments", wait))
+        pods = _run(("kubectl", "--kubeconfig", str(kubeconfig), "get", "pods", "-A", "-o", "json"), command_runner=command_runner, env=env)
+        lines.extend(_command_lines("kubectl_pods", pods))
+        status = "ready"
+        blocker = ""
+    except Exception as exc:  # noqa: BLE001 - live cluster readiness failures must be recorded as blockers
+        status = "blocked"
+        blocker = str(exc)
+        lines.append(f"blocker={blocker}")
     return _write_result(phase=phase, status=status, lab_id=lab_id, evidence=evidence, lines=lines, blocker=blocker)
 
 
@@ -679,6 +730,7 @@ def _target_url_for_phase(phase: int) -> str:
     urls = {
         1: "http://127.0.0.1:3100/",
         2: "http://127.0.0.1:3180/",
+        5: "kubernetes://kind-primordial-k8s",
         7: "http://127.0.0.1:4566/",
     }
     return urls.get(phase, "")
@@ -727,7 +779,7 @@ def _git_head_ref() -> str:
             text=True,
             timeout=5,
         )
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return "git:unknown"
     head = result.stdout.strip()
     return f"git:{head}" if result.returncode == 0 and head else "git:unknown"
