@@ -100,7 +100,7 @@ class CTFAssetSetupTests(unittest.TestCase):
         clone = next(command for command in calls if command[:2] == ("git", "clone"))
         self.assertEqual(result.status, "asset_ready")
         self.assertEqual(result.lab_id, "cloudgoat")
-        self.assertEqual(clone[-2], "https://github.com/RhinoSecurityLabs/cloudgoat.git")
+        self.assertEqual(clone[-2], "https://github.com/rhinosecuritylabs/cloudgoat.git")
         self.assertIn("provisioning_note=CloudGoat is cloned as the official scenario reference", evidence)
         self.assertIn("tool_aws.returncode=0", evidence)
         self.assertIn("denied_path_removed=solutions/", evidence)

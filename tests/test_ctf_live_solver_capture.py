@@ -83,6 +83,64 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
         self.assertNotIn(raw_flag, json.dumps(evidence.as_payload()))
         self.assertNotIn(raw_flag, note.body)
 
+    def test_executor_records_browser_benchmark_solve_without_flag_material(self) -> None:
+        target = self.runtime.register_target(
+            handle="local-browser-lab",
+            profile=ScopeProfile.HACK_THE_BOX,
+            assets=["http://127.0.0.1:3100/"],
+            metadata={
+                "ctf_completion_indicator": "autonomous_flags",
+                "ctf_target_url": "http://127.0.0.1:3100/",
+                "local_ctf_autonomous": True,
+            },
+        )
+        task = Task(
+            target_id=target.id,
+            phase=MethodologyPhase.ANALYSIS,
+            kind=TaskKind.CTF_FLAG_CAPTURE,
+            title="Run closed-book CTF benchmark interaction",
+            summary="Use browser-rendered local CTF state to record benchmark solves.",
+            role=AgentRole.ANALYSIS_WORKER,
+            risk_tier=RiskTier.MODERATE,
+            required_capabilities=["ctf-flag-capture", "flag-collection"],
+            metadata={"primitive_hint": "ctf-flag-capture"},
+        )
+        state = {"solved": False}
+
+        def browser_interaction(_executor, url: str) -> dict[str, object]:
+            state["solved"] = True
+            return {
+                "url": url,
+                "browser_available": True,
+                "returncode": 0,
+                "dom_sha256": "0" * 64,
+                "dom_bytes": 123,
+                "captured_flag_ref": "",
+                "captured_flag_sha256": "",
+                "captured_flag_length": 0,
+            }
+
+        with patch(
+            "primordial.modes.security.execution_ctf_handler.request.urlopen",
+            side_effect=_benchmark_urlopen(state),
+        ), patch(
+            "primordial.modes.security.execution.PrimitiveExecutor._ctf_browser_interaction",
+            autospec=True,
+            side_effect=browser_interaction,
+        ):
+            result = self.runtime.executor.execute(task, None)
+
+        artifact_text = Path(result.artifacts[0].path).read_text(encoding="utf-8")
+        evidence = result.evidence[0]
+
+        self.assertTrue(result.success)
+        self.assertEqual(evidence.metadata["captured_flag_ref"], "")
+        self.assertTrue(evidence.metadata["benchmark_solve_ref"].startswith("evidence:benchmark-solve:"))
+        self.assertEqual(evidence.metadata["benchmark_solved_count"], 1)
+        self.assertEqual(evidence.metadata["benchmark_solved_challenges"][0]["key"], "publicRouteChallenge")
+        self.assertIn("benchmark_solve_ref", artifact_text)
+        self.assertNotIn("ctf{", artifact_text.lower())
+
 
 class _FakeHttpResponse:
     def __init__(self, url: str, body: bytes) -> None:
@@ -102,6 +160,38 @@ class _FakeHttpResponse:
 
     def geturl(self) -> str:
         return self._url
+
+
+def _benchmark_urlopen(state: dict[str, bool]):
+    def open_url(request_obj, *args, **kwargs):
+        url = request_obj.full_url if hasattr(request_obj, "full_url") else str(request_obj)
+        if url.endswith("/rest/admin/application-configuration"):
+            body = {
+                "config": {
+                    "application": {
+                        "securityTxt": {
+                            "acknowledgements": "/#/score-board",
+                        }
+                    }
+                }
+            }
+            return _FakeHttpResponse(url, json.dumps(body).encode("utf-8"))
+        if url.endswith("/api/Challenges"):
+            body = {
+                "data": [
+                    {
+                        "key": "publicRouteChallenge",
+                        "name": "Public Route",
+                        "category": "Miscellaneous",
+                        "difficulty": 1,
+                        "solved": state["solved"],
+                    }
+                ]
+            }
+            return _FakeHttpResponse(url, json.dumps(body).encode("utf-8"))
+        return _FakeHttpResponse(url, b"no flag here")
+
+    return open_url
 
 
 if __name__ == "__main__":

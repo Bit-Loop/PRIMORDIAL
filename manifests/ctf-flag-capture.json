@@ -9,8 +9,14 @@
   "side_effect_level": "read_only",
   "required_secrets": [],
   "input_schema": {"target_id": "string", "base_urls": "array<string>"},
-  "output_schema": {"captured_flag_ref": "string", "candidate_count": "integer", "searched_url_count": "integer"},
-  "timeout_seconds": 90,
+  "output_schema": {
+    "captured_flag_ref": "string",
+    "benchmark_solve_ref": "string",
+    "candidate_count": "integer",
+    "searched_url_count": "integer",
+    "browser_interaction_count": "integer"
+  },
+  "timeout_seconds": 900,
   "retry_policy": {"max_attempts": 1},
   "evidence_adapter": "ctf_flag_capture_results",
   "sandbox_profile": "host-readonly-network",

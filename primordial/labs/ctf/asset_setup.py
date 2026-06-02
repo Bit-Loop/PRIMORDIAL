@@ -94,7 +94,7 @@ LAB_ASSETS: tuple[LabAsset, ...] = (
     LabAsset(
         phase=7,
         lab_id="cloudgoat",
-        repo_url="https://github.com/RhinoSecurityLabs/cloudgoat.git",
+        repo_url="https://github.com/rhinosecuritylabs/cloudgoat.git",
         dest_name="phase7-cloudgoat",
         required_tools=("git", "docker", "terraform", "python3", "aws"),
         denied_paths=("writeups/", "solutions/", "walkthroughs/", "docs/solutions/"),

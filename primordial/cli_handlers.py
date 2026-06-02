@@ -389,13 +389,18 @@ def _metadata_json_arg(value: str | None, parser: argparse.ArgumentParser) -> di
 def _emit_ctf_capture_refs(runtime: Any) -> None:
     refs: list[str] = []
     for evidence in runtime.store.list_evidence(limit=500):
-        ref = str(evidence.metadata.get("captured_flag_ref", "")).strip()
-        if not ref.startswith("evidence:captured-flag"):
-            continue
-        if ref not in refs:
-            refs.append(ref)
+        for key, prefix in (
+            ("captured_flag_ref", "evidence:captured-flag"),
+            ("benchmark_solve_ref", "evidence:benchmark-solve"),
+        ):
+            ref = str(evidence.metadata.get(key, "")).strip()
+            if not ref.startswith(prefix):
+                continue
+            line = f"{key}={ref}"
+            if line not in refs:
+                refs.append(line)
     for ref in refs:
-        print(f"captured_flag_ref={ref}")
+        print(ref)
 
 
 def _run_remove_target(

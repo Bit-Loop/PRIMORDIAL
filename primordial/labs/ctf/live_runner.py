@@ -79,6 +79,7 @@ class AutonomousAttemptResult:
     evidence_ref: str
     solve_session_path: str
     captured_flag_ref: str = ""
+    benchmark_solve_ref: str = ""
     blocker: str = ""
 
     def as_payload(self) -> dict[str, object]:
@@ -91,6 +92,7 @@ class AutonomousAttemptResult:
             "evidence_ref": self.evidence_ref,
             "solve_session_path": self.solve_session_path,
             "captured_flag_ref": self.captured_flag_ref,
+            "benchmark_solve_ref": self.benchmark_solve_ref,
             "blocker": self.blocker,
         }
 
@@ -386,6 +388,30 @@ def run_autonomous_attempt(
             captured_flag_ref=captured_flag_ref,
         )
 
+    benchmark_solve_ref = _benchmark_solve_ref_from_results(command_results)
+    if benchmark_solve_ref:
+        lines.extend(_cleanup_live_lab_lines(readiness) if cleanup_live_lab else ())
+        session = session.record_action(
+            action_id=f"action:phase{phase}:primordial-benchmark-solve",
+            action_type="primordial_autonomous_benchmark_solve",
+            status="completed_no_flag",
+            evidence_ids=[benchmark_solve_ref],
+            metadata={"command_count": len(command_results), "benchmark_solve_ref": benchmark_solve_ref},
+        ).complete(result="no_flag", solve_status="attempted", report_ref=benchmark_solve_ref)
+        lines.append(f"benchmark_solve_ref={benchmark_solve_ref}")
+        lines.append("captured_flag_ref=")
+        return _write_attempt_result(
+            phase=phase,
+            lab_id=lab_id,
+            status="attempted",
+            solve_status="attempted",
+            evidence=evidence,
+            session_path=session_path,
+            session=session,
+            lines=lines,
+            benchmark_solve_ref=benchmark_solve_ref,
+        )
+
     lines.extend(_cleanup_live_lab_lines(readiness) if cleanup_live_lab else ())
     session = session.record_action(
         action_id=f"action:phase{phase}:primordial-attempt",
@@ -402,7 +428,7 @@ def run_autonomous_attempt(
         evidence=evidence,
         session_path=session_path,
         session=session,
-        lines=lines + ["captured_flag_ref="],
+        lines=lines + ["captured_flag_ref=", "benchmark_solve_ref="],
     )
 
 
@@ -723,7 +749,7 @@ def _run_localstack_lab(
     target_url = "http://127.0.0.1:4566/"
     health_url = f"{target_url}_localstack/health"
     lines = _evidence_header(phase=phase, lab_id=lab_id) + [
-        "upstream_lab=https://github.com/RhinoSecurityLabs/cloudgoat",
+        "upstream_lab=https://github.com/rhinosecuritylabs/cloudgoat",
         f"target_url={target_url}",
     ]
     status = "blocked"
@@ -1266,6 +1292,7 @@ def _write_attempt_result(
     session: SolveSession,
     lines: list[str],
     captured_flag_ref: str = "",
+    benchmark_solve_ref: str = "",
     blocker: str = "",
 ) -> AutonomousAttemptResult:
     session_path.write_text(json.dumps(asdict(session), indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -1288,6 +1315,7 @@ def _write_attempt_result(
         evidence_ref=evidence_ref,
         solve_session_path=str(session_path),
         captured_flag_ref=captured_flag_ref,
+        benchmark_solve_ref=benchmark_solve_ref,
         blocker=blocker,
     )
 
@@ -1469,6 +1497,14 @@ def _captured_flag_ref_from_results(results: list[subprocess.CompletedProcess[st
     return ""
 
 
+def _benchmark_solve_ref_from_results(results: list[subprocess.CompletedProcess[str]]) -> str:
+    for result in results:
+        ref = _benchmark_solve_ref_from_text(f"{result.stdout or ''}\n{result.stderr or ''}")
+        if ref:
+            return ref
+    return ""
+
+
 def _captured_flag_ref_from_text(text: str) -> str:
     for line in text.splitlines():
         stripped = line.strip()
@@ -1483,6 +1519,20 @@ def _captured_flag_ref_from_text(text: str) -> str:
     return ""
 
 
+def _benchmark_solve_ref_from_text(text: str) -> str:
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        ref = _benchmark_solve_ref_from_json(stripped)
+        if ref:
+            return ref
+        match = re.search(r"\bbenchmark_solve_ref\s*[=:]\s*(evidence:[A-Za-z0-9_.:-]+)", stripped)
+        if match:
+            return match.group(1)
+    return ""
+
+
 def _captured_flag_ref_from_json(text: str) -> str:
     try:
         payload = json.loads(text)
@@ -1490,6 +1540,18 @@ def _captured_flag_ref_from_json(text: str) -> str:
         return ""
     if isinstance(payload, dict):
         ref = str(payload.get("captured_flag_ref", "")).strip()
+        if ref.startswith("evidence:"):
+            return ref
+    return ""
+
+
+def _benchmark_solve_ref_from_json(text: str) -> str:
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return ""
+    if isinstance(payload, dict):
+        ref = str(payload.get("benchmark_solve_ref", "")).strip()
         if ref.startswith("evidence:"):
             return ref
     return ""

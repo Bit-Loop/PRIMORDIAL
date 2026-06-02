@@ -218,7 +218,7 @@ def _cloudgoat_target():
             "difficulty": "advanced",
             "target_family": "cloudgoat",
             "source": {
-                "repo_url": "https://github.com/RhinoSecurityLabs/cloudgoat",
+                "repo_url": "https://github.com/rhinosecuritylabs/cloudgoat",
                 "path": "scenarios",
             },
             "scope": {

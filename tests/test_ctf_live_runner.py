@@ -74,7 +74,7 @@ class CTFLiveRunnerTests(unittest.TestCase):
         self.assertEqual(result.target_url, "http://127.0.0.1:4566/")
         self.assertIn("completion_indicator=autonomous_flags", evidence)
         self.assertIn("readiness_only=true", evidence)
-        self.assertIn("upstream_lab=https://github.com/RhinoSecurityLabs/cloudgoat", evidence)
+        self.assertIn("upstream_lab=https://github.com/rhinosecuritylabs/cloudgoat", evidence)
         self.assertIn("localstack_sts.stdout_sha256=", evidence)
         self.assertNotIn("000000000000", evidence)
 
@@ -311,6 +311,33 @@ class CTFLiveRunnerTests(unittest.TestCase):
         self.assertIn('"solve_status": "solved"', session)
         self.assertNotIn(raw_flag, evidence)
         self.assertNotIn(raw_flag, session)
+
+    def test_autonomous_attempt_records_benchmark_ref_without_marking_solved(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            readiness = run_phase(
+                1,
+                lab_root=Path(temp_dir),
+                command_runner=_runner(),
+                http_getter=lambda _url: b"ready",
+                timeout_seconds=0.01,
+            )
+            attempt = run_autonomous_attempt(
+                readiness,
+                lab_root=Path(temp_dir),
+                command_runner=_attempt_runner(stdout="benchmark_solve_ref=evidence:benchmark-solve-redacted\n"),
+            )
+
+            evidence = Path(attempt.evidence_path).read_text(encoding="utf-8")
+            session = Path(attempt.solve_session_path).read_text(encoding="utf-8")
+
+        self.assertEqual(attempt.status, "attempted")
+        self.assertEqual(attempt.solve_status, "attempted")
+        self.assertEqual(attempt.benchmark_solve_ref, "evidence:benchmark-solve-redacted")
+        self.assertEqual(attempt.captured_flag_ref, "")
+        self.assertIn("benchmark_solve_ref=evidence:benchmark-solve-redacted", evidence)
+        self.assertIn("captured_flag_ref=", evidence)
+        self.assertIn("primordial_autonomous_benchmark_solve", session)
+        self.assertIn('"solve_status": "attempted"', session)
 
     def test_autonomous_attempt_blocks_when_primordial_runtime_cannot_start(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
