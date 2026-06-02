@@ -54,10 +54,10 @@ class PostmortemRecord:
     ) -> PostmortemRecord:
         normalized_status = _normalized(solve_status)
         normalized_mode = _normalized(mode)
-        normalized_source_refs = _text_tuple(source_refs)
-        normalized_lessons = _text_tuple(lessons)
-        normalized_changes = _text_tuple(generalized_changes)
-        normalized_tests = _text_tuple(tests_added)
+        normalized_source_refs = _text_tuple(source_refs, "source_refs")
+        normalized_lessons = _text_tuple(lessons, "lessons")
+        normalized_changes = _text_tuple(generalized_changes, "generalized_changes")
+        normalized_tests = _text_tuple(tests_added, "tests_added")
 
         if _has_writeup_source(normalized_source_refs) and normalized_status not in TERMINAL_SOLVE_STATUSES:
             raise ValueError("writeup context requires completion or failure before postmortem use")
@@ -104,7 +104,9 @@ def _required(value: str, name: str) -> str:
     return text
 
 
-def _text_tuple(value: list[str] | tuple[str, ...]) -> tuple[str, ...]:
+def _text_tuple(value: list[str] | tuple[str, ...], name: str) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(f"PostmortemRecord {name} must be a list or tuple")
     return tuple(str(item).strip() for item in value if str(item).strip())
 
 
