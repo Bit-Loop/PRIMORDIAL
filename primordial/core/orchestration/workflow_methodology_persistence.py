@@ -143,6 +143,7 @@ class WorkflowMethodologyPersistenceMixin:
         if task.kind not in {
             TaskKind.EXPLOIT_RESEARCH,
             TaskKind.POC_APPLICABILITY_VALIDATION,
+            TaskKind.AD_ENUMERATION,
             TaskKind.KERBEROS_USER_DISCOVERY,
             TaskKind.KERBEROS_ATTACK_CHECK,
         }:
@@ -166,6 +167,12 @@ class WorkflowMethodologyPersistenceMixin:
         elif task.kind == TaskKind.POC_APPLICABILITY_VALIDATION:
             if not policy.poc_applicability_validation:
                 return "active operator intent does not allow public PoC applicability validation"
+        elif task.kind == TaskKind.AD_ENUMERATION:
+            if not (
+                policy.kerberos_policy.asrep_roast_check_allowed
+                or policy.kerberos_policy.kerberoast_check_allowed
+            ):
+                return "active operator intent does not allow anonymous AD enumeration"
         elif task.kind == TaskKind.KERBEROS_USER_DISCOVERY:
             if not (
                 policy.kerberos_policy.asrep_roast_check_allowed

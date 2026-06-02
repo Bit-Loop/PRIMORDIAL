@@ -5,6 +5,9 @@ from primordial.modes.security.execution_common import *
 
 class PrimitiveAdHandlerMixin:
     def _handle_ad_enumeration(self, task: Task, context: ContextSlice) -> TaskExecutionResult:
+        blocked = self._require_intent(task)
+        if blocked is not None:
+            return blocked
         result = TaskExecutionResult(summary="AD enumeration completed")
         target = self.store.get_target(task.target_id)
         if not target:

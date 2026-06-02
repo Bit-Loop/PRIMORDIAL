@@ -111,6 +111,14 @@ class PrimitiveExecutor(PrimitiveReconHandlerMixin, PrimitiveServiceHandlerMixin
                     required_intent="exploit_research_allowed or htb_lab",
                     reason="active intent does not allow public PoC applicability validation",
                 )
+        elif task.kind == TaskKind.AD_ENUMERATION:
+            if not (policy.kerberos_policy.asrep_roast_check_allowed or policy.kerberos_policy.kerberoast_check_allowed):
+                return self._blocked_by_intent_result(
+                    task,
+                    capability_category="ad_enumeration",
+                    required_intent="ad_lab in-house AD attack path or htb_lab",
+                    reason="active intent does not allow anonymous AD enumeration",
+                )
         elif task.kind == TaskKind.KERBEROS_USER_DISCOVERY:
             if not (policy.kerberos_policy.asrep_roast_check_allowed or policy.kerberos_policy.kerberoast_check_allowed):
                 return self._blocked_by_intent_result(

@@ -23,6 +23,8 @@ class WorkflowPlanningPredicatesMixin:
     def _should_plan_ad_enumeration(self, target: Target) -> bool:
         if not self._profile_allows_task(target, "ad_enumeration") and not target.metadata.get("allow_ad_enumeration"):
             return False
+        if not self._intent_allows_task(target, TaskKind.AD_ENUMERATION):
+            return False
         service_evidence = [
             evidence
             for evidence in self.store.list_evidence(target_id=target.id, limit=200)

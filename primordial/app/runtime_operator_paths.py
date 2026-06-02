@@ -135,7 +135,10 @@ class RuntimeOperatorPathsMixin:
         if has_dns_port and "dns_enumeration" not in evidence_kinds and self._has_any_capability(capabilities, "dns-enumeration"):
             actions.append((0.88, "Run bounded DNS enumeration. Prerequisite: TCP evidence shows DNS/53."))
         if has_ad_ports and "ad_enumeration" not in evidence_kinds and self._has_any_capability(capabilities, "ad-enumeration", "ldap-enumeration"):
-            actions.append((0.87, "Run anonymous AD enumeration. Prerequisite: TCP evidence shows LDAP/Kerberos/SMB services."))
+            if allows_kerberos:
+                actions.append((0.87, "Run anonymous AD enumeration. Prerequisite: TCP evidence shows LDAP/Kerberos/SMB services."))
+            else:
+                actions.append((0.87, "Verify lab/AD operator intent before anonymous AD enumeration. Prerequisite: active intent blocks LDAP/SMB/RPC inventory."))
         if has_http and "web_content_discovery" not in evidence_kinds and self._has_any_capability(capabilities, "content-discovery", "path-enumeration"):
             actions.append((0.82, "Run bounded web content discovery. Prerequisite: HTTP probe evidence shows a live web surface."))
         if (

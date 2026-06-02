@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from primordial.core.orchestration.workflow_deps import (
+    AD_INDICATOR_PORTS,
     classify_credentialed_access_surface,
     CredentialedAccessSurface,
     Target,
@@ -156,6 +157,9 @@ class WorkflowAttackCandidatesMixin:
             item.metadata.get("kind") == "exploit_research" and int(item.metadata.get("match_count", 0) or 0) > 0
             for item in evidence
         )
+        has_ad_ports_without_inventory = self._evidence_has_any_port(evidence, AD_INDICATOR_PORTS) and not any(
+            item.metadata.get("kind") == "ad_enumeration" for item in evidence
+        )
         has_ad_inventory_without_principals = any(item.metadata.get("kind") == "ad_enumeration" for item in evidence) and not any(
             item.metadata.get("kind") == "kerberos_user_discovery" for item in evidence
         )
@@ -173,6 +177,12 @@ class WorkflowAttackCandidatesMixin:
         if policy is not None:
             if has_research_candidates and not policy.poc_applicability_validation:
                 blockers.append("Active operator intent does not allow public PoC applicability validation.")
+            if (
+                has_ad_ports_without_inventory
+                and not policy.kerberos_policy.asrep_roast_check_allowed
+                and not policy.kerberos_policy.kerberoast_check_allowed
+            ):
+                blockers.append("Active operator intent does not allow anonymous AD enumeration.")
             if (
                 has_ad_inventory_without_principals
                 and not policy.kerberos_policy.asrep_roast_check_allowed
@@ -193,3 +203,17 @@ class WorkflowAttackCandidatesMixin:
                     f"Active IP changed to {target.metadata['active_ip']}, but fresh current-generation service discovery has not completed."
                 )
         return blockers
+
+    def _evidence_has_any_port(self, evidence, ports: set[int] | frozenset[int]) -> bool:
+        wanted = {int(port) for port in ports}
+        for item in evidence:
+            for service in item.metadata.get("open_services", []):
+                if not isinstance(service, dict):
+                    continue
+                try:
+                    port = int(service.get("port", 0))
+                except (TypeError, ValueError):
+                    continue
+                if port in wanted:
+                    return True
+        return False

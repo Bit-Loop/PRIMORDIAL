@@ -150,6 +150,11 @@ class WorkflowTargetStateMixin:
             required = "exploit_research_allowed or htb_lab"
             category = "poc_applicability_validation"
             reason = "active intent does not allow public PoC applicability validation"
+        elif kind == TaskKind.AD_ENUMERATION:
+            allowed = policy.kerberos_policy.asrep_roast_check_allowed or policy.kerberos_policy.kerberoast_check_allowed
+            required = "ad_lab in-house AD attack path or htb_lab"
+            category = "ad_enumeration"
+            reason = "active intent does not allow anonymous AD enumeration"
         elif kind == TaskKind.KERBEROS_ATTACK_CHECK:
             allowed = policy.kerberos_policy.asrep_roast_check_allowed or policy.kerberos_policy.kerberoast_check_allowed
             required = "ad_lab in-house AD attack path or htb_lab"
