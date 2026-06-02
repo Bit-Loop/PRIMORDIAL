@@ -10,6 +10,7 @@ TARGET_CONDITION_PATTERN = re.compile(r"\bif\s+target\s+(?:is|==)\b", re.IGNOREC
 TERMINAL_SOLVE_STATUSES = frozenset({"blocked", "complete", "completed", "failed", "failure", "solved", "timeout"})
 POSTMORTEM_MODES = frozenset({"postmortem", "postmortem_training", "training"})
 WRITEUP_SOURCE_PREFIXES = ("solution:", "writeup:")
+WRITEUP_SOURCE_MARKERS = frozenset({"solution", "solutions", "walkthrough", "writeup", "writeups"})
 TARGET_SPECIFIC_MARKERS = frozenset(
     {
         "credential",
@@ -112,7 +113,14 @@ def _normalized(value: str) -> str:
 
 
 def _has_writeup_source(source_refs: tuple[str, ...]) -> bool:
-    return any(source_ref.lower().startswith(WRITEUP_SOURCE_PREFIXES) for source_ref in source_refs)
+    for source_ref in source_refs:
+        lowered = source_ref.lower()
+        if lowered.startswith(WRITEUP_SOURCE_PREFIXES):
+            return True
+        tokens = {token for token in re.split(r"[:/._-]+", lowered) if token}
+        if tokens & WRITEUP_SOURCE_MARKERS:
+            return True
+    return False
 
 
 def _reject_target_specific_solution(*, target_id: str, values: tuple[str, ...]) -> None:
