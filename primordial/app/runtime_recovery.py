@@ -43,7 +43,7 @@ class RuntimeRecoveryMixin:
         allowed_roots = (self.config.artifacts_dir.resolve(), self.config.checkpoints_dir.resolve())
         seen: set[Path] = set()
         for raw_path in raw_paths:
-            path = Path(raw_path)
+            path = self._cleanup_candidate_path(raw_path)
             try:
                 resolved = path.resolve()
             except FileNotFoundError:
@@ -62,6 +62,12 @@ class RuntimeRecoveryMixin:
                     except OSError:
                         break
                     current = current.parent
+
+    def _cleanup_candidate_path(self, raw_path: str) -> Path:
+        path = Path(raw_path)
+        if path.is_absolute():
+            return path
+        return self.config.project_root / path
 
     def _register_modules(self) -> None:
         self.modules.register(
