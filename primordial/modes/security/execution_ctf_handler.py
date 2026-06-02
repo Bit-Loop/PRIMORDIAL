@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import ipaddress
 
 from primordial.labs.ctf.hardcode import FLAG_PATTERN
 from primordial.modes.security.execution_common import *
@@ -37,6 +38,9 @@ class PrimitiveCtfHandlerMixin:
         kubernetes_probes = [] if hit else self._ctf_kubernetes_probes(target)
         kubernetes_hit = next((probe for probe in kubernetes_probes if probe.get("captured_flag_ref")), None)
         hit = hit or kubernetes_hit
+        cloud_probes = [] if hit else self._ctf_cloud_probes(target)
+        cloud_hit = next((probe for probe in cloud_probes if probe.get("captured_flag_ref")), None)
+        hit = hit or cloud_hit
         browser_interactions = [] if hit else self._ctf_browser_interactions(target)
         browser_hit = next((item for item in browser_interactions if item.get("captured_flag_ref")), None)
         benchmark_hit = next((item for item in browser_interactions if item.get("benchmark_solve_ref")), None)
@@ -50,6 +54,8 @@ class PrimitiveCtfHandlerMixin:
             "searched_urls": [probe["url"] for probe in probes],
             "kubernetes_probe_count": len(kubernetes_probes),
             "kubernetes_probes": kubernetes_probes,
+            "cloud_probe_count": len(cloud_probes),
+            "cloud_probes": cloud_probes,
             "browser_interaction_count": len(browser_interactions),
             "browser_interactions": browser_interactions,
             "captured_flag_ref": str(hit.get("captured_flag_ref", "")) if hit else "",
@@ -85,6 +91,7 @@ class PrimitiveCtfHandlerMixin:
                 "candidate_count": payload["candidate_count"],
                 "searched_url_count": payload["searched_url_count"],
                 "kubernetes_probe_count": payload["kubernetes_probe_count"],
+                "cloud_probe_count": payload["cloud_probe_count"],
                 "browser_interaction_count": payload["browser_interaction_count"],
                 "captured_flag_ref": payload["captured_flag_ref"],
                 "captured_flag_sha256": payload["captured_flag_sha256"],
@@ -109,6 +116,7 @@ class PrimitiveCtfHandlerMixin:
                     "benchmark_solve_ref": payload["benchmark_solve_ref"],
                     "searched_url_count": payload["searched_url_count"],
                     "kubernetes_probe_count": payload["kubernetes_probe_count"],
+                    "cloud_probe_count": payload["cloud_probe_count"],
                     "browser_interaction_count": payload["browser_interaction_count"],
                     "raw_flags_redacted": True,
                 },
@@ -125,6 +133,7 @@ class PrimitiveCtfHandlerMixin:
                     "benchmark_solve_ref": payload["benchmark_solve_ref"],
                     "searched_url_count": payload["searched_url_count"],
                     "kubernetes_probe_count": payload["kubernetes_probe_count"],
+                    "cloud_probe_count": payload["cloud_probe_count"],
                     "browser_interaction_count": payload["browser_interaction_count"],
                     "raw_flags_redacted": True,
                 },
@@ -157,7 +166,7 @@ class PrimitiveCtfHandlerMixin:
             if not self._records_for_generation([evidence], self._target_active_generation(target)):
                 continue
             urls.extend(self._ctf_capture_urls_from_evidence(evidence, bases))
-        return self._dedupe_local_http_urls(urls)
+        return self._dedupe_local_http_urls(urls, allow_private=self._ctf_allow_private_http(target))
 
     def _ctf_capture_base_urls(self, target) -> list[str]:
         urls: list[str] = []
@@ -178,7 +187,7 @@ class PrimitiveCtfHandlerMixin:
                 continue
             base = parse.urlunsplit((parsed.scheme, parsed.netloc, "/", "", ""))
             bases.append(base)
-        return self._dedupe_local_http_urls(bases)
+        return self._dedupe_local_http_urls(bases, allow_private=self._ctf_allow_private_http(target))
 
     def _ctf_capture_urls_from_evidence(self, evidence: EvidenceRecord, bases: list[str]) -> list[str]:
         values: list[str] = []
@@ -226,14 +235,14 @@ class PrimitiveCtfHandlerMixin:
                 return value.strip().upper()
         return ""
 
-    def _dedupe_local_http_urls(self, values: list[str]) -> list[str]:
+    def _dedupe_local_http_urls(self, values: list[str], *, allow_private: bool = False) -> list[str]:
         urls: list[str] = []
         seen: set[str] = set()
         for value in values:
             parsed = parse.urlsplit(str(value).strip())
             if parsed.scheme not in {"http", "https"} or not parsed.netloc:
                 continue
-            if not self._is_loopback_host(parsed.hostname or ""):
+            if not self._is_allowed_ctf_http_host(parsed.hostname or "", allow_private=allow_private):
                 continue
             normalized = parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path or "/", "", ""))
             if normalized in seen:
@@ -241,6 +250,27 @@ class PrimitiveCtfHandlerMixin:
             seen.add(normalized)
             urls.append(normalized)
         return urls
+
+    def _ctf_allow_private_http(self, target) -> bool:
+        return self._ctf_allow_private_http_metadata(target.metadata)
+
+    def _ctf_allow_private_http_metadata(self, metadata: dict[str, object]) -> bool:
+        return (
+            metadata.get("ctf_allow_private_http") is True
+            and metadata.get("local_ctf_autonomous") is True
+            and str(metadata.get("target_family", "")) in {"nyu_ctf_bench", "ctf_dojo", "dreadgoad"}
+        )
+
+    def _is_allowed_ctf_http_host(self, host: str, *, allow_private: bool = False) -> bool:
+        if self._is_loopback_host(host):
+            return True
+        if not allow_private:
+            return False
+        try:
+            address = ipaddress.ip_address(host.strip().strip("[]"))
+        except ValueError:
+            return False
+        return bool(address.is_private or address.is_link_local)
 
     def _is_loopback_host(self, host: str) -> bool:
         normalized = host.strip().lower().strip("[]")
@@ -362,6 +392,119 @@ class PrimitiveCtfHandlerMixin:
                 return str(candidate)
         return shutil.which("kubectl") or "kubectl"
 
+    def _ctf_cloud_probes(self, target) -> list[dict[str, object]]:
+        endpoint = str(target.metadata.get("ctf_aws_endpoint_url") or "").strip()
+        if not endpoint:
+            return []
+        aws = shutil.which("aws") or "aws"
+        region = str(target.metadata.get("ctf_aws_region") or "us-east-1").strip() or "us-east-1"
+        env = {
+            **os.environ,
+            "AWS_ACCESS_KEY_ID": str(target.metadata.get("ctf_aws_access_key_id") or "test"),
+            "AWS_SECRET_ACCESS_KEY": str(target.metadata.get("ctf_aws_secret_access_key") or "test"),
+            "AWS_DEFAULT_REGION": region,
+        }
+        prefix = (aws, "--endpoint-url", endpoint)
+        probes = [
+            self._ctf_cloud_probe_command("cloud_sts_identity", prefix + ("sts", "get-caller-identity"), env=env),
+            self._ctf_cloud_probe_command("cloud_s3_buckets", prefix + ("s3api", "list-buckets"), env=env),
+        ]
+        hit = next((probe for probe in probes if probe.get("captured_flag_ref")), None)
+        if hit:
+            self._ctf_discard_cloud_probe_json(probes)
+            return probes
+        bucket_payload = probes[-1].get("_stdout_json")
+        self._ctf_discard_cloud_probe_json(probes)
+        for bucket in self._ctf_cloud_bucket_names(bucket_payload)[:10]:
+            objects_probe = self._ctf_cloud_probe_command(
+                "cloud_s3_objects",
+                prefix + ("s3api", "list-objects-v2", "--bucket", bucket, "--max-items", "50"),
+                env=env,
+                metadata={"bucket_sha256": hashlib.sha256(bucket.encode("utf-8")).hexdigest()},
+            )
+            probes.append(objects_probe)
+            if objects_probe.get("captured_flag_ref"):
+                self._ctf_discard_cloud_probe_json(probes)
+                break
+            object_payload = objects_probe.get("_stdout_json")
+            self._ctf_discard_cloud_probe_json([objects_probe])
+            for key in self._ctf_cloud_object_keys(object_payload)[:20]:
+                object_probe = self._ctf_cloud_probe_command(
+                    "cloud_s3_object_content",
+                    prefix + ("s3", "cp", f"s3://{bucket}/{key}", "-"),
+                    env=env,
+                    metadata={
+                        "bucket_sha256": hashlib.sha256(bucket.encode("utf-8")).hexdigest(),
+                        "key_sha256": hashlib.sha256(key.encode("utf-8")).hexdigest(),
+                    },
+                )
+                probes.append(object_probe)
+                if object_probe.get("captured_flag_ref"):
+                    self._ctf_discard_cloud_probe_json(probes)
+                    return probes
+        self._ctf_discard_cloud_probe_json(probes)
+        return probes
+
+    def _ctf_cloud_probe_command(
+        self,
+        label: str,
+        command: tuple[str, ...],
+        *,
+        env: dict[str, str],
+        metadata: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        try:
+            completed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=20, env=env)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {"kind": label, "returncode": 127, "error": type(exc).__name__, **(metadata or {})}
+        stdout = completed.stdout or ""
+        parsed_json = self._ctf_json_payload(stdout)
+        return {
+            "kind": label,
+            "returncode": completed.returncode,
+            "stdout_sha256": hashlib.sha256(stdout.encode("utf-8")).hexdigest(),
+            "stdout_bytes": len(stdout.encode("utf-8")),
+            "stderr_sha256": hashlib.sha256((completed.stderr or "").encode("utf-8")).hexdigest(),
+            "stderr_bytes": len((completed.stderr or "").encode("utf-8")),
+            "_stdout_json": parsed_json,
+            **self._ctf_capture_redacted_flag(stdout.encode("utf-8", "replace")),
+            **(metadata or {}),
+        }
+
+    def _ctf_discard_cloud_probe_json(self, probes: list[dict[str, object]]) -> None:
+        for probe in probes:
+            probe.pop("_stdout_json", None)
+
+    def _ctf_json_payload(self, text: str) -> object:
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return None
+
+    def _ctf_cloud_bucket_names(self, payload: object) -> list[str]:
+        if not isinstance(payload, dict):
+            return []
+        buckets = payload.get("Buckets", [])
+        if not isinstance(buckets, list):
+            return []
+        names: list[str] = []
+        for bucket in buckets:
+            if isinstance(bucket, dict) and isinstance(bucket.get("Name"), str):
+                names.append(bucket["Name"])
+        return names
+
+    def _ctf_cloud_object_keys(self, payload: object) -> list[str]:
+        if not isinstance(payload, dict):
+            return []
+        objects = payload.get("Contents", [])
+        if not isinstance(objects, list):
+            return []
+        keys: list[str] = []
+        for item in objects:
+            if isinstance(item, dict) and isinstance(item.get("Key"), str):
+                keys.append(item["Key"])
+        return keys
+
     def _ctf_browser_interactions(self, target) -> list[dict[str, object]]:
         interactions: list[dict[str, object]] = []
         for base in self._ctf_capture_base_urls(target):
@@ -405,7 +548,10 @@ class PrimitiveCtfHandlerMixin:
                 text = "/" + text
             url = parse.urljoin(base, text.lstrip("/") if text.startswith("/") and not text.startswith("/#") else text)
             parsed = parse.urlsplit(url)
-            if parsed.scheme in {"http", "https"} and self._is_loopback_host(parsed.hostname or ""):
+            if parsed.scheme in {"http", "https"} and self._is_allowed_ctf_http_host(
+                parsed.hostname or "",
+                allow_private=self._ctf_allow_private_http_metadata(metadata),
+            ):
                 urls.append(url)
         return self._dedupe_preserving_fragment(urls)[:4]
 
@@ -509,6 +655,7 @@ class PrimitiveCtfHandlerMixin:
         return (
             "Closed-book local CTF flag capture searched "
             f"{payload['searched_url_count']} URL(s), ran {payload['kubernetes_probe_count']} Kubernetes probe(s), "
+            f"ran {payload['cloud_probe_count']} cloud probe(s), "
             f"and ran {payload['browser_interaction_count']} browser interaction(s) "
             f"for {handle} without finding a flag or benchmark solve."
         )
@@ -519,6 +666,7 @@ class PrimitiveCtfHandlerMixin:
             f"Candidate URLs: {payload['candidate_count']}",
             f"Searched URLs: {payload['searched_url_count']}",
             f"Kubernetes probes: {payload['kubernetes_probe_count']}",
+            f"Cloud probes: {payload['cloud_probe_count']}",
             f"Browser interactions: {payload['browser_interaction_count']}",
         ]
         if payload["captured_flag_ref"]:

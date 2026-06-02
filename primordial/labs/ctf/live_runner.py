@@ -49,6 +49,17 @@ ATTEMPT_METADATA_BY_LAB_ID = {
         "ctf_flag_container_path": VULHUB_HTTPD_CVE_2021_41773_FLAG_CONTAINER_PATH,
     },
     "cicd-goat": {"ctf_service_urls": list(CICD_GOAT_SERVICE_URLS)},
+    "cloudgoat-localstack-adaptation": {
+        "target_family": "cloudgoat",
+        "ctf_aws_endpoint_url": "http://127.0.0.1:4566",
+        "ctf_aws_region": "us-east-1",
+        "ctf_aws_access_key_id": "test",
+        "ctf_aws_secret_access_key": "test",
+    },
+    "nyu-ctf-bench-littlequery": {
+        "target_family": "nyu_ctf_bench",
+        "ctf_allow_private_http": True,
+    },
     "kubernetes-goat": {
         "target_family": "kubernetes_goat",
         "ctf_kubeconfig": str(DEFAULT_KUBERNETES_GOAT_KUBECONFIG),
@@ -1575,7 +1586,14 @@ def _primordial_attempt_env(
 
 
 def _attempt_env_by_lab_id(*, lab_root: Path) -> dict[str, dict[str, str]]:
-    return {"kubernetes-goat": {"KUBECONFIG": str(lab_root / "kubeconfigs" / "phase5-kind.yaml")}}
+    return {
+        "cloudgoat-localstack-adaptation": {
+            "AWS_ACCESS_KEY_ID": "test",
+            "AWS_SECRET_ACCESS_KEY": "test",
+            "AWS_DEFAULT_REGION": "us-east-1",
+        },
+        "kubernetes-goat": {"KUBECONFIG": str(lab_root / "kubeconfigs" / "phase5-kind.yaml")},
+    }
 
 
 def _primordial_database_url() -> str:

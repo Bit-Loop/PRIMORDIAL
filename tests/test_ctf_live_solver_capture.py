@@ -119,6 +119,50 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
         self.assertNotIn(raw_flag, json.dumps(evidence.as_payload()))
         self.assertNotIn(raw_flag, note.body)
 
+    def test_executor_allows_private_http_for_marked_local_benchmark_container(self) -> None:
+        private_url = "http://" + ".".join(("172", "23", "0", "2")) + "/"
+        target = self.runtime.register_target(
+            handle="nyu-ctf-bench-littlequery",
+            profile=ScopeProfile.HACK_THE_BOX,
+            assets=[private_url],
+            metadata={
+                "ctf_completion_indicator": "autonomous_flags",
+                "ctf_target_url": private_url,
+                "ctf_allow_private_http": True,
+                "target_family": "nyu_ctf_bench",
+                "local_ctf_autonomous": True,
+            },
+        )
+        task = Task(
+            target_id=target.id,
+            phase=MethodologyPhase.ANALYSIS,
+            kind=TaskKind.CTF_FLAG_CAPTURE,
+            title="Run closed-book benchmark CTF flag capture",
+            summary="Search local benchmark container state for a redacted flag reference.",
+            role=AgentRole.ANALYSIS_WORKER,
+            risk_tier=RiskTier.MODERATE,
+            required_capabilities=["ctf-flag-capture", "flag-collection"],
+            metadata={"primitive_hint": "ctf-flag-capture"},
+        )
+        raw_flag = fixture_flag("nyu-private-http")
+        requested_urls: list[str] = []
+
+        with patch(
+            "primordial.modes.security.execution_ctf_handler.request.urlopen",
+            side_effect=_private_benchmark_urlopen(raw_flag, requested_urls),
+        ):
+            result = self.runtime.executor.execute(task, None)
+
+        artifact_text = Path(result.artifacts[0].path).read_text(encoding="utf-8")
+        evidence = result.evidence[0]
+
+        self.assertTrue(result.success)
+        self.assertTrue(any(url.startswith(private_url) for url in requested_urls))
+        self.assertTrue(evidence.metadata["captured_flag_ref"].startswith("evidence:captured-flag:"))
+        self.assertEqual(evidence.metadata["captured_flag_length"], len(raw_flag))
+        self.assertNotIn(raw_flag, artifact_text)
+        self.assertNotIn(raw_flag, json.dumps(evidence.as_payload()))
+
     def test_executor_records_browser_benchmark_solve_without_flag_material(self) -> None:
         target = self.runtime.register_target(
             handle="local-browser-lab",
@@ -348,6 +392,49 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
         self.assertNotIn(raw_flag, artifact_text)
         self.assertNotIn(raw_flag, json.dumps(evidence.as_payload()))
 
+    def test_executor_captures_redacted_cloudgoat_s3_object_flag(self) -> None:
+        target = self.runtime.register_target(
+            handle="cloudgoat-localstack-adaptation",
+            profile=ScopeProfile.HACK_THE_BOX,
+            assets=["http://127.0.0.1:4566/"],
+            metadata={
+                "ctf_completion_indicator": "autonomous_flags",
+                "ctf_target_url": "http://127.0.0.1:4566/",
+                "ctf_aws_endpoint_url": "http://127.0.0.1:4566",
+                "ctf_aws_region": "us-east-1",
+                "target_family": "cloudgoat",
+                "local_ctf_autonomous": True,
+            },
+        )
+        task = Task(
+            target_id=target.id,
+            phase=MethodologyPhase.ANALYSIS,
+            kind=TaskKind.CTF_FLAG_CAPTURE,
+            title="Run closed-book CloudGoat CTF flag capture",
+            summary="Search local cloud lab state for a redacted flag reference.",
+            role=AgentRole.ANALYSIS_WORKER,
+            risk_tier=RiskTier.MODERATE,
+            required_capabilities=["ctf-flag-capture", "flag-collection"],
+            metadata={"primitive_hint": "ctf-flag-capture"},
+        )
+        raw_flag = fixture_flag("cloudgoat-s3")
+
+        with patch("primordial.modes.security.execution_ctf_handler.request.urlopen", side_effect=OSError), patch(
+            "primordial.modes.security.execution_ctf_handler.subprocess.run",
+            side_effect=_aws_run(raw_flag),
+        ):
+            result = self.runtime.executor.execute(task, None)
+
+        artifact_text = Path(result.artifacts[0].path).read_text(encoding="utf-8")
+        evidence = result.evidence[0]
+
+        self.assertTrue(result.success)
+        self.assertEqual(evidence.metadata["cloud_probe_count"], 4)
+        self.assertTrue(evidence.metadata["captured_flag_ref"].startswith("evidence:captured-flag:"))
+        self.assertEqual(evidence.metadata["captured_flag_length"], len(raw_flag))
+        self.assertNotIn(raw_flag, artifact_text)
+        self.assertNotIn(raw_flag, json.dumps(evidence.as_payload()))
+
 
 class _FakeHttpResponse:
     def __init__(self, url: str, body: bytes) -> None:
@@ -412,6 +499,17 @@ def _vulhub_urlopen(raw_flag: str, requested_urls: list[str]):
     return open_url
 
 
+def _private_benchmark_urlopen(raw_flag: str, requested_urls: list[str]):
+    def open_url(request_obj, *args, **kwargs):
+        url = request_obj.full_url if hasattr(request_obj, "full_url") else str(request_obj)
+        requested_urls.append(url)
+        if url.endswith("/flag.txt"):
+            return _FakeHttpResponse(url, raw_flag.encode("utf-8"))
+        return _FakeHttpResponse(url, b"benchmark container")
+
+    return open_url
+
+
 def _service_urlopen(raw_flag: str, requested_urls: list[str]):
     def open_url(request_obj, *args, **kwargs):
         url = request_obj.full_url if hasattr(request_obj, "full_url") else str(request_obj)
@@ -437,6 +535,21 @@ def _kubectl_run(raw_flag: str):
             }
             return subprocess.CompletedProcess(command, 0, json.dumps(body), "")
         return subprocess.CompletedProcess(command, 0, json.dumps({"items": []}), "")
+
+    return run
+
+
+def _aws_run(raw_flag: str):
+    def run(command, *args, **kwargs):
+        if "get-caller-identity" in command:
+            return subprocess.CompletedProcess(command, 0, json.dumps({"Account": "000000000000"}), "")
+        if "list-buckets" in command:
+            return subprocess.CompletedProcess(command, 0, json.dumps({"Buckets": [{"Name": "cg-results"}]}), "")
+        if "list-objects-v2" in command:
+            return subprocess.CompletedProcess(command, 0, json.dumps({"Contents": [{"Key": "result.txt"}]}), "")
+        if "cp" in command:
+            return subprocess.CompletedProcess(command, 0, raw_flag, "")
+        return subprocess.CompletedProcess(command, 1, "", "unexpected command")
 
     return run
 
