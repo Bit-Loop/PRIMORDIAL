@@ -32,6 +32,13 @@ CICD_GOAT_RELATIVE_COMPOSE = Path("assets/phase4-cicd-goat/docker-compose.yaml")
 CICD_GOAT_OVERRIDE_RELATIVE = Path("runtime/phase4-cicd-goat-port-override.yml")
 CICD_GOAT_PROJECT = "primordial-cicd-goat"
 CICD_GOAT_TARGET_URL = "http://127.0.0.1:38000/"
+CICD_GOAT_SERVICE_URLS = (
+    CICD_GOAT_TARGET_URL,
+    "http://127.0.0.1:38080/",
+    "http://127.0.0.1:33000/",
+    "http://127.0.0.1:34000/",
+    "http://127.0.0.1:38008/",
+)
 VULHUB_HTTPD_CVE_2021_41773_LAB_ID = "vulhub-httpd-cve-2021-41773"
 VULHUB_HTTPD_CVE_2021_41773_FLAG_CONTAINER_PATH = "/primordial_flag.txt"
 ATTEMPT_METADATA_BY_LAB_ID = {
@@ -39,7 +46,8 @@ ATTEMPT_METADATA_BY_LAB_ID = {
         "target_family": "vulhub_cve_labs",
         "vulnerability_cve_id": "CVE-2021-41773",
         "ctf_flag_container_path": VULHUB_HTTPD_CVE_2021_41773_FLAG_CONTAINER_PATH,
-    }
+    },
+    "cicd-goat": {"ctf_service_urls": list(CICD_GOAT_SERVICE_URLS)},
 }
 NYU_LITTLEQUERY_RELATIVE_COMPOSE = Path("assets/phase8-nyu-ctf-bench/test/2017/CSAW-Quals/web/littlequery/docker-compose.yml")
 NYU_LITTLEQUERY_PROJECT = "primordial-nyu-littlequery"
@@ -719,10 +727,10 @@ def _run_cicd_goat_lab(
         f"compose_file={compose_file}",
         f"override_file={override_file}",
         f"target_url={CICD_GOAT_TARGET_URL}",
-        "jenkins_url=http://127.0.0.1:38080/",
-        "gitea_url=http://127.0.0.1:33000/",
-        "gitlab_url=http://127.0.0.1:34000/",
-        "prod_url=http://127.0.0.1:38008/",
+        f"jenkins_url={CICD_GOAT_SERVICE_URLS[1]}",
+        f"gitea_url={CICD_GOAT_SERVICE_URLS[2]}",
+        f"gitlab_url={CICD_GOAT_SERVICE_URLS[3]}",
+        f"prod_url={CICD_GOAT_SERVICE_URLS[4]}",
     ]
     status = "blocked"
     blocker = ""
@@ -811,7 +819,7 @@ def _cicd_goat_port_override() -> str:
   gitlab:
     ports: !override
       - "127.0.0.1:34000:80"
-      - "127.0.0.1:35050:5050"
+      - "127.0.0.1:35150:5050"
 """
 
 

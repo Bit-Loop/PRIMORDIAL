@@ -153,6 +153,9 @@ class PrimitiveCtfHandlerMixin:
         metadata_url = target.metadata.get("ctf_target_url")
         if isinstance(metadata_url, str):
             urls.append(metadata_url)
+        for value in target.metadata.get("ctf_service_urls", []):
+            if isinstance(value, str):
+                urls.append(value)
         for asset in self._target_scope_assets(target):
             if asset.asset_type == "webapp" or asset.asset.startswith(("http://", "https://")):
                 urls.append(asset.asset)

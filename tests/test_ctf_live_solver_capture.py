@@ -225,6 +225,47 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
         self.assertNotIn(raw_flag, artifact_text)
         self.assertNotIn(raw_flag, json.dumps(evidence.as_payload()))
 
+    def test_executor_searches_metadata_service_urls_for_local_ctf_flags(self) -> None:
+        target = self.runtime.register_target(
+            handle="local-cicd-goat-lab",
+            profile=ScopeProfile.HACK_THE_BOX,
+            assets=["http://127.0.0.1:38000/"],
+            metadata={
+                "ctf_completion_indicator": "autonomous_flags",
+                "ctf_target_url": "http://127.0.0.1:38000/",
+                "ctf_service_urls": ["http://127.0.0.1:38080/"],
+                "local_ctf_autonomous": True,
+            },
+        )
+        task = Task(
+            target_id=target.id,
+            phase=MethodologyPhase.ANALYSIS,
+            kind=TaskKind.CTF_FLAG_CAPTURE,
+            title="Run closed-book multi-service CTF flag capture",
+            summary="Search local service URLs for a redacted flag reference.",
+            role=AgentRole.ANALYSIS_WORKER,
+            risk_tier=RiskTier.MODERATE,
+            required_capabilities=["ctf-flag-capture", "flag-collection"],
+            metadata={"primitive_hint": "ctf-flag-capture"},
+        )
+        raw_flag = fixture_flag("cicd-service-url")
+        requested_urls: list[str] = []
+
+        with patch(
+            "primordial.modes.security.execution_ctf_handler.request.urlopen",
+            side_effect=_service_urlopen(raw_flag, requested_urls),
+        ):
+            result = self.runtime.executor.execute(task, None)
+
+        artifact_text = Path(result.artifacts[0].path).read_text(encoding="utf-8")
+        evidence = result.evidence[0]
+
+        self.assertTrue(result.success)
+        self.assertTrue(any(url.startswith("http://127.0.0.1:38080/") for url in requested_urls))
+        self.assertTrue(evidence.metadata["captured_flag_ref"].startswith("evidence:captured-flag:"))
+        self.assertNotIn(raw_flag, artifact_text)
+        self.assertNotIn(raw_flag, json.dumps(evidence.as_payload()))
+
 
 class _FakeHttpResponse:
     def __init__(self, url: str, body: bytes) -> None:
@@ -285,6 +326,17 @@ def _vulhub_urlopen(raw_flag: str, requested_urls: list[str]):
         if ".%2e" in url and url.endswith("/primordial_flag.txt"):
             return _FakeHttpResponse(url, raw_flag.encode("utf-8"))
         return _FakeHttpResponse(url, b"vulnerable apache lab")
+
+    return open_url
+
+
+def _service_urlopen(raw_flag: str, requested_urls: list[str]):
+    def open_url(request_obj, *args, **kwargs):
+        url = request_obj.full_url if hasattr(request_obj, "full_url") else str(request_obj)
+        requested_urls.append(url)
+        if url == "http://127.0.0.1:38080/":
+            return _FakeHttpResponse(url, raw_flag.encode("utf-8"))
+        return _FakeHttpResponse(url, b"local service")
 
     return open_url
 

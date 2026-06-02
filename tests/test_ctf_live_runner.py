@@ -211,15 +211,20 @@ class CTFLiveRunnerTests(unittest.TestCase):
             evidence = Path(result.evidence_path).read_text(encoding="utf-8")
             override = lab_root / "runtime/phase4-cicd-goat-port-override.yml"
             override_exists = override.is_file()
+            override_text = override.read_text(encoding="utf-8")
 
         self.assertEqual(result.status, "ready")
         self.assertEqual(result.lab_id, "cicd-goat")
         self.assertEqual(result.target_url, "http://127.0.0.1:38000/")
         self.assertTrue(override_exists)
         self.assertIn("override_sha256=", evidence)
+        self.assertIn("jenkins_url=http://127.0.0.1:38080/", evidence)
+        self.assertIn("gitlab_url=http://127.0.0.1:34000/", evidence)
         self.assertIn("docker_compose_up.returncode=0", evidence)
         self.assertIn("http.body_sha256=", evidence)
         self.assertIn("cleanup_deferred=true", evidence)
+        self.assertIn("127.0.0.1:35150:5050", override_text)
+        self.assertNotIn("127.0.0.1:35050:5050", override_text)
         self.assertNotIn("cicd goat ready body", evidence)
 
     def test_phase_eight_runner_starts_nyu_littlequery_compose_target(self) -> None:
