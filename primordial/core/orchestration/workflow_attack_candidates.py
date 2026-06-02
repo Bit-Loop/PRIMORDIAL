@@ -156,6 +156,9 @@ class WorkflowAttackCandidatesMixin:
             item.metadata.get("kind") == "exploit_research" and int(item.metadata.get("match_count", 0) or 0) > 0
             for item in evidence
         )
+        has_ad_inventory_without_principals = any(item.metadata.get("kind") == "ad_enumeration" for item in evidence) and not any(
+            item.metadata.get("kind") == "kerberos_user_discovery" for item in evidence
+        )
         if has_research_candidates and not self._poc_adaptation_available(capabilities):
             blockers.append(
                 "Retained public PoC candidates exist, but no gated PoC applicability/adaptation primitive is registered."
@@ -170,6 +173,12 @@ class WorkflowAttackCandidatesMixin:
         if policy is not None:
             if has_research_candidates and not policy.poc_applicability_validation:
                 blockers.append("Active operator intent does not allow public PoC applicability validation.")
+            if (
+                has_ad_inventory_without_principals
+                and not policy.kerberos_policy.asrep_roast_check_allowed
+                and not policy.kerberos_policy.kerberoast_check_allowed
+            ):
+                blockers.append("Active operator intent does not allow Kerberos principal discovery.")
             if has_remote_admin_surface and not policy.credential_policy.credential_validation_allowed:
                 blockers.append("Active operator intent does not allow credentialed access checks.")
         if target.metadata.get("active_ip"):
