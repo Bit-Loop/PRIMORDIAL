@@ -48,6 +48,10 @@ class PrimitiveCtfHandlerMixin:
         query_runner_hit = next((item for item in query_runner_interactions if item.get("captured_flag_ref")), None)
         hit = hit or query_runner_hit
         self._ctf_strip_transient_probe_fields(benchmark_api_probes)
+        cicd_service_probes = [] if hit else self._ctf_cicd_service_probes(target)
+        cicd_service_hit = next((item for item in cicd_service_probes if item.get("captured_flag_ref")), None)
+        hit = hit or cicd_service_hit
+        self._ctf_strip_transient_probe_fields(cicd_service_probes)
         browser_interactions = [] if hit else self._ctf_browser_interactions(target)
         browser_hit = next((item for item in browser_interactions if item.get("captured_flag_ref")), None)
         browser_benchmark_hit = next((item for item in browser_interactions if item.get("benchmark_solve_ref")), None)
@@ -67,6 +71,8 @@ class PrimitiveCtfHandlerMixin:
             "benchmark_api_probes": benchmark_api_probes,
             "query_runner_interaction_count": len(query_runner_interactions),
             "query_runner_interactions": query_runner_interactions,
+            "cicd_service_probe_count": len(cicd_service_probes),
+            "cicd_service_probes": cicd_service_probes,
             "browser_interaction_count": len(browser_interactions),
             "browser_interactions": browser_interactions,
             "captured_flag_ref": str(hit.get("captured_flag_ref", "")) if hit else "",
@@ -105,6 +111,7 @@ class PrimitiveCtfHandlerMixin:
                 "cloud_probe_count": payload["cloud_probe_count"],
                 "benchmark_api_probe_count": payload["benchmark_api_probe_count"],
                 "query_runner_interaction_count": payload["query_runner_interaction_count"],
+                "cicd_service_probe_count": payload["cicd_service_probe_count"],
                 "browser_interaction_count": payload["browser_interaction_count"],
                 "captured_flag_ref": payload["captured_flag_ref"],
                 "captured_flag_sha256": payload["captured_flag_sha256"],
@@ -132,6 +139,7 @@ class PrimitiveCtfHandlerMixin:
                     "cloud_probe_count": payload["cloud_probe_count"],
                     "benchmark_api_probe_count": payload["benchmark_api_probe_count"],
                     "query_runner_interaction_count": payload["query_runner_interaction_count"],
+                    "cicd_service_probe_count": payload["cicd_service_probe_count"],
                     "browser_interaction_count": payload["browser_interaction_count"],
                     "raw_flags_redacted": True,
                 },
@@ -151,6 +159,7 @@ class PrimitiveCtfHandlerMixin:
                     "cloud_probe_count": payload["cloud_probe_count"],
                     "benchmark_api_probe_count": payload["benchmark_api_probe_count"],
                     "query_runner_interaction_count": payload["query_runner_interaction_count"],
+                    "cicd_service_probe_count": payload["cicd_service_probe_count"],
                     "browser_interaction_count": payload["browser_interaction_count"],
                     "raw_flags_redacted": True,
                 },
@@ -889,6 +898,169 @@ class PrimitiveCtfHandlerMixin:
             "console.log('probe');",
         ]
 
+    def _ctf_cicd_service_probes(self, target) -> list[dict[str, object]]:
+        if str(target.metadata.get("target_family", "")) != "ci_cd_goat":
+            return []
+        probes: list[dict[str, object]] = []
+        for base in self._ctf_capture_base_urls(target):
+            search_url = parse.urljoin(base, "api/v1/repos/search")
+            search_probe = self._ctf_cicd_json_get("cicd_gitea_repo_search", search_url)
+            repos = self._ctf_cicd_gitea_repos(search_probe.pop("_json", None))
+            if not repos:
+                continue
+            probes.append(search_probe)
+            for repo in repos[:16]:
+                repo_probes = self._ctf_cicd_gitea_repo_probes(base, repo)
+                probes.extend(repo_probes)
+                if any(item.get("captured_flag_ref") for item in repo_probes):
+                    return probes
+        return probes
+
+    def _ctf_cicd_gitea_repo_probes(self, base: str, repo: dict[str, str]) -> list[dict[str, object]]:
+        full_name = repo.get("full_name", "")
+        branch = repo.get("default_branch", "main") or "main"
+        if "/" not in full_name:
+            return []
+        owner, name = full_name.split("/", 1)
+        probes: list[dict[str, object]] = []
+        queue = [""]
+        seen_files = 0
+        repo_digest = hashlib.sha256(full_name.encode("utf-8")).hexdigest()
+        while queue and seen_files < 80:
+            repo_file = queue.pop(0)
+            contents_url = self._ctf_cicd_gitea_contents_url(base, owner, name, repo_file, branch)
+            listing = self._ctf_cicd_json_get(
+                "cicd_gitea_repo_contents",
+                contents_url,
+                metadata={
+                    "repo_sha256": repo_digest,
+                    "path_sha256": hashlib.sha256(repo_file.encode("utf-8")).hexdigest(),
+                },
+            )
+            payload = listing.pop("_json", None)
+            probes.append(listing)
+            for item in self._ctf_cicd_gitea_content_items(payload):
+                item_type = item.get("type", "")
+                item_name = item.get("path", "")
+                if item_type == "dir" and item_name and len(queue) < 40:
+                    queue.append(item_name)
+                elif item_type == "file" and item_name:
+                    file_probe = self._ctf_cicd_gitea_file_probe(base, owner, name, item_name, branch, repo_digest)
+                    probes.append(file_probe)
+                    seen_files += 1
+                    if file_probe.get("captured_flag_ref"):
+                        return probes
+                    if seen_files >= 80:
+                        break
+        return probes
+
+    def _ctf_cicd_gitea_file_probe(
+        self,
+        base: str,
+        owner: str,
+        name: str,
+        repo_file: str,
+        branch: str,
+        repo_digest: str,
+    ) -> dict[str, object]:
+        raw_url = self._ctf_cicd_gitea_raw_url(base, owner, name, repo_file, branch)
+        return self._ctf_cicd_bytes_get(
+            "cicd_gitea_public_file",
+            raw_url,
+            metadata={
+                "repo_sha256": repo_digest,
+                "path_sha256": hashlib.sha256(repo_file.encode("utf-8")).hexdigest(),
+            },
+        )
+
+    def _ctf_cicd_gitea_contents_url(self, base: str, owner: str, name: str, repo_file: str, branch: str) -> str:
+        quoted_owner = parse.quote(owner, safe="")
+        quoted_name = parse.quote(name, safe="")
+        quoted_file = parse.quote(repo_file.strip("/"), safe="/")
+        suffix = f"api/v1/repos/{quoted_owner}/{quoted_name}/contents"
+        if quoted_file:
+            suffix = f"{suffix}/{quoted_file}"
+        return self._ctf_url_with_query(parse.urljoin(base, suffix), {"ref": branch})
+
+    def _ctf_cicd_gitea_raw_url(self, base: str, owner: str, name: str, repo_file: str, branch: str) -> str:
+        quoted_owner = parse.quote(owner, safe="")
+        quoted_name = parse.quote(name, safe="")
+        quoted_file = parse.quote(repo_file.strip("/"), safe="/")
+        suffix = f"api/v1/repos/{quoted_owner}/{quoted_name}/raw/{quoted_file}"
+        return self._ctf_url_with_query(parse.urljoin(base, suffix), {"ref": branch})
+
+    def _ctf_cicd_json_get(
+        self,
+        label: str,
+        url: str,
+        *,
+        metadata: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        probe = self._ctf_cicd_bytes_get(label, url, metadata=metadata, accept="application/json,*/*")
+        parsed = self._ctf_json_payload(str(probe.pop("_decoded", "")))
+        probe["_json"] = parsed
+        return probe
+
+    def _ctf_cicd_bytes_get(
+        self,
+        label: str,
+        url: str,
+        *,
+        metadata: dict[str, object] | None = None,
+        accept: str = "*/*",
+    ) -> dict[str, object]:
+        request_object = request.Request(url, headers={"User-Agent": "Primordial/0.1", "Accept": accept}, method="GET")
+        try:
+            with request.urlopen(request_object, timeout=8) as response:
+                body = response.read(524288)
+                final_url = response.geturl()
+                status = int(response.status)
+        except error.HTTPError as exc:
+            body = exc.read(524288)
+            final_url = exc.geturl()
+            status = int(exc.code)
+        except (error.URLError, OSError, ValueError, ssl.SSLError) as exc:
+            return {"kind": label, "url": self._sanitize_surface_url(url), "status_code": 0, "error": type(exc).__name__, **(metadata or {})}
+        decoded = self._decode_response_body(body, {})
+        return {
+            "kind": label,
+            "url": self._sanitize_surface_url(final_url),
+            "status_code": status,
+            "body_sha256": hashlib.sha256(body).hexdigest(),
+            "body_bytes": len(body),
+            "_decoded": decoded,
+            **self._ctf_capture_redacted_flag(body),
+            **(metadata or {}),
+        }
+
+    def _ctf_cicd_gitea_repos(self, payload: object) -> list[dict[str, str]]:
+        if not isinstance(payload, dict):
+            return []
+        rows = payload.get("data", [])
+        if not isinstance(rows, list):
+            return []
+        repos: list[dict[str, str]] = []
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            full_name = item.get("full_name")
+            if isinstance(full_name, str) and "/" in full_name:
+                branch = item.get("default_branch")
+                repos.append({"full_name": full_name, "default_branch": branch if isinstance(branch, str) else "main"})
+        return repos
+
+    def _ctf_cicd_gitea_content_items(self, payload: object) -> list[dict[str, str]]:
+        rows = payload if isinstance(payload, list) else [payload] if isinstance(payload, dict) else []
+        items: list[dict[str, str]] = []
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            item_type = item.get("type")
+            item_name = item.get("path") or item.get("name")
+            if isinstance(item_type, str) and isinstance(item_name, str):
+                items.append({"type": item_type, "path": item_name})
+        return items
+
     def _ctf_strip_query_runner_runtime(self, interactions: list[dict[str, object]]) -> list[dict[str, object]]:
         for item in interactions:
             item.pop("opener", None)
@@ -1063,6 +1235,7 @@ class PrimitiveCtfHandlerMixin:
             f"{payload['searched_url_count']} URL(s), ran {payload['kubernetes_probe_count']} Kubernetes probe(s), "
             f"ran {payload['cloud_probe_count']} cloud probe(s), "
             f"ran {payload['benchmark_api_probe_count']} benchmark API probe(s), "
+            f"ran {payload['cicd_service_probe_count']} CI/CD service probe(s), "
             f"and ran {payload['browser_interaction_count']} browser interaction(s) "
             f"for {handle} without finding a flag or benchmark solve."
         )
@@ -1075,6 +1248,7 @@ class PrimitiveCtfHandlerMixin:
             f"Kubernetes probes: {payload['kubernetes_probe_count']}",
             f"Cloud probes: {payload['cloud_probe_count']}",
             f"Benchmark API probes: {payload['benchmark_api_probe_count']}",
+            f"CI/CD service probes: {payload['cicd_service_probe_count']}",
             f"Browser interactions: {payload['browser_interaction_count']}",
         ]
         if payload["captured_flag_ref"]:

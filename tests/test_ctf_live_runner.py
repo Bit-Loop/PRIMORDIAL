@@ -107,6 +107,7 @@ class CTFLiveRunnerTests(unittest.TestCase):
         self.assertIn("localstack_sts.stdout_sha256=", evidence)
         self.assertIn("localstack_s3_create_bucket.stdout_sha256=", evidence)
         self.assertIn("localstack_s3_put_object.stdout_sha256=", evidence)
+        self.assertIn("objective_scope=generated_mechanism_validation", evidence)
         self.assertIn("objective_bucket_sha256=", evidence)
         self.assertIn("objective_key_sha256=", evidence)
         self.assertIn("flag_value_sha256=", evidence)
@@ -147,6 +148,7 @@ class CTFLiveRunnerTests(unittest.TestCase):
         self.assertIn("kubectl_wait_deployments.stdout_sha256=", evidence)
         self.assertIn("kubectl_pods.stdout_sha256=", evidence)
         self.assertIn("kubectl_apply_objective.stdout_sha256=", evidence)
+        self.assertIn("objective_scope=generated_mechanism_validation", evidence)
         self.assertIn("objective_secret_sha256=", evidence)
         self.assertIn("flag_value_sha256=", evidence)
         self.assertIn("flag_value_redacted=true", evidence)
@@ -338,6 +340,34 @@ class CTFLiveRunnerTests(unittest.TestCase):
         self.assertNotIn("Dashboard", evidence)
         self.assertIn('"active_intent": "ctf_solve_autonomous_local"', session)
 
+    def test_autonomous_attempt_marks_cicd_goat_target_family_for_service_probes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lab_root = Path(temp_dir)
+            compose_file = lab_root / "assets/phase4-cicd-goat/docker-compose.yaml"
+            compose_file.parent.mkdir(parents=True)
+            compose_file.write_text("services:\n  ctfd:\n    image: local\n", encoding="utf-8")
+            readiness = run_phase(
+                4,
+                lab_root=lab_root,
+                command_runner=_runner(stdout='{"Service":"ctfd","State":"running"}'),
+                http_getter=lambda _url: b"ready",
+                timeout_seconds=0.01,
+                keep_running=True,
+            )
+            calls: list[tuple[str, ...]] = []
+
+            run_autonomous_attempt(
+                readiness,
+                lab_root=lab_root,
+                command_runner=_attempt_runner(calls=calls),
+                cycles=1,
+                max_executions=1,
+            )
+
+        metadata = json.loads(calls[1][calls[1].index("--metadata-json") + 1])
+        self.assertEqual(metadata["target_family"], "ci_cd_goat")
+        self.assertIn("http://127.0.0.1:33000/", metadata["ctf_service_urls"])
+
     def test_autonomous_attempt_marks_solved_only_from_redacted_flag_evidence_ref(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             readiness = run_phase(
@@ -361,6 +391,34 @@ class CTFLiveRunnerTests(unittest.TestCase):
         self.assertEqual(attempt.captured_flag_ref, "evidence:captured-flag-redacted")
         self.assertIn("captured_flag_ref=evidence:captured-flag-redacted", evidence)
         self.assertIn('"solve_status": "solved"', session)
+        self.assertNotIn(raw_flag, evidence)
+        self.assertNotIn(raw_flag, session)
+
+    def test_autonomous_attempt_rejects_generated_mechanism_capture_as_phase_solve(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            readiness = run_phase(
+                5,
+                lab_root=Path(temp_dir),
+                command_runner=_runner(stdout='{"items":[]}'),
+                timeout_seconds=0.01,
+            )
+            raw_flag = fixture_flag("mechanism-only")
+            attempt = run_autonomous_attempt(
+                readiness,
+                lab_root=Path(temp_dir),
+                command_runner=_attempt_runner(stdout=f"captured_flag_ref=evidence:captured-flag-redacted\n{raw_flag}"),
+            )
+
+            evidence = Path(attempt.evidence_path).read_text(encoding="utf-8")
+            session = Path(attempt.solve_session_path).read_text(encoding="utf-8")
+
+        self.assertEqual(attempt.status, "attempted")
+        self.assertEqual(attempt.solve_status, "attempted")
+        self.assertEqual(attempt.captured_flag_ref, "")
+        self.assertIn("mechanism_capture_ref=evidence:captured-flag-redacted", evidence)
+        self.assertIn("shortcut_completion_rejected=true", evidence)
+        self.assertIn("captured_flag_ref=", evidence)
+        self.assertIn('"solve_status": "attempted"', session)
         self.assertNotIn(raw_flag, evidence)
         self.assertNotIn(raw_flag, session)
 

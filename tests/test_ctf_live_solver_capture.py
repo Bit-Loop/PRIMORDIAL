@@ -494,6 +494,49 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
         self.assertNotIn(raw_flag, artifact_text)
         self.assertNotIn(raw_flag, json.dumps(evidence.as_payload()))
 
+    def test_executor_crawls_cicd_goat_public_gitea_repos_without_persisting_file_body(self) -> None:
+        target = self.runtime.register_target(
+            handle="local-cicd-goat-lab",
+            profile=ScopeProfile.HACK_THE_BOX,
+            assets=["http://127.0.0.1:38000/"],
+            metadata={
+                "ctf_completion_indicator": "autonomous_flags",
+                "ctf_target_url": "http://127.0.0.1:38000/",
+                "ctf_service_urls": ["http://127.0.0.1:33000/"],
+                "target_family": "ci_cd_goat",
+                "local_ctf_autonomous": True,
+            },
+        )
+        task = Task(
+            target_id=target.id,
+            phase=MethodologyPhase.ANALYSIS,
+            kind=TaskKind.CTF_FLAG_CAPTURE,
+            title="Run closed-book CI/CD service CTF flag capture",
+            summary="Search public CI/CD lab service state for a redacted flag reference.",
+            role=AgentRole.ANALYSIS_WORKER,
+            risk_tier=RiskTier.MODERATE,
+            required_capabilities=["ctf-flag-capture", "flag-collection"],
+            metadata={"primitive_hint": "ctf-flag-capture"},
+        )
+        raw_flag = fixture_flag("cicd-gitea-public-file")
+        public_body = b"pipeline output " + raw_flag.encode("utf-8")
+
+        with patch(
+            "primordial.modes.security.execution_ctf_handler.request.urlopen",
+            side_effect=_gitea_repo_urlopen(public_body),
+        ):
+            result = self.runtime.executor.execute(task, None)
+
+        artifact_text = Path(result.artifacts[0].path).read_text(encoding="utf-8")
+        evidence = result.evidence[0]
+
+        self.assertTrue(result.success)
+        self.assertGreaterEqual(evidence.metadata["cicd_service_probe_count"], 3)
+        self.assertTrue(evidence.metadata["captured_flag_ref"].startswith("evidence:captured-flag:"))
+        self.assertNotIn(raw_flag, artifact_text)
+        self.assertNotIn(public_body.decode("utf-8"), artifact_text)
+        self.assertNotIn(raw_flag, json.dumps(evidence.as_payload()))
+
     def test_executor_captures_redacted_kubernetes_secret_flag(self) -> None:
         target = self.runtime.register_target(
             handle="local-kubernetes-goat-lab",
@@ -713,6 +756,22 @@ def _service_urlopen(raw_flag: str, requested_urls: list[str]):
         if url == "http://127.0.0.1:38080/":
             return _FakeHttpResponse(url, raw_flag.encode("utf-8"))
         return _FakeHttpResponse(url, b"local service")
+
+    return open_url
+
+
+def _gitea_repo_urlopen(public_body: bytes):
+    def open_url(request_obj, *args, **kwargs):
+        url = request_obj.full_url if hasattr(request_obj, "full_url") else str(request_obj)
+        if url.endswith("/api/v1/repos/search"):
+            body = {"ok": True, "data": [{"full_name": "team/project", "default_branch": "main"}]}
+            return _FakeHttpResponse(url, json.dumps(body).encode("utf-8"))
+        if "/api/v1/repos/team/project/contents" in url:
+            body = [{"type": "file", "path": "Jenkinsfile"}]
+            return _FakeHttpResponse(url, json.dumps(body).encode("utf-8"))
+        if "/api/v1/repos/team/project/raw/Jenkinsfile" in url:
+            return _FakeHttpResponse(url, public_body)
+        return _FakeHttpResponse(url, b"")
 
     return open_url
 

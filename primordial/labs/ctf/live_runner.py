@@ -23,6 +23,7 @@ from primordial.labs.ctf.sessions import SolveSession
 DEFAULT_LAB_ROOT = Path("/run/media/bitloop/DREAD/primordial-labs")
 DEFAULT_KUBERNETES_GOAT_KUBECONFIG = DEFAULT_LAB_ROOT / "kubeconfigs" / "phase5-kind.yaml"
 READY_PHASES = frozenset({0, 1, 2, 3, 4, 5, 6, 7, 8})
+GENERATED_MECHANISM_OBJECTIVE_SCOPE = "generated_mechanism_validation"
 PHASE_ZERO_HARNESS_PORT = 3090
 PHASE_ZERO_HARNESS_URL = f"http://127.0.0.1:{PHASE_ZERO_HARNESS_PORT}/"
 MBPTL_RELATIVE_COMPOSE = Path("assets/phase3-mbptl/mbptl/docker-compose.yml")
@@ -48,7 +49,7 @@ ATTEMPT_METADATA_BY_LAB_ID = {
         "vulnerability_cve_id": "CVE-2021-41773",
         "ctf_flag_container_path": VULHUB_HTTPD_CVE_2021_41773_FLAG_CONTAINER_PATH,
     },
-    "cicd-goat": {"ctf_service_urls": list(CICD_GOAT_SERVICE_URLS)},
+    "cicd-goat": {"target_family": "ci_cd_goat", "ctf_service_urls": list(CICD_GOAT_SERVICE_URLS)},
     "cloudgoat-localstack-adaptation": {
         "target_family": "cloudgoat",
         "ctf_aws_endpoint_url": "http://127.0.0.1:4566",
@@ -400,6 +401,34 @@ def run_autonomous_attempt(
 
     captured_flag_ref = _captured_flag_ref_from_results(command_results)
     if captured_flag_ref:
+        if not _captured_flag_counts_as_phase_completion(readiness):
+            lines.extend(_cleanup_live_lab_lines(readiness) if cleanup_live_lab else ())
+            session = session.record_action(
+                action_id=f"action:phase{phase}:primordial-mechanism-capture",
+                action_type="primordial_autonomous_mechanism_capture",
+                status="completed_no_original_lab_flag",
+                evidence_ids=[captured_flag_ref],
+                metadata={"command_count": len(command_results), "mechanism_capture_ref": captured_flag_ref},
+            ).complete(result="no_solve", solve_status="attempted", report_ref=readiness.evidence_ref)
+            lines.extend(
+                [
+                    "original_lab_flag_required=true",
+                    f"mechanism_capture_ref={captured_flag_ref}",
+                    "shortcut_completion_rejected=true",
+                    f"shortcut_completion_scope={GENERATED_MECHANISM_OBJECTIVE_SCOPE}",
+                    "captured_flag_ref=",
+                ]
+            )
+            return _write_attempt_result(
+                phase=phase,
+                lab_id=lab_id,
+                status="attempted",
+                solve_status="attempted",
+                evidence=evidence,
+                session_path=session_path,
+                session=session,
+                lines=lines,
+            )
         lines.extend(_cleanup_live_lab_lines(readiness) if cleanup_live_lab else ())
         session = session.record_flag_submission(
             challenge_id=lab_id,
@@ -936,6 +965,7 @@ def _seed_cloudgoat_localstack_objective(*, lab_root: Path, command_runner: Comm
         "AWS_DEFAULT_REGION": "us-east-1",
     }
     lines = [
+        f"objective_scope={GENERATED_MECHANISM_OBJECTIVE_SCOPE}",
         f"objective_bucket_sha256={_sha256_text(bucket)}",
         f"objective_key_sha256={_sha256_text(key)}",
         f"flag_value_sha256={_sha256_text(flag_value)}",
@@ -1047,6 +1077,7 @@ def _seed_kubernetes_goat_objective(
     flag_value = "ctf" + "{" + f"phase5-kubernetes-goat-{seed[12:36]}" + "}"
     manifest = runtime_dir / f"objective-{seed[:12]}.yaml"
     lines = [
+        f"objective_scope={GENERATED_MECHANISM_OBJECTIVE_SCOPE}",
         f"objective_secret_sha256={_sha256_text(secret_name)}",
         f"flag_value_sha256={_sha256_text(flag_value)}",
         "flag_value_redacted=true",
@@ -1762,6 +1793,24 @@ def _benchmark_solve_ref_from_results(results: list[subprocess.CompletedProcess[
         ref = _benchmark_solve_ref_from_text(f"{result.stdout or ''}\n{result.stderr or ''}")
         if ref:
             return ref
+    return ""
+
+
+def _captured_flag_counts_as_phase_completion(readiness: LiveLabRunResult) -> bool:
+    return _readiness_objective_scope(readiness) != GENERATED_MECHANISM_OBJECTIVE_SCOPE
+
+
+def _readiness_objective_scope(readiness: LiveLabRunResult) -> str:
+    if not readiness.evidence_path:
+        return ""
+    try:
+        lines = Path(readiness.evidence_path).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ""
+    for line in lines:
+        key, separator, value = line.partition("=")
+        if separator and key.strip() == "objective_scope":
+            return value.strip()
     return ""
 
 
