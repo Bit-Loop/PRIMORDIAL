@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from primordial.modes.security.execution_common import _SurfaceParser
 from primordial.modes.security.execution_common import *
 
 
@@ -195,7 +196,7 @@ class PrimitiveProbeToolMixin:
                             "url_redacted": True,
                         }
                     )
-            except Exception:
+            except Exception:  # noqa: BLE001 - per-URL probe failures must not abort the surface scan
                 continue
         return results
 

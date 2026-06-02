@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from primordial.modes.security.execution_common import _SurfaceParser
 from primordial.modes.security.execution_common import *
 
 
@@ -103,7 +104,7 @@ class PrimitiveWebToolMixin:
             status = int(exc.code)
             headers = {key.lower(): value for key, value in exc.headers.items()}
             final_url = exc.geturl()
-        except Exception:
+        except (error.URLError, OSError, ssl.SSLError, ValueError):
             return None
         if status not in CONTENT_DISCOVERY_INTERESTING_STATUS:
             return None
@@ -125,7 +126,7 @@ class PrimitiveWebToolMixin:
         parser = _SurfaceParser()
         try:
             parser.feed(decoded)
-        except Exception:
+        except (ValueError, AssertionError):
             return ""
         return parser.title
 
