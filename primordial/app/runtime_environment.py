@@ -130,30 +130,31 @@ class RuntimeEnvironmentMixin:
         classification: EnvironmentClassification | None = None,
     ) -> None:
         classification = classification or self._classify_environment(profile=profile.value)
-        default_intent = self._default_operator_intent_for_environment(classification)
-        if default_intent == OperatorIntentRegistry.DEFAULT_INTENT_ID:
-            return
-        intent = self.operator_intents.get(default_intent)
         session = self.store.get_active_session()
         if session is None:
             self.start_session(profile=profile, environment_classification=classification)
             return
         current_intent = str(session.metadata.get("operator_intent_id") or OperatorIntentRegistry.DEFAULT_INTENT_ID)
-        if current_intent != OperatorIntentRegistry.DEFAULT_INTENT_ID:
+        selected_intent = self._select_operator_intent_for_session(current_intent, classification)
+        classification_payload = classification.as_payload()
+        previous_classification = session.metadata.get("environment_classification")
+        if current_intent == selected_intent and previous_classification == classification_payload:
             return
-        session.metadata["operator_intent_id"] = intent.id
-        session.metadata["environment_classification"] = classification.as_payload()
+        session.metadata["operator_intent_id"] = selected_intent
+        session.metadata["environment_classification"] = classification_payload
         session.updated_at = utc_now()
         self.store.insert_session(session)
+        intent = self.operator_intents.get(selected_intent)
         self.store.insert_event(
             EventRecord(
                 type=EventType.BOOTSTRAP,
-                summary=f"Operator intent defaulted for {profile.value} scope: {intent.id}",
+                summary=f"Operator intent reconciled for {profile.value} scope: {intent.id}",
                 metadata={
                     "operator_intent": intent.as_payload(),
                     "profile": profile.value,
                     "session_id": session.id,
-                    "environment_classification": classification.as_payload(),
+                    "previous_operator_intent_id": current_intent,
+                    "environment_classification": classification_payload,
                 },
             )
         )
