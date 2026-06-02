@@ -207,6 +207,55 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
         self.assertNotIn(raw_flag, artifact_text)
         self.assertNotIn(raw_flag, json.dumps(evidence.as_payload()))
 
+    def test_executor_captures_redacted_query_runner_flag_after_generic_login(self) -> None:
+        private_url = "http://" + ".".join(("172", "23", "0", "2")) + "/"
+        target = self.runtime.register_target(
+            handle="nyu-ctf-bench-littlequery",
+            profile=ScopeProfile.HACK_THE_BOX,
+            assets=[private_url],
+            metadata={
+                "ctf_completion_indicator": "autonomous_flags",
+                "ctf_target_url": private_url,
+                "ctf_allow_private_http": True,
+                "ctf_login_paths": ["login.php"],
+                "ctf_login_hash_algorithms": ["sha1"],
+                "ctf_query_runner_paths": ["query.php"],
+                "target_family": "nyu_ctf_bench",
+                "local_ctf_autonomous": True,
+            },
+        )
+        task = Task(
+            target_id=target.id,
+            phase=MethodologyPhase.ANALYSIS,
+            kind=TaskKind.CTF_FLAG_CAPTURE,
+            title="Run closed-book benchmark query CTF flag capture",
+            summary="Search local benchmark query runner state for a redacted flag reference.",
+            role=AgentRole.ANALYSIS_WORKER,
+            risk_tier=RiskTier.MODERATE,
+            required_capabilities=["ctf-flag-capture", "flag-collection"],
+            metadata={"primitive_hint": "ctf-flag-capture"},
+        )
+        raw_flag = fixture_flag("nyu-query-runner")
+
+        with patch(
+            "primordial.modes.security.execution_ctf_handler.request.urlopen",
+            side_effect=OSError,
+        ), patch(
+            "primordial.modes.security.execution_ctf_handler.request.build_opener",
+            return_value=_FakeQueryRunnerOpener(raw_flag),
+        ):
+            result = self.runtime.executor.execute(task, None)
+
+        artifact_text = Path(result.artifacts[0].path).read_text(encoding="utf-8")
+        evidence = result.evidence[0]
+
+        self.assertTrue(result.success)
+        self.assertGreaterEqual(evidence.metadata["query_runner_interaction_count"], 2)
+        self.assertTrue(evidence.metadata["captured_flag_ref"].startswith("evidence:captured-flag:"))
+        self.assertEqual(evidence.metadata["captured_flag_length"], len(raw_flag))
+        self.assertNotIn(raw_flag, artifact_text)
+        self.assertNotIn(raw_flag, json.dumps(evidence.as_payload()))
+
     def test_executor_records_browser_benchmark_solve_without_flag_material(self) -> None:
         target = self.runtime.register_target(
             handle="local-browser-lab",
@@ -498,6 +547,22 @@ class _FakeHttpResponse:
 
     def geturl(self) -> str:
         return self._url
+
+
+class _FakeQueryRunnerOpener:
+    def __init__(self, raw_flag: str) -> None:
+        self.raw_flag = raw_flag
+        self.authenticated = False
+
+    def open(self, request_obj, *args, **kwargs):
+        url = request_obj.full_url if hasattr(request_obj, "full_url") else str(request_obj)
+        data = getattr(request_obj, "data", b"") or b""
+        if url.endswith("/login.php") and b"username=demo" in data:
+            self.authenticated = True
+            return _FakeHttpResponse(url.rsplit("/", 1)[0] + "/query.php", b'<textarea name="code" id="editor"></textarea>')
+        if url.endswith("/query.php") and self.authenticated:
+            return _FakeHttpResponse(url, self.raw_flag.encode("utf-8"))
+        return _FakeHttpResponse(url, b"not authenticated")
 
 
 def _benchmark_urlopen(state: dict[str, bool]):
