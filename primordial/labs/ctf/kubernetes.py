@@ -147,8 +147,11 @@ def _validate_mutation_resets(
         reset_ref = _evidence_ref(item.get("reset_evidence_ref"), source=f"mutation_resets[{index}].reset_evidence_ref")
         if reset_ref != proof.reset_evidence_ref:
             raise ValueError("Kubernetes Goat controls reset_evidence_ref must match environment proof")
+        refs = _evidence_refs(item.get("evidence_ids"), source=f"mutation_resets[{index}].evidence_ids")
+        if reset_ref not in refs:
+            raise ValueError("Kubernetes Goat controls mutation reset evidence_ids must include reset_evidence_ref")
         reset_ids.append(reset_id)
-        evidence_refs.extend(_evidence_refs(item.get("evidence_ids"), source=f"mutation_resets[{index}].evidence_ids"))
+        evidence_refs.extend(refs)
     return tuple(reset_ids), _unique_refs(tuple(evidence_refs))
 
 

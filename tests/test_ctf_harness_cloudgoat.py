@@ -162,6 +162,51 @@ class CTFHarnessCloudGoatTests(unittest.TestCase):
                 ],
             )
 
+    def test_cloudgoat_controls_require_teardown_evidence_in_teardown_action(self) -> None:
+        phase = load_ctf_lab_phase_catalog(CATALOG_PATH).phase(7)
+        target = _cloudgoat_target()
+        environment = verify_sandbox_cloud_environment(
+            target,
+            account_id="111122223333",
+            regions=["us-east-1"],
+            observed_assets=["aws-account-111122223333", "us-east-1"],
+            evidence_refs=["evidence:cloudgoat-account-boundary", "evidence:cloudgoat-teardown"],
+            reset_evidence_ref="evidence:cloudgoat-teardown",
+            profile="co_internal_lab",
+        )
+
+        with self.assertRaisesRegex(ValueError, "include teardown_evidence_ref"):
+            verify_cloudgoat_phase_controls(
+                phase,
+                target,
+                environment_proof=environment,
+                account_id="111122223333",
+                region="us-east-1",
+                scoped_resources=[
+                    {
+                        "id": "cloudgoat-iam-role",
+                        "target_id": target.id,
+                        "account_id": "111122223333",
+                        "region": "us-east-1",
+                        "asset": "aws-account-111122223333",
+                        "resource_type": "iam_role",
+                        "source_refs": ["source:cloudgoat-local-terraform-plan"],
+                        "evidence_ids": ["evidence:cloudgoat-account-boundary"],
+                    }
+                ],
+                teardown_actions=[
+                    {
+                        "id": "cloudgoat-destroy",
+                        "target_id": target.id,
+                        "account_id": "111122223333",
+                        "region": "us-east-1",
+                        "action": "terraform_destroy",
+                        "teardown_evidence_ref": "evidence:cloudgoat-teardown",
+                        "evidence_ids": ["evidence:cloudgoat-account-boundary"],
+                    }
+                ],
+            )
+
 
 def _cloudgoat_target():
     return load_ctf_target_manifest(

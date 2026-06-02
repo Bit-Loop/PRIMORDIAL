@@ -174,8 +174,11 @@ def _validate_teardown_actions(
         )
         if teardown_ref != proof.reset_evidence_ref:
             raise ValueError("CloudGoat controls teardown_evidence_ref must match environment proof")
+        refs = _evidence_refs(item.get("evidence_ids"), source=f"teardown_actions[{index}].evidence_ids")
+        if teardown_ref not in refs:
+            raise ValueError("CloudGoat controls teardown evidence_ids must include teardown_evidence_ref")
         teardown_ids.append(teardown_id)
-        evidence_refs.extend(_evidence_refs(item.get("evidence_ids"), source=f"teardown_actions[{index}].evidence_ids"))
+        evidence_refs.extend(refs)
     return tuple(teardown_ids), _unique_refs(tuple(evidence_refs))
 
 

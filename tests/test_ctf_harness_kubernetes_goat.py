@@ -152,6 +152,48 @@ class CTFHarnessKubernetesGoatTests(unittest.TestCase):
                 ],
             )
 
+    def test_kubernetes_goat_controls_require_reset_evidence_in_reset_action(self) -> None:
+        phase = load_ctf_lab_phase_catalog(CATALOG_PATH).phase(5)
+        target = _kubernetes_goat_target()
+        environment = verify_local_cluster_environment(
+            target,
+            namespace="kg-local",
+            observed_assets=["http://127.0.0.1:30080"],
+            evidence_refs=["evidence:kubernetes-goat-health", "evidence:kubernetes-goat-reset-teardown"],
+            reset_evidence_ref="evidence:kubernetes-goat-reset-teardown",
+            profile="co_internal_lab",
+        )
+
+        with self.assertRaisesRegex(ValueError, "include reset_evidence_ref"):
+            verify_kubernetes_goat_phase_controls(
+                phase,
+                target,
+                environment_proof=environment,
+                namespace="kg-local",
+                scoped_resources=[
+                    {
+                        "id": "kg-web-service",
+                        "target_id": target.id,
+                        "namespace": "kg-local",
+                        "kind": "service",
+                        "name": "kubernetes-goat-home",
+                        "asset": "http://127.0.0.1:30080",
+                        "source_refs": ["source:kubernetes-goat-local-manifests"],
+                        "evidence_ids": ["evidence:kubernetes-goat-health"],
+                    }
+                ],
+                mutation_resets=[
+                    {
+                        "id": "kg-local-reset",
+                        "target_id": target.id,
+                        "namespace": "kg-local",
+                        "action": "delete_namespace_and_reapply",
+                        "reset_evidence_ref": "evidence:kubernetes-goat-reset-teardown",
+                        "evidence_ids": ["evidence:kubernetes-goat-health"],
+                    }
+                ],
+            )
+
 
 def _kubernetes_goat_target():
     return load_ctf_target_manifest(

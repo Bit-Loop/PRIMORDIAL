@@ -139,8 +139,11 @@ def _validate_pipeline_actions(
             raise ValueError("CI/CD Goat controls mutating pipeline action requires verified environment_ref")
         if bool(item.get("external_mutation", False)):
             raise ValueError("CI/CD Goat controls reject external pipeline mutation")
+        refs = _evidence_refs(item.get("evidence_ids"), source=f"pipeline_actions[{index}].evidence_ids")
+        if action in MUTATING_PIPELINE_ACTIONS and environment_ref not in refs:
+            raise ValueError("CI/CD Goat controls mutating pipeline action evidence_ids must include environment_ref")
         action_ids.append(action_id)
-        evidence_refs.extend(_evidence_refs(item.get("evidence_ids"), source=f"pipeline_actions[{index}].evidence_ids"))
+        evidence_refs.extend(refs)
     return tuple(action_ids), _unique_refs(tuple(evidence_refs))
 
 

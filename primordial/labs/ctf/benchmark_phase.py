@@ -107,8 +107,11 @@ def _validate_target_rotation(
         reset_ref = _evidence_ref(item.get("reset_evidence_ref"), source=f"target_rotation[{index}].reset_evidence_ref")
         if reset_ref not in proof.evidence_refs:
             raise ValueError("Benchmark controls reset_evidence_ref must be verified")
+        refs = _evidence_refs(item.get("evidence_ids"), source=f"target_rotation[{index}].evidence_ids")
+        if reset_ref not in refs:
+            raise ValueError("Benchmark controls target_rotation evidence_ids must include reset_evidence_ref")
         rotation_ids.append(rotation_id)
-        evidence_refs.extend(_evidence_refs(item.get("evidence_ids"), source=f"target_rotation[{index}].evidence_ids"))
+        evidence_refs.extend(refs)
     if tuple(rotation_ids) != expected_rotation:
         raise ValueError("Benchmark controls target_rotation order must match environment proof")
     return tuple(rotation_ids), _unique_refs(tuple(evidence_refs))

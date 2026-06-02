@@ -172,6 +172,55 @@ class CTFHarnessBenchmarkPhaseTests(unittest.TestCase):
                 ],
             )
 
+    def test_benchmark_controls_require_rotation_reset_evidence_per_target(self) -> None:
+        phase = load_ctf_lab_phase_catalog(CATALOG_PATH).phase(8)
+        target = _benchmark_target()
+        environment = verify_benchmark_environment(
+            target,
+            observed_assets=["ctf-dojo-target-a", "ctf-dojo-target-b"],
+            evidence_refs=["evidence:benchmark-env", "evidence:benchmark-reset-a", "evidence:benchmark-reset-b"],
+            reset_evidence_ref="evidence:benchmark-reset-a",
+            profile="co_internal_lab",
+            target_rotation=["ctf-dojo-target-a", "ctf-dojo-target-b"],
+        )
+
+        with self.assertRaisesRegex(ValueError, "include reset_evidence_ref"):
+            verify_benchmark_phase_controls(
+                phase,
+                target,
+                environment_proof=environment,
+                target_rotation=[
+                    {
+                        "id": "ctf-dojo-target-a",
+                        "target_id": target.id,
+                        "asset": "ctf-dojo-target-a",
+                        "reset_evidence_ref": "evidence:benchmark-reset-a",
+                        "evidence_ids": ["evidence:benchmark-env"],
+                    },
+                    {
+                        "id": "ctf-dojo-target-b",
+                        "target_id": target.id,
+                        "asset": "ctf-dojo-target-b",
+                        "reset_evidence_ref": "evidence:benchmark-reset-b",
+                        "evidence_ids": ["evidence:benchmark-env", "evidence:benchmark-reset-b"],
+                    },
+                ],
+                scoring_results=[
+                    {
+                        "id": "score-a",
+                        "target_ref": "ctf-dojo-target-a",
+                        "score": 1.0,
+                        "evidence_ids": ["evidence:benchmark-env"],
+                    },
+                    {
+                        "id": "score-b",
+                        "target_ref": "ctf-dojo-target-b",
+                        "score": 0.5,
+                        "evidence_ids": ["evidence:benchmark-env"],
+                    },
+                ],
+            )
+
 
 def _benchmark_target():
     return load_ctf_target_manifest(
