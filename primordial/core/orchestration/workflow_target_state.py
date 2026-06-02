@@ -155,6 +155,11 @@ class WorkflowTargetStateMixin:
             required = "ad_lab in-house AD attack path or htb_lab"
             category = "kerberos_attack_check"
             reason = "active intent does not allow Kerberos attack-path checks"
+        elif kind == TaskKind.KERBEROS_USER_DISCOVERY:
+            allowed = policy.kerberos_policy.asrep_roast_check_allowed or policy.kerberos_policy.kerberoast_check_allowed
+            required = "ad_lab in-house AD attack path or htb_lab"
+            category = "kerberos_user_discovery"
+            reason = "active intent does not allow Kerberos principal discovery"
         elif kind == TaskKind.CREDENTIALED_ACCESS_CHECK:
             allowed = policy.credential_policy.credential_validation_allowed
             required = "credential_validation or htb_lab"

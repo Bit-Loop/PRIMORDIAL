@@ -5,6 +5,9 @@ from primordial.modes.security.execution_common import *
 
 class PrimitiveKerberosHandlerMixin:
     def _handle_kerberos_user_discovery(self, task: Task, context: ContextSlice) -> TaskExecutionResult:
+        blocked = self._require_intent(task)
+        if blocked is not None:
+            return blocked
         result = TaskExecutionResult(summary="Kerberos user discovery completed")
         target = self.store.get_target(task.target_id)
         if not target:

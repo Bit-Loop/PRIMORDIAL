@@ -124,6 +124,8 @@ class WorkflowPlanningPredicatesMixin:
     def _should_plan_kerberos_user_discovery(self, target: Target) -> bool:
         if not self._profile_allows_task(target, "kerberos_user_discovery") and not target.metadata.get("allow_kerberos_user_discovery"):
             return False
+        if not self._intent_allows_task(target, TaskKind.KERBEROS_USER_DISCOVERY):
+            return False
         evidence = self.store.list_evidence(target_id=target.id, limit=200)
         if any(
             item.metadata.get("kind") == "kerberos_user_discovery"
