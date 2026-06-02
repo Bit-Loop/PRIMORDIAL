@@ -134,6 +134,8 @@ def _validate_scoring_results(
         target_ref = _required_text(item.get("target_ref"), f"scoring_results[{index}].target_ref")
         if target_ref not in rotation_ids:
             raise ValueError("Benchmark controls scoring target_ref must be in target_rotation")
+        if target_ref in scored_targets:
+            raise ValueError(f"Benchmark controls duplicate scoring target_ref: {target_ref}")
         _score(item.get("score"), source=f"scoring_results[{index}].score")
         scoring_ids.append(scoring_id)
         scored_targets.append(target_ref)
