@@ -792,10 +792,14 @@ def _goad_env(*, lab_root: Path, runtime_home: Path) -> dict[str, str]:
         str(lab_root / GOAD_PYTHON_DEPS_RELATIVE),
         str(lab_root / GOAD_ANSIBLE_CORE_RELATIVE),
     )
+    user_state_root = Path(os.environ.get("PRIMORDIAL_LABS_USER_STATE_ROOT", str(Path.home() / ".local" / "share" / "primordial-labs")))
     return {
         "HOME": str(runtime_home),
         "PATH": f"{lab_root / GOAD_TOOLS_BIN_RELATIVE}{os.pathsep}{os.environ.get('PATH', '')}",
         "PYTHONPATH": os.pathsep.join(python_paths),
+        "ANSIBLE_COLLECTIONS_PATH": str(user_state_root / "ansible" / "collections"),
+        "ANSIBLE_ROLES_PATH": str(user_state_root / "ansible" / "roles"),
+        "VAGRANT_HOME": str(user_state_root / "goad-vagrant"),
     }
 
 
