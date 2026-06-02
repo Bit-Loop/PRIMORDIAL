@@ -96,12 +96,22 @@ def poc_validation_blocker(
     interests: Iterable[Any],
     capabilities: set[str],
     poc_adaptation_available: Callable[[set[str]], bool],
+    intent_policy: Any | None = None,
 ) -> dict[str, object] | None:
     evidence_items = list(evidence)
     interest_items = list(interests)
     if not _has_poc_candidates(evidence_items, interest_items) or _has_poc_validation(evidence_items):
         return None
     if poc_adaptation_available(capabilities):
+        if intent_policy is not None and not bool(getattr(intent_policy, "poc_applicability_validation", False)):
+            return {
+                "target": target.handle,
+                "kind": "operator_intent_blocks_poc_validation",
+                "summary": (
+                    f"`{target.handle}` has public PoC candidates, but the active operator intent "
+                    "does not allow PoC applicability validation."
+                ),
+            }
         return {
             "target": target.handle,
             "kind": "runnable_poc_validation",
@@ -120,6 +130,7 @@ def credentialed_access_blocker(
     capabilities: set[str],
     lab_credentials_configured: bool,
     has_any_capability: Callable[..., bool],
+    intent_policy: Any | None = None,
 ) -> dict[str, object] | None:
     has_credentialed_capability = has_any_capability(
         capabilities,
@@ -130,6 +141,16 @@ def credentialed_access_blocker(
     credential_surface = classify_credentialed_access_surface(current_evidence)
     if not has_credentialed_capability or lab_credentials_configured or not credential_surface.eligible:
         return None
+    credential_policy = getattr(intent_policy, "credential_policy", None)
+    if credential_policy is not None and not bool(getattr(credential_policy, "credential_validation_allowed", False)):
+        return {
+            "target": target.handle,
+            "kind": "operator_intent_blocks_credential_validation",
+            "summary": (
+                f"`{target.handle}` has evidence-supported Windows SMB/WinRM services, "
+                "but the active operator intent does not allow credential validation."
+            ),
+        }
     return {
         "target": target.handle,
         "kind": "missing_known_credentials",

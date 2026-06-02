@@ -61,6 +61,7 @@ class RuntimePayloadsMixin:
         blockers: list[dict[str, object]] = []
         capabilities = work_status_capabilities(self.store.list_primitives())
         lab_credentials_configured = self._lab_credentials_configured()
+        intent_policy = self.intent_policy()
         for target in self.store.list_targets():
             evidence = self.store.list_evidence(target_id=target.id, limit=100)
             active_generation = self._target_active_generation(target)
@@ -82,6 +83,7 @@ class RuntimePayloadsMixin:
                 interests,
                 capabilities,
                 self._poc_adaptation_available,
+                intent_policy,
             )
             if blocker:
                 blockers.append(blocker)
@@ -92,6 +94,7 @@ class RuntimePayloadsMixin:
                 capabilities,
                 lab_credentials_configured,
                 self._has_any_capability,
+                intent_policy,
             )
             if blocker:
                 blockers.append(blocker)
