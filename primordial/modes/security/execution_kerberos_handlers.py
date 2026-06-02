@@ -235,8 +235,14 @@ class PrimitiveKerberosHandlerMixin:
             "requested_checks": sorted(requested_checks),
             "spn_candidates": retained_spn_candidates,
             "asrep_hashes": asrep_hashes,
-            "command_results": command_results,
-            "guardrails": {"cracks_hashes": False, "executes_pocs": False, "bounded_user_count": len(users)},
+            "command_results": self._redact_kerberos_attack_command_results(command_results),
+            "guardrails": {
+                "cracks_hashes": False,
+                "executes_pocs": False,
+                "bounded_user_count": len(users),
+                "raw_asrep_hashes_stored": False,
+                "command_output_hashes_redacted": True,
+            },
         }
 
     def _kerberos_attack_metadata(self, host: str, domain: str, users: list[str], retained_spn_candidates: list[dict[str, object]], requested_checks: set[str], asrep_hashes: list[dict[str, object]]) -> dict[str, object]:
@@ -250,6 +256,7 @@ class PrimitiveKerberosHandlerMixin:
             "spn_candidates": retained_spn_candidates,
             "cracks_hashes": False,
             "executes_pocs": False,
+            "raw_asrep_hashes_stored": False,
         }
 
     def _append_kerberos_attack_followups(

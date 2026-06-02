@@ -70,8 +70,8 @@ class PrimitiveKerberosAttackToolMixin:
         path.chmod(0o600)
         return str(path)
 
-    def _parse_asrep_hashes(self, command_results: list[dict[str, object]]) -> list[dict[str, str]]:
-        hashes: list[dict[str, str]] = []
+    def _parse_asrep_hashes(self, command_results: list[dict[str, object]]) -> list[dict[str, object]]:
+        hashes: list[dict[str, object]] = []
         for result in command_results:
             stdout = str(result.get("stdout", ""))
             for raw_line in stdout.splitlines():
@@ -79,12 +79,40 @@ class PrimitiveKerberosAttackToolMixin:
                 if "$krb5asrep$" not in line.lower():
                     continue
                 username = line.split(":", 1)[0].strip() if ":" in line else ""
-                hashes.append({"username": username, "hash_preview": line[:120], "hash_present": "true"})
+                hashes.append(
+                    {
+                        "username": username,
+                        "hash_sha256": hashlib.sha256(line.encode("utf-8", errors="replace")).hexdigest(),
+                        "hash_present": True,
+                        "raw_hash_stored": False,
+                    }
+                )
         return hashes
+
+    def _redact_kerberos_attack_command_results(self, command_results: list[dict[str, object]]) -> list[dict[str, object]]:
+        redacted = []
+        for result in command_results:
+            stored = dict(result)
+            stored["stdout"] = self._redact_asrep_hash_lines(str(stored.get("stdout") or ""))
+            stored["stderr"] = self._redact_asrep_hash_lines(str(stored.get("stderr") or ""))
+            redacted.append(stored)
+        return redacted
+
+    def _redact_asrep_hash_lines(self, value: str) -> str:
+        lines = []
+        for raw_line in value.splitlines():
+            line = raw_line.strip()
+            if "$krb5asrep$" not in line.lower():
+                lines.append(raw_line)
+                continue
+            username = line.split(":", 1)[0].strip() if ":" in line else ""
+            prefix = f"{username}: " if username else ""
+            lines.append(f"{prefix}<redacted-asrep-hash>")
+        return "\n".join(lines)
 
     def _summarize_kerberos_attack_check(
         self,
-        asrep_hashes: list[dict[str, str]],
+        asrep_hashes: list[dict[str, object]],
         spn_candidates: list[dict[str, str]],
         command_results: list[dict[str, object]],
     ) -> str:
@@ -99,7 +127,7 @@ class PrimitiveKerberosAttackToolMixin:
         self,
         domain: str,
         users: list[dict[str, object]],
-        asrep_hashes: list[dict[str, str]],
+        asrep_hashes: list[dict[str, object]],
         spn_candidates: list[dict[str, str]],
         command_results: list[dict[str, object]],
     ) -> str:
