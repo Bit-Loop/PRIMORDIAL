@@ -59,6 +59,7 @@ ATTEMPT_METADATA_BY_LAB_ID = {
     "nyu-ctf-bench-littlequery": {
         "target_family": "nyu_ctf_bench",
         "ctf_allow_private_http": True,
+        "ctf_benchmark_api_paths": ["api/db_explore.php"],
     },
     "kubernetes-goat": {
         "target_family": "kubernetes_goat",

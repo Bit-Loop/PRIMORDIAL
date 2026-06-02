@@ -41,9 +41,12 @@ class PrimitiveCtfHandlerMixin:
         cloud_probes = [] if hit else self._ctf_cloud_probes(target)
         cloud_hit = next((probe for probe in cloud_probes if probe.get("captured_flag_ref")), None)
         hit = hit or cloud_hit
+        benchmark_api_probes = [] if hit else self._ctf_benchmark_api_probes(target)
+        benchmark_api_hit = next((probe for probe in benchmark_api_probes if probe.get("captured_flag_ref")), None)
+        hit = hit or benchmark_api_hit
         browser_interactions = [] if hit else self._ctf_browser_interactions(target)
         browser_hit = next((item for item in browser_interactions if item.get("captured_flag_ref")), None)
-        benchmark_hit = next((item for item in browser_interactions if item.get("benchmark_solve_ref")), None)
+        browser_benchmark_hit = next((item for item in browser_interactions if item.get("benchmark_solve_ref")), None)
         hit = hit or browser_hit
         payload = {
             "target": target.as_payload(),
@@ -56,15 +59,17 @@ class PrimitiveCtfHandlerMixin:
             "kubernetes_probes": kubernetes_probes,
             "cloud_probe_count": len(cloud_probes),
             "cloud_probes": cloud_probes,
+            "benchmark_api_probe_count": len(benchmark_api_probes),
+            "benchmark_api_probes": benchmark_api_probes,
             "browser_interaction_count": len(browser_interactions),
             "browser_interactions": browser_interactions,
             "captured_flag_ref": str(hit.get("captured_flag_ref", "")) if hit else "",
             "captured_flag_sha256": str(hit.get("captured_flag_sha256", "")) if hit else "",
             "captured_flag_length": int(hit.get("captured_flag_length", 0)) if hit else 0,
             "source_url": str(hit.get("url", "")) if hit else "",
-            "benchmark_solve_ref": str(benchmark_hit.get("benchmark_solve_ref", "")) if benchmark_hit else "",
-            "benchmark_solved_count": int(benchmark_hit.get("benchmark_solved_count", 0)) if benchmark_hit else 0,
-            "benchmark_solved_challenges": list(benchmark_hit.get("benchmark_solved_challenges", [])) if benchmark_hit else [],
+            "benchmark_solve_ref": str(browser_benchmark_hit.get("benchmark_solve_ref", "")) if browser_benchmark_hit else "",
+            "benchmark_solved_count": int(browser_benchmark_hit.get("benchmark_solved_count", 0)) if browser_benchmark_hit else 0,
+            "benchmark_solved_challenges": list(browser_benchmark_hit.get("benchmark_solved_challenges", [])) if browser_benchmark_hit else [],
         }
         artifact = self._write_artifact(
             task,
@@ -81,7 +86,7 @@ class PrimitiveCtfHandlerMixin:
             summary=self._ctf_capture_summary(target.handle, payload),
             source_ref=artifact.id,
             verification_status=VerificationStatus.VERIFIED,
-            confidence=0.9 if hit or benchmark_hit else 0.72,
+            confidence=0.9 if hit or browser_benchmark_hit else 0.72,
             freshness=0.98,
             artifact_path=artifact.path,
             metadata={
@@ -92,6 +97,7 @@ class PrimitiveCtfHandlerMixin:
                 "searched_url_count": payload["searched_url_count"],
                 "kubernetes_probe_count": payload["kubernetes_probe_count"],
                 "cloud_probe_count": payload["cloud_probe_count"],
+                "benchmark_api_probe_count": payload["benchmark_api_probe_count"],
                 "browser_interaction_count": payload["browser_interaction_count"],
                 "captured_flag_ref": payload["captured_flag_ref"],
                 "captured_flag_sha256": payload["captured_flag_sha256"],
@@ -117,6 +123,7 @@ class PrimitiveCtfHandlerMixin:
                     "searched_url_count": payload["searched_url_count"],
                     "kubernetes_probe_count": payload["kubernetes_probe_count"],
                     "cloud_probe_count": payload["cloud_probe_count"],
+                    "benchmark_api_probe_count": payload["benchmark_api_probe_count"],
                     "browser_interaction_count": payload["browser_interaction_count"],
                     "raw_flags_redacted": True,
                 },
@@ -134,6 +141,7 @@ class PrimitiveCtfHandlerMixin:
                     "searched_url_count": payload["searched_url_count"],
                     "kubernetes_probe_count": payload["kubernetes_probe_count"],
                     "cloud_probe_count": payload["cloud_probe_count"],
+                    "benchmark_api_probe_count": payload["benchmark_api_probe_count"],
                     "browser_interaction_count": payload["browser_interaction_count"],
                     "raw_flags_redacted": True,
                 },
@@ -505,6 +513,127 @@ class PrimitiveCtfHandlerMixin:
                 keys.append(item["Key"])
         return keys
 
+    def _ctf_benchmark_api_probes(self, target) -> list[dict[str, object]]:
+        if str(target.metadata.get("target_family", "")) not in {"nyu_ctf_bench", "ctf_dojo", "dreadgoad"}:
+            return []
+        api_paths = [
+            str(value).strip()
+            for value in target.metadata.get("ctf_benchmark_api_paths", [])
+            if isinstance(value, str) and str(value).strip()
+        ]
+        if not api_paths:
+            return []
+        probes: list[dict[str, object]] = []
+        for base in self._ctf_capture_base_urls(target):
+            for path in api_paths[:4]:
+                probes.extend(self._ctf_benchmark_schema_probes(base, path))
+                if any(probe.get("captured_flag_ref") for probe in probes):
+                    return probes
+        return probes
+
+    def _ctf_benchmark_schema_probes(self, base: str, path: str) -> list[dict[str, object]]:
+        endpoint = parse.urljoin(base, path.lstrip("/"))
+        root_url = self._ctf_url_with_query(endpoint, {"mode": "schema"})
+        root_probe = self._ctf_benchmark_api_get("benchmark_schema_root", root_url)
+        probes = [root_probe]
+        root_payload = root_probe.pop("_json", None)
+        if root_probe.get("captured_flag_ref"):
+            return probes
+        for db_name in self._ctf_benchmark_dbs(root_payload)[:12]:
+            db_url = self._ctf_url_with_query(endpoint, {"mode": "schema", "db": db_name})
+            db_probe = self._ctf_benchmark_api_get(
+                "benchmark_schema_tables",
+                db_url,
+                metadata={"db_sha256": hashlib.sha256(db_name.encode("utf-8")).hexdigest()},
+            )
+            probes.append(db_probe)
+            db_payload = db_probe.pop("_json", None)
+            if db_probe.get("captured_flag_ref"):
+                return probes
+            for table_name in self._ctf_benchmark_tables(db_payload)[:20]:
+                table_hash = hashlib.sha256(table_name.encode("utf-8")).hexdigest()
+                table_url = self._ctf_url_with_query(endpoint, {"mode": "schema", "db": db_name, "table": table_name})
+                table_probe = self._ctf_benchmark_api_get(
+                    "benchmark_schema_columns",
+                    table_url,
+                    metadata={
+                        "db_sha256": hashlib.sha256(db_name.encode("utf-8")).hexdigest(),
+                        "table_sha256": table_hash,
+                    },
+                )
+                probes.append(table_probe)
+                table_probe.pop("_json", None)
+                if table_probe.get("captured_flag_ref"):
+                    return probes
+                preview_url = self._ctf_url_with_query(endpoint, {"mode": "preview", "db": db_name, "table": table_name})
+                preview_probe = self._ctf_benchmark_api_get(
+                    "benchmark_preview_rows",
+                    preview_url,
+                    metadata={
+                        "db_sha256": hashlib.sha256(db_name.encode("utf-8")).hexdigest(),
+                        "table_sha256": table_hash,
+                    },
+                )
+                probes.append(preview_probe)
+                preview_probe.pop("_json", None)
+                if preview_probe.get("captured_flag_ref"):
+                    return probes
+        return probes
+
+    def _ctf_benchmark_api_get(
+        self,
+        label: str,
+        url: str,
+        *,
+        metadata: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        request_object = request.Request(url, headers={"User-Agent": "Primordial/0.1", "Accept": "application/json,*/*"}, method="GET")
+        try:
+            with request.urlopen(request_object, timeout=5) as response:
+                body = response.read(262144)
+                final_url = response.geturl()
+                status = int(response.status)
+        except error.HTTPError as exc:
+            body = exc.read(262144)
+            final_url = exc.geturl()
+            status = int(exc.code)
+        except (error.URLError, OSError, ValueError) as exc:
+            return {
+                "kind": label,
+                "url": self._sanitize_surface_url(url),
+                "request_sha256": hashlib.sha256(url.encode("utf-8")).hexdigest(),
+                "status_code": 0,
+                "error": type(exc).__name__,
+                **(metadata or {}),
+            }
+        decoded = self._decode_response_body(body, {})
+        parsed = self._ctf_json_payload(decoded)
+        return {
+            "kind": label,
+            "url": self._sanitize_surface_url(final_url),
+            "request_sha256": hashlib.sha256(url.encode("utf-8")).hexdigest(),
+            "status_code": status,
+            "body_sha256": hashlib.sha256(body).hexdigest(),
+            "body_bytes": len(body),
+            "_json": parsed,
+            **self._ctf_capture_redacted_flag(body),
+            **(metadata or {}),
+        }
+
+    def _ctf_url_with_query(self, endpoint: str, query: dict[str, str]) -> str:
+        parsed = parse.urlsplit(endpoint)
+        return parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, parse.urlencode(query), ""))
+
+    def _ctf_benchmark_dbs(self, payload: object) -> list[str]:
+        if not isinstance(payload, dict):
+            return []
+        return [item for item in payload.get("dbs", []) if isinstance(item, str)]
+
+    def _ctf_benchmark_tables(self, payload: object) -> list[str]:
+        if not isinstance(payload, dict):
+            return []
+        return [item for item in payload.get("tables", []) if isinstance(item, str)]
+
     def _ctf_browser_interactions(self, target) -> list[dict[str, object]]:
         interactions: list[dict[str, object]] = []
         for base in self._ctf_capture_base_urls(target):
@@ -656,6 +785,7 @@ class PrimitiveCtfHandlerMixin:
             "Closed-book local CTF flag capture searched "
             f"{payload['searched_url_count']} URL(s), ran {payload['kubernetes_probe_count']} Kubernetes probe(s), "
             f"ran {payload['cloud_probe_count']} cloud probe(s), "
+            f"ran {payload['benchmark_api_probe_count']} benchmark API probe(s), "
             f"and ran {payload['browser_interaction_count']} browser interaction(s) "
             f"for {handle} without finding a flag or benchmark solve."
         )
@@ -667,6 +797,7 @@ class PrimitiveCtfHandlerMixin:
             f"Searched URLs: {payload['searched_url_count']}",
             f"Kubernetes probes: {payload['kubernetes_probe_count']}",
             f"Cloud probes: {payload['cloud_probe_count']}",
+            f"Benchmark API probes: {payload['benchmark_api_probe_count']}",
             f"Browser interactions: {payload['browser_interaction_count']}",
         ]
         if payload["captured_flag_ref"]:

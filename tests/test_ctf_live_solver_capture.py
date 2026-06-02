@@ -163,6 +163,50 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
         self.assertNotIn(raw_flag, artifact_text)
         self.assertNotIn(raw_flag, json.dumps(evidence.as_payload()))
 
+    def test_executor_captures_redacted_benchmark_api_preview_flag(self) -> None:
+        private_url = "http://" + ".".join(("172", "23", "0", "2")) + "/"
+        target = self.runtime.register_target(
+            handle="nyu-ctf-bench-littlequery",
+            profile=ScopeProfile.HACK_THE_BOX,
+            assets=[private_url],
+            metadata={
+                "ctf_completion_indicator": "autonomous_flags",
+                "ctf_target_url": private_url,
+                "ctf_allow_private_http": True,
+                "ctf_benchmark_api_paths": ["api/db_explore.php"],
+                "target_family": "nyu_ctf_bench",
+                "local_ctf_autonomous": True,
+            },
+        )
+        task = Task(
+            target_id=target.id,
+            phase=MethodologyPhase.ANALYSIS,
+            kind=TaskKind.CTF_FLAG_CAPTURE,
+            title="Run closed-book benchmark API CTF flag capture",
+            summary="Search local benchmark API state for a redacted flag reference.",
+            role=AgentRole.ANALYSIS_WORKER,
+            risk_tier=RiskTier.MODERATE,
+            required_capabilities=["ctf-flag-capture", "flag-collection"],
+            metadata={"primitive_hint": "ctf-flag-capture"},
+        )
+        raw_flag = fixture_flag("nyu-api-preview")
+
+        with patch(
+            "primordial.modes.security.execution_ctf_handler.request.urlopen",
+            side_effect=_benchmark_api_urlopen(raw_flag),
+        ):
+            result = self.runtime.executor.execute(task, None)
+
+        artifact_text = Path(result.artifacts[0].path).read_text(encoding="utf-8")
+        evidence = result.evidence[0]
+
+        self.assertTrue(result.success)
+        self.assertEqual(evidence.metadata["benchmark_api_probe_count"], 4)
+        self.assertTrue(evidence.metadata["captured_flag_ref"].startswith("evidence:captured-flag:"))
+        self.assertEqual(evidence.metadata["captured_flag_length"], len(raw_flag))
+        self.assertNotIn(raw_flag, artifact_text)
+        self.assertNotIn(raw_flag, json.dumps(evidence.as_payload()))
+
     def test_executor_records_browser_benchmark_solve_without_flag_material(self) -> None:
         target = self.runtime.register_target(
             handle="local-browser-lab",
@@ -506,6 +550,20 @@ def _private_benchmark_urlopen(raw_flag: str, requested_urls: list[str]):
         if url.endswith("/flag.txt"):
             return _FakeHttpResponse(url, raw_flag.encode("utf-8"))
         return _FakeHttpResponse(url, b"benchmark container")
+
+    return open_url
+
+
+def _benchmark_api_urlopen(raw_flag: str):
+    def open_url(request_obj, *args, **kwargs):
+        url = request_obj.full_url if hasattr(request_obj, "full_url") else str(request_obj)
+        if "mode=preview" in url:
+            return _FakeHttpResponse(url, json.dumps([{"result": raw_flag}]).encode("utf-8"))
+        if "table=" in url:
+            return _FakeHttpResponse(url, json.dumps({"columns": {"result": "varchar(255)"}}).encode("utf-8"))
+        if "db=" in url:
+            return _FakeHttpResponse(url, json.dumps({"tables": ["results"]}).encode("utf-8"))
+        return _FakeHttpResponse(url, json.dumps({"dbs": ["benchmark"]}).encode("utf-8"))
 
     return open_url
 
