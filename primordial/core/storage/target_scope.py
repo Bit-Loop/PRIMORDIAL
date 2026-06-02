@@ -6,6 +6,7 @@ from primordial.core.domain.enums import EventType, ScopeProfile
 from primordial.core.domain.models import EventRecord, Note, ScopeAsset, Target
 
 DumpValue = Callable[[Any], Any]
+StorageText = Callable[[Any], str]
 TargetFromRow = Callable[[Any], Target]
 BlockActiveTasks = Callable[..., int]
 
@@ -21,6 +22,7 @@ def replace_target_scope_assets_in_connection(
     asset_rows: list[dict[str, Any]],
     now: Any,
     dump: DumpValue,
+    storage_text: StorageText,
     target_from_row: TargetFromRow,
     block_active_tasks: BlockActiveTasks,
 ) -> dict[str, Any]:
@@ -52,6 +54,7 @@ def replace_target_scope_assets_in_connection(
             previous_ip=previous_ip,
             generation=generation,
             dump=dump,
+            storage_text=storage_text,
         )
     _insert_scope_assets_replaced_event(
         connection,
@@ -64,6 +67,7 @@ def replace_target_scope_assets_in_connection(
         metadata=metadata,
         ip_changed=ip_changed,
         dump=dump,
+        storage_text=storage_text,
     )
     return {
         "target": target,
@@ -263,6 +267,7 @@ def _insert_active_ip_scope_note(
     previous_ip: str,
     generation: int,
     dump: DumpValue,
+    storage_text: StorageText,
 ) -> None:
     note = Note(
         target_id=target.id,
@@ -292,8 +297,8 @@ def _insert_active_ip_scope_note(
             note.id,
             note.target_id,
             note.task_id,
-            note.title,
-            note.body,
+            storage_text(note.title),
+            storage_text(note.body),
             note.confidence,
             note.freshness,
             dump(note.metadata),
@@ -315,6 +320,7 @@ def _insert_scope_assets_replaced_event(
     metadata: dict[str, Any],
     ip_changed: bool,
     dump: DumpValue,
+    storage_text: StorageText,
 ) -> None:
     summary = (
         f"Active IP set for {target.handle}: {active_ip}"
@@ -345,7 +351,7 @@ def _insert_scope_assets_replaced_event(
             event.type.value,
             event.target_id,
             event.task_id,
-            event.summary,
+            storage_text(event.summary),
             dump(event.metadata),
             event.created_at.isoformat(),
         ),

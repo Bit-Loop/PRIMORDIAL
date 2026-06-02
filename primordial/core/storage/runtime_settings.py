@@ -71,7 +71,9 @@ class RuntimeSettingsMixin:
                     """,
                     (
                         ExternalSyncStatus.FAILED.value,
-                        "legacy synthetic Notion records were removed; real Notion credentials are required",
+                        _storage_text(
+                            "legacy synthetic Notion records were removed; real Notion credentials are required"
+                        ),
                         utc_now().isoformat(),
                         *tuple(synthetic_job_ids),
                     ),

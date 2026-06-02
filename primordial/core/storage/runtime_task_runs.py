@@ -26,8 +26,8 @@ class RuntimeTaskRunsMixin:
                 run.lease_expires_at.isoformat() if run.lease_expires_at else None,
                 run.started_at.isoformat(),
                 run.finished_at.isoformat() if run.finished_at else None,
-                run.trace_summary,
-                run.error,
+                _storage_text(run.trace_summary),
+                _storage_text(run.error) if run.error is not None else None,
                 _dump(run.metadata),
             ),
         )
@@ -51,10 +51,10 @@ class RuntimeTaskRunsMixin:
         params: list[Any] = [to_status.value, now.isoformat(), _dump(metadata_patch or {})]
         if error is not None:
             set_clauses.append("error = %s")
-            params.append(error)
+            params.append(_storage_text(error))
         if trace_summary is not None:
             set_clauses.append("trace_summary = %s")
-            params.append(trace_summary)
+            params.append(_storage_text(trace_summary))
         if finished:
             set_clauses.append("finished_at = %s")
             params.append(now.isoformat())
@@ -90,8 +90,8 @@ class RuntimeTaskRunsMixin:
             run.lease_expires_at.isoformat() if run.lease_expires_at else None,
             run.started_at.isoformat(),
             run.finished_at.isoformat() if run.finished_at else None,
-            run.trace_summary,
-            run.error,
+            _storage_text(run.trace_summary),
+            _storage_text(run.error) if run.error is not None else None,
             _dump(run.metadata),
             run.id,
         ]
@@ -159,7 +159,7 @@ class RuntimeTaskRunsMixin:
                 """,
                 (
                     TaskRunStatus.CANCELLED.value,
-                    f"recovered stale execution state: {reason}",
+                    _storage_text(f"recovered stale execution state: {reason}"),
                     now_iso,
                     now_iso,
                     _dump(recovery_metadata),
@@ -189,7 +189,7 @@ class RuntimeTaskRunsMixin:
                     trace.task_id,
                     trace.role.value,
                     trace.status,
-                    trace.summary,
+                    _storage_text(trace.summary),
                     _dump(self._normalize_trace_metadata(trace)),
                     trace.created_at.isoformat(),
                 ),
@@ -205,7 +205,7 @@ class RuntimeTaskRunsMixin:
                     event.type.value,
                     event.target_id,
                     event.task_id,
-                    event.summary,
+                    _storage_text(event.summary),
                     _dump(event.metadata),
                     event.created_at.isoformat(),
                 ),
