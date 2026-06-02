@@ -8,6 +8,7 @@ from primordial.core.credentials import CredentialStore
 from primordial.core.events.bus import EventBus, RuntimeSignal
 from primordial.core.domain.enums import EventType, NotificationStatus
 from primordial.core.domain.models import DiscordDelivery, EventRecord
+from primordial.core.sensitive_text import redact_sensitive_text
 from primordial.core.storage.runtime import RuntimeStore
 
 
@@ -59,7 +60,8 @@ class DiscordNotificationService:
                 continue
 
             try:
-                external_ref = self._send_webhook(webhook_url, notification.summary)
+                safe_summary = self._safe_notification_summary(notification.summary)
+                external_ref = self._send_webhook(webhook_url, safe_summary)
             except DiscordWebhookConfigurationError as exc:
                 self._record_failure(notification, str(exc), invalid_configuration=True)
                 self._fail_pending_invalid_webhook(str(exc), exclude_id=notification.id)
@@ -77,15 +79,16 @@ class DiscordNotificationService:
                 status=NotificationStatus.DELIVERED,
                 external_ref=external_ref,
                 attempts=int(notification.metadata.get("delivery_attempts", 1) or 1),
-                metadata={"summary": notification.summary},
+                metadata={"summary": safe_summary, "summary_redacted": safe_summary != notification.summary},
             )
             self.store.insert_discord_delivery(delivery)
             self.store.insert_event(
                 EventRecord(
                     type=EventType.NOTIFICATION_DELIVERED,
-                    summary=notification.summary,
+                    summary=safe_summary,
                     target_id=notification.target_id,
                     task_id=notification.task_id,
+                    metadata={"summary_redacted": safe_summary != notification.summary},
                 )
             )
             if self.event_bus is not None:
@@ -127,13 +130,15 @@ class DiscordNotificationService:
         invalid_configuration: bool = False,
         retryable: bool = False,
     ) -> None:
+        safe_message = redact_sensitive_text(message)
+        safe_summary = self._safe_notification_summary(notification.summary)
         attempts = int(notification.metadata.get("delivery_attempts", 0) or 0) + 1
         terminal = invalid_configuration or not retryable or attempts >= self.MAX_DELIVERY_ATTEMPTS
         notification.status = NotificationStatus.FAILED if terminal else NotificationStatus.PENDING
         notification.metadata.update(
             {
                 "delivery_attempts": attempts,
-                "last_delivery_error": message,
+                "last_delivery_error": safe_message,
                 "retryable_delivery_error": retryable and not terminal,
                 "max_delivery_attempts": self.MAX_DELIVERY_ATTEMPTS,
             }
@@ -144,20 +149,21 @@ class DiscordNotificationService:
                 notification_id=notification.id,
                 status=notification.status,
                 attempts=attempts,
-                last_error=message,
+                last_error=safe_message,
                 metadata={
-                    "summary": notification.summary,
+                    "summary": safe_summary,
+                    "summary_redacted": safe_summary != notification.summary,
                     "invalid_webhook_configuration": invalid_configuration,
                     "retryable": retryable and not terminal,
                 },
             )
         )
         summary = (
-            f"Discord delivery failed: invalid webhook configuration ({message})"
+            f"Discord delivery failed: invalid webhook configuration ({safe_message})"
             if invalid_configuration
-            else f"Discord delivery failed: {message}"
+            else f"Discord delivery failed: {safe_message}"
             if terminal
-            else f"Discord delivery retry queued ({attempts}/{self.MAX_DELIVERY_ATTEMPTS}): {message}"
+            else f"Discord delivery retry queued ({attempts}/{self.MAX_DELIVERY_ATTEMPTS}): {safe_message}"
         )
         self.store.insert_event(
             EventRecord(
@@ -173,6 +179,9 @@ class DiscordNotificationService:
                 },
             )
         )
+
+    def _safe_notification_summary(self, summary: str) -> str:
+        return redact_sensitive_text(summary)
 
     def _fail_pending_invalid_webhook(self, message: str, *, exclude_id: str) -> None:
         for notification in self.store.list_notifications(status=NotificationStatus.PENDING, limit=100):

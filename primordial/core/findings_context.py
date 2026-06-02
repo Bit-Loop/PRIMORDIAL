@@ -3,9 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import re
-from urllib import parse
 
 from primordial.core.domain.models import EvidenceRecord, Finding, Interest, Note, Target, utc_now
+from primordial.core.sensitive_text import redact_sensitive_text
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,12 +27,6 @@ class TargetFindingsWorkspace:
 
 
 class FindingsContextService:
-    SECRET_VALUE_RE = re.compile(
-        r"(?i)\b(api[_-]?key|token|secret|password|passwd|pwd|webhook|authorization)\b([\"']?\s*[:=]\s*[\"']?)([^\"'\s,}]{4,})"
-    )
-    BEARER_RE = re.compile(r"(?i)\b(bearer\s+)[A-Za-z0-9._~+/\-]+=*")
-    FLAG_RE = re.compile(r"(?i)\b(?:flag|htb|thm)\{[^}\s]{4,}\}")
-
     def __init__(self, findings_dir: Path, notion_exports_dir: Path) -> None:
         self.findings_dir = findings_dir
         self.notion_exports_dir = notion_exports_dir
@@ -69,7 +63,7 @@ class FindingsContextService:
         )
         self._write_if_missing(
             workspace.guidance_path,
-            f"# {target.display_name} Agent Guidance\n\n"
+            f"# {self._redact_export_text(target.display_name)} Agent Guidance\n\n"
             "## AI Agent Guidance\n\n"
             "- Stay evidence-backed. Do not promote a finding without linked evidence.\n"
             "- Prefer narrow, scoped verification tasks over broad spray-and-pray actions.\n"
@@ -80,17 +74,17 @@ class FindingsContextService:
         )
         self._write_if_missing(
             workspace.findings_path,
-            f"# {target.display_name} Findings\n\n"
+            f"# {self._redact_export_text(target.display_name)} Findings\n\n"
             "No durable findings have been manually promoted yet.\n",
         )
         self._write_if_missing(
             workspace.evidence_path,
-            f"# {target.display_name} Evidence Index\n\n"
+            f"# {self._redact_export_text(target.display_name)} Evidence Index\n\n"
             "Evidence index will be regenerated from local state.\n",
         )
         self._write_if_missing(
             workspace.notion_export_path,
-            f"# {target.display_name} Notion Export\n\n"
+            f"# {self._redact_export_text(target.display_name)} Notion Export\n\n"
             "Notion export mirror will be regenerated from local state.\n",
         )
         return workspace
@@ -117,7 +111,7 @@ class FindingsContextService:
         evidence: list[EvidenceRecord],
     ) -> None:
         evidence_lines = [
-            f"# {target.display_name} Evidence Index",
+            f"# {self._redact_export_text(target.display_name)} Evidence Index",
             "",
             f"Generated: {utc_now().isoformat()}",
             "",
@@ -165,7 +159,7 @@ class FindingsContextService:
 
     def _notion_export_header(self, target: Target) -> list[str]:
         return [
-            f"# {target.display_name} Notion Export",
+            f"# {self._redact_export_text(target.display_name)} Notion Export",
             "",
             "<!-- primordial-generated-export",
             "origin: generated_export",
@@ -173,14 +167,14 @@ class FindingsContextService:
             "operational_retrieval_allowed: false",
             "-->",
             "",
-            f"Target: `{target.handle}`",
+            f"Target: `{self._redact_export_text(target.handle)}`",
             f"Profile: `{target.profile.value}`",
             f"Generated: {utc_now().isoformat()}",
             "",
             "## Authoritative Runtime State",
             "",
             f"- Target ID: `{target.id}`",
-            f"- Target handle: `{target.handle}`",
+            f"- Target handle: `{self._redact_export_text(target.handle)}`",
             f"- Scope profile: `{target.profile.value}`",
             "- Active Operator Intent: managed by RuntimeStore.",
             "- Policy constraints: managed by PolicyEngine.",
@@ -191,21 +185,7 @@ class FindingsContextService:
         ]
 
     def _redact_export_text(self, value: str) -> str:
-        redacted = self.SECRET_VALUE_RE.sub(lambda match: f"{match.group(1)}{match.group(2)}[redacted]", str(value or ""))
-        redacted = self.BEARER_RE.sub(lambda match: f"{match.group(1)}[redacted]", redacted)
-        redacted = self.FLAG_RE.sub("[redacted-flag]", redacted)
-        return self._redact_export_url_queries(redacted)
-
-    def _redact_export_url_queries(self, value: str) -> str:
-        def replace(match: re.Match[str]) -> str:
-            raw_url = match.group(0)
-            parsed = parse.urlsplit(raw_url)
-            if not parsed.query:
-                return raw_url
-            query = parse.urlencode([(key, "[redacted]") for key, _ in parse.parse_qsl(parsed.query, keep_blank_values=True)])
-            return parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, query, parsed.fragment))
-
-        return re.sub(r"https?://[^\s`<>\"]+", replace, value)
+        return redact_sensitive_text(value)
 
     def _extend_export_section(self, lines: list[str], title: str, rows: list[str], empty_message: str) -> None:
         lines.extend(["", f"## {title}", ""])
@@ -303,10 +283,10 @@ class FindingsContextService:
     def context_digest(self, target: Target | None, *, max_chars: int = 3000) -> str:
         if target is None:
             return ""
-        guidance = self.read_guidance(target, max_chars=max_chars)
+        guidance = self._redact_export_text(self.read_guidance(target, max_chars=max_chars))
         if not guidance:
             return ""
-        return f"Permanent findings guidance for {target.handle}:\n{guidance}"
+        return f"Permanent findings guidance for {self._redact_export_text(target.handle)}:\n{guidance}"
 
     def _write_if_missing(self, path: Path, body: str) -> None:
         if not path.exists():

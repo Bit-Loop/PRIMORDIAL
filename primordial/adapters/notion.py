@@ -9,6 +9,7 @@ from primordial.core.findings_context import FindingsContextService, TargetFindi
 from primordial.core.events.bus import EventBus, RuntimeSignal
 from primordial.core.domain.enums import EventType, ExternalSyncKind, ExternalSyncStatus
 from primordial.core.domain.models import EventRecord, ExternalSyncJob, NotionPage, Target, utc_now
+from primordial.core.sensitive_text import redact_sensitive_text
 from primordial.core.storage.runtime import RuntimeStore
 
 
@@ -126,6 +127,7 @@ class NotionSyncService:
         target: Target,
         workspace: TargetFindingsWorkspace | None,
     ) -> dict[str, object]:
+        target_title = self._safe_target_title(target)
         mirror_line = (
             f"Local Notion export mirror: {workspace.notion_export_path}"
             if workspace is not None
@@ -135,20 +137,21 @@ class NotionSyncService:
             api_key=api_key,
             api_version=api_version,
             parent_id=parent_page_id,
-            title=f"{target.display_name} Workspace",
+            title=f"{target_title} Workspace",
             children=[
-                _paragraph(f"Target: {target.handle}"),
+                _paragraph(f"Target: {redact_sensitive_text(target.handle)}"),
                 _paragraph(f"Profile: {target.profile.value}"),
                 _paragraph(mirror_line),
             ],
         )
 
     def _insert_root_page(self, job: ExternalSyncJob, target: Target, root: dict[str, object]) -> None:
+        target_title = self._safe_target_title(target)
         self.store.insert_notion_page(
             NotionPage(
                 target_id=target.id,
                 page_type="target-root",
-                title=f"{target.display_name} Workspace",
+                title=f"{target_title} Workspace",
                 external_id=str(root["id"]),
                 status="synced",
                 url=str(root.get("url", "")),
@@ -164,6 +167,7 @@ class NotionSyncService:
         api_key: str,
         api_version: str,
     ) -> None:
+        target_title = self._safe_target_title(target)
         for child in (
             "overview",
             "notes",
@@ -177,15 +181,15 @@ class NotionSyncService:
                 api_key=api_key,
                 api_version=api_version,
                 parent_id=str(root["id"]),
-                title=f"{target.display_name} {child.replace('-', ' ').title()}",
+                title=f"{target_title} {child.replace('-', ' ').title()}",
                 children=[_paragraph(self._child_body(target, child))],
             )
             self._insert_child_page(job, target, root, child, child_page)
 
     def _child_body(self, target: Target, child: str) -> str:
         if child == "agent-guidance" and self.findings_context is not None:
-            return self.findings_context.read_guidance(target, max_chars=1800)
-        return f"Primordial {child.replace('-', ' ')} view for {target.handle}."
+            return redact_sensitive_text(self.findings_context.read_guidance(target, max_chars=1800))
+        return f"Primordial {child.replace('-', ' ')} view for {redact_sensitive_text(target.handle)}."
 
     def _insert_child_page(
         self,
@@ -195,11 +199,12 @@ class NotionSyncService:
         child: str,
         child_page: dict[str, object],
     ) -> None:
+        target_title = self._safe_target_title(target)
         self.store.insert_notion_page(
             NotionPage(
                 target_id=target.id,
                 page_type=child,
-                title=f"{target.display_name} {child.replace('-', ' ').title()}",
+                title=f"{target_title} {child.replace('-', ' ').title()}",
                 external_id=str(child_page["id"]),
                 status="synced",
                 url=str(child_page.get("url", "")),
@@ -207,18 +212,22 @@ class NotionSyncService:
             )
         )
 
+    def _safe_target_title(self, target: Target) -> str:
+        return redact_sensitive_text(target.display_name)
+
     def _fail_sync_exception(self, job: ExternalSyncJob, target: Target, exc: BaseException) -> None:
+        safe_error = redact_sensitive_text(str(exc))
         job.status = ExternalSyncStatus.FAILED
-        job.last_error = str(exc)
+        job.last_error = safe_error
         if self._is_auth_failure(exc):
             job.metadata["auth_blocked"] = True
             job.metadata["auth_blocked_at"] = utc_now().isoformat()
-            self._mark_auth_blocked(str(exc))
+            self._mark_auth_blocked(safe_error)
         self.store.insert_external_sync_job(job)
         self.store.insert_event(
             EventRecord(
                 type=EventType.SYNC_FAILED,
-                summary=f"Notion sync failed for {target.display_name}: {exc}",
+                summary=f"Notion sync failed for {self._safe_target_title(target)}: {safe_error}",
                 target_id=target.id,
             )
         )
@@ -232,7 +241,7 @@ class NotionSyncService:
         self.store.insert_event(
             EventRecord(
                 type=EventType.SYNC_COMPLETED,
-                summary=f"Notion sync completed for {target.display_name}",
+                summary=f"Notion sync completed for {self._safe_target_title(target)}",
                 target_id=target.id,
             )
         )
@@ -302,7 +311,7 @@ class NotionSyncService:
             {
                 "auth_blocked": True,
                 "auth_blocked_at": utc_now().isoformat(),
-                "last_error": reason,
+                "last_error": redact_sensitive_text(reason),
             },
         )
 
