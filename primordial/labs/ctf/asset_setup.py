@@ -7,11 +7,12 @@ import argparse
 import fnmatch
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
 
-DEFAULT_LAB_ROOT = Path("/run/media/bitloop/DREAD/primordial-labs")
+DEFAULT_LAB_ROOT = Path(os.environ.get("PRIMORDIAL_LAB_ROOT", "runtime/labs"))
 
 CommandRunner = Callable[[tuple[str, ...]], subprocess.CompletedProcess[str]]
 

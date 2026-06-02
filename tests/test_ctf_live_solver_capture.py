@@ -7,6 +7,8 @@ import subprocess
 import unittest
 from unittest.mock import patch
 
+from primordial.core.domain.enums import PolicyVerdict
+from primordial.core.domain.models import PolicyDecision
 from tests.support import fixture_flag
 from tests.test_workflow_common import *
 
@@ -21,6 +23,10 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
                 "ctf_completion_indicator": "autonomous_flags",
                 "ctf_target_url": "http://127.0.0.1:3100/",
                 "local_ctf_autonomous": True,
+                **_local_ctf_authority(),
+                "api_key": "artifact-secret-value",
+                "operator_note": "Authorization: Bearer artifact-secret-token",
+                "request_path": "/login?token=artifact-secret-query",
             },
         )
         self.runtime.store.insert_evidence(
@@ -55,6 +61,7 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
                 "ctf_kubeconfig": "/tmp/phase5-kind.yaml",
                 "target_family": "kubernetes_goat",
                 "local_ctf_autonomous": True,
+                **_local_ctf_authority(),
             },
         )
         self.runtime.store.insert_evidence(
@@ -87,6 +94,7 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
                 "ctf_completion_indicator": "autonomous_flags",
                 "ctf_target_url": "http://127.0.0.1:3100/",
                 "local_ctf_autonomous": True,
+                **_local_ctf_authority(),
             },
         )
         task = Task(
@@ -106,6 +114,8 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
             "primordial.modes.security.execution_ctf_handler.request.urlopen",
             return_value=_FakeHttpResponse("http://127.0.0.1:3100/", b"body " + raw_flag.encode("utf-8")),
         ):
+            _authorize_ctf_task(self.runtime, target, task)
+
             result = self.runtime.executor.execute(task, None)
 
         artifact_text = Path(result.artifacts[0].path).read_text(encoding="utf-8")
@@ -117,6 +127,9 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
         self.assertEqual(evidence.metadata["captured_flag_length"], len(raw_flag))
         self.assertIn("captured_flag_sha256", evidence.metadata)
         self.assertNotIn(raw_flag, artifact_text)
+        self.assertNotIn("artifact-secret-value", artifact_text)
+        self.assertNotIn("artifact-secret-token", artifact_text)
+        self.assertNotIn("artifact-secret-query", artifact_text)
         self.assertNotIn(raw_flag, json.dumps(evidence.as_payload()))
         self.assertNotIn(raw_flag, note.body)
 
@@ -132,6 +145,7 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
                 "ctf_allow_private_http": True,
                 "target_family": "nyu_ctf_bench",
                 "local_ctf_autonomous": True,
+                **_local_ctf_authority(),
             },
         )
         task = Task(
@@ -152,6 +166,8 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
             "primordial.modes.security.execution_ctf_handler.request.urlopen",
             side_effect=_private_benchmark_urlopen(raw_flag, requested_urls),
         ):
+            _authorize_ctf_task(self.runtime, target, task)
+
             result = self.runtime.executor.execute(task, None)
 
         artifact_text = Path(result.artifacts[0].path).read_text(encoding="utf-8")
@@ -177,6 +193,7 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
                 "ctf_benchmark_api_paths": ["api/db_explore.php"],
                 "target_family": "nyu_ctf_bench",
                 "local_ctf_autonomous": True,
+                **_local_ctf_authority(),
             },
         )
         task = Task(
@@ -196,6 +213,8 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
             "primordial.modes.security.execution_ctf_handler.request.urlopen",
             side_effect=_benchmark_api_urlopen(raw_flag),
         ):
+            _authorize_ctf_task(self.runtime, target, task)
+
             result = self.runtime.executor.execute(task, None)
 
         artifact_text = Path(result.artifacts[0].path).read_text(encoding="utf-8")
@@ -223,6 +242,7 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
                 "ctf_query_runner_paths": ["query.php"],
                 "target_family": "nyu_ctf_bench",
                 "local_ctf_autonomous": True,
+                **_local_ctf_authority(),
             },
         )
         task = Task(
@@ -245,6 +265,8 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
             "primordial.modes.security.execution_ctf_handler.request.build_opener",
             return_value=_FakeQueryRunnerOpener(raw_flag, phrase=hashlib.sha1(b"demo").hexdigest()),
         ):
+            _authorize_ctf_task(self.runtime, target, task)
+
             result = self.runtime.executor.execute(task, None)
 
         artifact_text = Path(result.artifacts[0].path).read_text(encoding="utf-8")
@@ -275,6 +297,7 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
                 "ctf_query_runner_paths": ["query.php"],
                 "target_family": "nyu_ctf_bench",
                 "local_ctf_autonomous": True,
+                **_local_ctf_authority(),
             },
         )
         task = Task(
@@ -297,6 +320,8 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
             "primordial.modes.security.execution_ctf_handler.request.build_opener",
             return_value=_FakeQueryRunnerOpener(raw_flag, account=account, phrase=phrase),
         ):
+            _authorize_ctf_task(self.runtime, target, task)
+
             result = self.runtime.executor.execute(task, None)
 
         artifact_text = Path(result.artifacts[0].path).read_text(encoding="utf-8")
@@ -320,6 +345,7 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
                 "ctf_completion_indicator": "autonomous_flags",
                 "ctf_target_url": "http://127.0.0.1:3100/",
                 "local_ctf_autonomous": True,
+                **_local_ctf_authority(),
             },
         )
         task = Task(
@@ -356,6 +382,8 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
             autospec=True,
             side_effect=browser_interaction,
         ):
+            _authorize_ctf_task(self.runtime, target, task)
+
             result = self.runtime.executor.execute(task, None)
 
         artifact_text = Path(result.artifacts[0].path).read_text(encoding="utf-8")
@@ -378,6 +406,7 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
                 "ctf_completion_indicator": "autonomous_flags",
                 "ctf_target_url": "http://127.0.0.1:3180/",
                 "local_ctf_autonomous": True,
+                **_local_ctf_authority(),
                 "target_family": "vulhub_cve_labs",
                 "vulnerability_cve_id": "CVE-2021-41773",
                 "ctf_flag_container_path": "/primordial_flag.txt",
@@ -401,6 +430,8 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
             "primordial.modes.security.execution_ctf_handler.request.urlopen",
             side_effect=_vulhub_urlopen(raw_flag, requested_urls),
         ):
+            _authorize_ctf_task(self.runtime, target, task)
+
             result = self.runtime.executor.execute(task, None)
 
         artifact_text = Path(result.artifacts[0].path).read_text(encoding="utf-8")
@@ -423,6 +454,7 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
                 "ctf_completion_indicator": "autonomous_flags",
                 "ctf_target_url": "http://127.0.0.1:3183/",
                 "local_ctf_autonomous": True,
+                **_local_ctf_authority(),
             },
         )
         task = Task(
@@ -442,6 +474,8 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
             "primordial.modes.security.execution_ctf_handler.request.urlopen",
             return_value=_FakeHttpResponse("http://127.0.0.1:3183/", b"body " + raw_flag.encode("utf-8")),
         ):
+            _authorize_ctf_task(self.runtime, target, task)
+
             result = self.runtime.executor.execute(task, None)
 
         artifact_text = Path(result.artifacts[0].path).read_text(encoding="utf-8")
@@ -463,6 +497,7 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
                 "ctf_target_url": "http://127.0.0.1:38000/",
                 "ctf_service_urls": ["http://127.0.0.1:38080/"],
                 "local_ctf_autonomous": True,
+                **_local_ctf_authority(),
             },
         )
         task = Task(
@@ -483,6 +518,8 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
             "primordial.modes.security.execution_ctf_handler.request.urlopen",
             side_effect=_service_urlopen(raw_flag, requested_urls),
         ):
+            _authorize_ctf_task(self.runtime, target, task)
+
             result = self.runtime.executor.execute(task, None)
 
         artifact_text = Path(result.artifacts[0].path).read_text(encoding="utf-8")
@@ -505,6 +542,7 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
                 "ctf_service_urls": ["http://127.0.0.1:33000/"],
                 "target_family": "ci_cd_goat",
                 "local_ctf_autonomous": True,
+                **_local_ctf_authority(),
             },
         )
         task = Task(
@@ -525,6 +563,8 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
             "primordial.modes.security.execution_ctf_handler.request.urlopen",
             side_effect=_gitea_repo_urlopen(public_body),
         ):
+            _authorize_ctf_task(self.runtime, target, task)
+
             result = self.runtime.executor.execute(task, None)
 
         artifact_text = Path(result.artifacts[0].path).read_text(encoding="utf-8")
@@ -549,6 +589,7 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
                 "ctf_tools_bin": "/tmp/tools/bin",
                 "target_family": "kubernetes_goat",
                 "local_ctf_autonomous": True,
+                **_local_ctf_authority(),
             },
         )
         task = Task(
@@ -571,6 +612,8 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
             "primordial.modes.security.execution_ctf_handler.subprocess.run",
             side_effect=_kubectl_run(raw_flag),
         ):
+            _authorize_ctf_task(self.runtime, target, task)
+
             result = self.runtime.executor.execute(task, None)
 
         artifact_text = Path(result.artifacts[0].path).read_text(encoding="utf-8")
@@ -595,6 +638,7 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
                 "ctf_aws_region": "us-east-1",
                 "target_family": "cloudgoat",
                 "local_ctf_autonomous": True,
+                **_local_ctf_authority(),
             },
         )
         task = Task(
@@ -614,6 +658,8 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
             "primordial.modes.security.execution_ctf_handler.subprocess.run",
             side_effect=_aws_run(raw_flag),
         ):
+            _authorize_ctf_task(self.runtime, target, task)
+
             result = self.runtime.executor.execute(task, None)
 
         artifact_text = Path(result.artifacts[0].path).read_text(encoding="utf-8")
@@ -625,6 +671,34 @@ class CTFLiveSolverCaptureTests(WorkflowTestsBase):
         self.assertEqual(evidence.metadata["captured_flag_length"], len(raw_flag))
         self.assertNotIn(raw_flag, artifact_text)
         self.assertNotIn(raw_flag, json.dumps(evidence.as_payload()))
+
+    def test_executor_rejects_metadata_only_ctf_authorization(self) -> None:
+        target = self.runtime.register_target(
+            handle="metadata-only-ctf-lab",
+            profile=ScopeProfile.HACK_THE_BOX,
+            assets=["http://127.0.0.1:3100/"],
+            metadata={
+                "ctf_completion_indicator": "autonomous_flags",
+                "ctf_target_url": "http://127.0.0.1:3100/",
+                "local_ctf_autonomous": True,
+            },
+        )
+        task = Task(
+            target_id=target.id,
+            phase=MethodologyPhase.ANALYSIS,
+            kind=TaskKind.CTF_FLAG_CAPTURE,
+            title="Run metadata-only CTF flag capture",
+            summary="Metadata alone must not authorize autonomous CTF behavior.",
+            role=AgentRole.ANALYSIS_WORKER,
+            risk_tier=RiskTier.MODERATE,
+            required_capabilities=["ctf-flag-capture", "flag-collection"],
+            metadata={"primitive_hint": "ctf-flag-capture"},
+        )
+
+        result = self.runtime.executor.execute(task, None)
+
+        self.assertFalse(result.success)
+        self.assertIn("environment proof", result.error)
 
 
 class _FakeHttpResponse:
@@ -807,6 +881,31 @@ def _aws_run(raw_flag: str):
         return subprocess.CompletedProcess(command, 1, "", "unexpected command")
 
     return run
+
+
+def _local_ctf_authority(*, phase: int = 1, allow_in_progress: bool = False) -> dict[str, object]:
+    return {
+        "ctf_phase": phase,
+        "ctf_phase_status": "ready_for_review" if not allow_in_progress else "in_progress",
+        "ctf_environment_proof_ref": "evidence:local-ctf-fixture",
+        "ctf_active_intent": "ctf_solve_autonomous_local",
+        "ctf_allow_in_progress": allow_in_progress,
+    }
+
+
+def _authorize_ctf_task(runtime, target, task) -> None:
+    task.metadata["operator_intent_id"] = "ctf_solve_autonomous_local"
+    runtime.store.insert_task(task)
+    runtime.store.insert_policy_decision(
+        PolicyDecision(
+            target_id=target.id,
+            task_id=task.id,
+            action_kind=TaskKind.CTF_FLAG_CAPTURE.value,
+            verdict=PolicyVerdict.ALLOW,
+            reason="fixture local CTF authorization",
+            metadata={"primitive_hint": "ctf-flag-capture"},
+        )
+    )
 
 
 if __name__ == "__main__":

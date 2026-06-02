@@ -67,6 +67,18 @@ class RuntimeRowMappersCoreMixin:
             updated_at=parse_datetime(row["updated_at"]),
         )
 
+    def _policy_decision_from_row(self, row: Any) -> PolicyDecision:
+        return PolicyDecision(
+            id=row["id"],
+            target_id=row["target_id"],
+            task_id=row["task_id"],
+            action_kind=row["action_kind"],
+            verdict=PolicyVerdict(row["verdict"]),
+            reason=row["reason"],
+            metadata=_load(row["metadata"], {}),
+            created_at=parse_datetime(row["created_at"]),
+        )
+
     def _task_run_from_row(self, row: Any) -> TaskRun:
         return TaskRun(
             id=row["id"],

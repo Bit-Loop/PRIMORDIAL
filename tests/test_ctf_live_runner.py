@@ -93,6 +93,7 @@ class CTFLiveRunnerTests(unittest.TestCase):
                 command_runner=_runner(stdout='{"Account":"000000000000"}', calls=calls),
                 http_getter=lambda _url: b'{"services":{"sts":"running"}}',
                 timeout_seconds=0.01,
+                allow_in_progress=True,
             )
 
             evidence = Path(result.evidence_path).read_text(encoding="utf-8")
@@ -127,6 +128,34 @@ class CTFLiveRunnerTests(unittest.TestCase):
         self.assertIn("not configured", result.blocker)
         self.assertIn("blocker=", evidence)
 
+    def test_phase_runner_redacts_exception_blocker_evidence(self) -> None:
+        raw_flag = fixture_flag("blocker-redaction")
+
+        def failing_getter(_url: str) -> bytes:
+            raise RuntimeError(
+                "failed /tmp/operator/session.log?token=secret-query "
+                "Authorization: Bearer secret-token "
+                + raw_flag
+            )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = run_phase(
+                0,
+                lab_root=Path(temp_dir),
+                command_runner=_runner(),
+                http_getter=failing_getter,
+                timeout_seconds=0.01,
+            )
+
+            evidence = Path(result.evidence_path).read_text(encoding="utf-8")
+
+        self.assertEqual(result.status, "blocked")
+        self.assertNotIn(raw_flag, evidence)
+        self.assertNotIn("secret-query", evidence)
+        self.assertNotIn("secret-token", evidence)
+        self.assertNotIn("/tmp/operator/session.log", evidence)
+        self.assertNotIn(raw_flag, result.blocker)
+
     def test_phase_five_runner_hashes_kubernetes_goat_cluster_evidence(self) -> None:
         calls: list[tuple[str, ...]] = []
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -135,6 +164,7 @@ class CTFLiveRunnerTests(unittest.TestCase):
                 lab_root=Path(temp_dir),
                 command_runner=_runner(stdout='{"items":[{"metadata":{"name":"pod"}}]}', calls=calls),
                 timeout_seconds=0.01,
+                allow_in_progress=True,
             )
 
             evidence = Path(result.evidence_path).read_text(encoding="utf-8")
@@ -168,6 +198,7 @@ class CTFLiveRunnerTests(unittest.TestCase):
                 lab_root=lab_root,
                 command_runner=_goad_runner(),
                 timeout_seconds=0.01,
+                allow_in_progress=True,
             )
 
             evidence = Path(result.evidence_path).read_text(encoding="utf-8")
@@ -263,6 +294,7 @@ class CTFLiveRunnerTests(unittest.TestCase):
                 http_getter=lambda _url: b"nyu littlequery ready",
                 timeout_seconds=0.01,
                 keep_running=True,
+                allow_in_progress=True,
             )
 
             evidence = Path(result.evidence_path).read_text(encoding="utf-8")
@@ -286,7 +318,29 @@ class CTFLiveRunnerTests(unittest.TestCase):
             )
 
         self.assertEqual([result.phase for result in results], list(range(9)))
-        self.assertEqual([result.status for result in results if result.phase in {0, 1, 2, 5, 7}], ["ready"] * 5)
+        self.assertEqual([result.status for result in results if result.phase in {0, 1, 2}], ["ready"] * 3)
+        self.assertEqual([result.status for result in results if result.phase in {5, 6, 7, 8}], ["blocked"] * 4)
+        self.assertTrue(all("catalog phase status is in_progress" in result.blocker for result in results if result.phase in {5, 6, 7, 8}))
+
+    def test_in_progress_phase_requires_explicit_override(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            blocked = run_phase(
+                5,
+                lab_root=Path(temp_dir),
+                command_runner=_runner(stdout='{"items":[]}'),
+                timeout_seconds=0.01,
+            )
+            allowed = run_phase(
+                5,
+                lab_root=Path(temp_dir),
+                command_runner=_runner(stdout='{"items":[]}'),
+                timeout_seconds=0.01,
+                allow_in_progress=True,
+            )
+
+        self.assertEqual(blocked.status, "blocked")
+        self.assertIn("catalog phase status is in_progress", blocked.blocker)
+        self.assertEqual(allowed.status, "ready")
 
     def test_phase_runner_can_defer_cleanup_while_autonomous_attempt_uses_live_lab(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -401,6 +455,7 @@ class CTFLiveRunnerTests(unittest.TestCase):
                 lab_root=Path(temp_dir),
                 command_runner=_runner(stdout='{"items":[]}'),
                 timeout_seconds=0.01,
+                allow_in_progress=True,
             )
             raw_flag = fixture_flag("mechanism-only")
             attempt = run_autonomous_attempt(

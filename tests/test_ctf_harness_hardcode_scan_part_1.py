@@ -101,6 +101,29 @@ login(username, password)
         self.assertEqual([finding.rule_id for finding in result.findings], ["static_service_port"])
         self.assertIn("port", result.findings[0].message)
 
+    def test_hardcode_scanner_profiles_allow_declared_lab_manifest_infrastructure(self) -> None:
+        manifest = (
+            "target_ip = '"
+            + fixture_ip(10, 10, 10, 42)
+            + "'\n"
+            + "service_"
+            + "port = "
+            + "31337"
+            + "\n"
+            + "pa"
+            + "th = '/administrator/health"
+            + "/check'\n"
+        )
+
+        manifest_result = HardcodeScanner.scan({"manifest.py": manifest}, profile="lab_manifest")
+        solver_result = HardcodeScanner.scan({"solver.py": manifest})
+
+        self.assertEqual(manifest_result.status, "pass")
+        self.assertEqual(
+            [finding.rule_id for finding in solver_result.findings],
+            ["target_ip_literal", "challenge_path_literal", "static_service_port"],
+        )
+
     def test_hardcode_scanner_flags_challenge_specific_filename_literals(self) -> None:
         result = HardcodeScanner.scan(
             {

@@ -223,3 +223,25 @@ class RuntimeRecordsMixin:
                 decision.created_at.isoformat(),
             ),
         )
+
+    def list_policy_decisions(
+        self,
+        *,
+        target_id: str | None = None,
+        task_id: str | None = None,
+        limit: int = 100,
+    ) -> list[PolicyDecision]:
+        where: list[str] = []
+        params: list[Any] = []
+        if target_id:
+            where.append("target_id = %s")
+            params.append(target_id)
+        if task_id:
+            where.append("task_id = %s")
+            params.append(task_id)
+        clause = f"WHERE {' AND '.join(where)}" if where else ""
+        rows = self._query(
+            f"SELECT * FROM policy_decisions {clause} ORDER BY created_at DESC LIMIT %s",
+            (*params, limit),
+        )
+        return [self._policy_decision_from_row(row) for row in rows]

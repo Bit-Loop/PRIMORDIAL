@@ -51,6 +51,13 @@ REVIEW_RULES = frozenset(
         "code_simhash_similarity",
     }
 )
+SCAN_PROFILES = frozenset({"generated_solver_code", "lab_manifest", "runtime_harness", "source_code_general"})
+PROFILE_ALLOWED_RULES = {
+    "generated_solver_code": frozenset(),
+    "lab_manifest": frozenset({"target_ip_literal", "static_service_port", "challenge_path_literal"}),
+    "runtime_harness": frozenset({"target_ip_literal", "static_service_port"}),
+    "source_code_general": frozenset(),
+}
 RULE_ORDER = {
     "raw_flag": 0,
     "target_ip_literal": 1,
@@ -122,7 +129,9 @@ class HardcodeScanner:
         reference_command_sequences: Iterable[Sequence[str]] = (),
         reference_text_spans: Iterable[str] = (),
         reference_code_spans: Iterable[str] = (),
+        profile: str = "generated_solver_code",
     ) -> HardcodeScanResult:
+        selected_profile = _scan_profile(profile)
         findings: list[HardcodeFinding] = []
         snippets = tuple(snippet.strip() for snippet in hidden_solution_snippets if len(snippet.strip()) >= 12)
         box_name_literals = tuple(_normalize_box_name(name) for name in box_names if _normalize_box_name(name))
@@ -144,6 +153,7 @@ class HardcodeScanner:
                     reference_command_sequences=command_sequences,
                     reference_text_spans=text_spans,
                     reference_code_spans=code_spans,
+                    profile=selected_profile,
                 )
             )
         findings = _deduplicate_findings(findings)
@@ -161,9 +171,10 @@ def _scan_text(
     reference_command_sequences: tuple[tuple[str, ...], ...],
     reference_text_spans: tuple[str, ...],
     reference_code_spans: tuple[str, ...],
+    profile: str,
 ) -> tuple[HardcodeFinding, ...]:
     findings: list[HardcodeFinding] = []
-    findings.extend(_line_findings(path, content, hidden_solution_snippets=hidden_solution_snippets, box_names=box_names))
+    findings.extend(_line_findings(path, content, hidden_solution_snippets=hidden_solution_snippets, box_names=box_names, profile=profile))
     findings.extend(_multiline_hidden_snippet_findings(path, content, hidden_solution_snippets))
     findings.extend(_command_similarity_findings(path, content, reference_command_sequences))
     findings.extend(_text_span_similarity_findings(path, content, reference_text_spans))
@@ -177,10 +188,11 @@ def _line_findings(
     *,
     hidden_solution_snippets: tuple[str, ...],
     box_names: tuple[str, ...],
+    profile: str,
 ) -> tuple[HardcodeFinding, ...]:
     findings: list[HardcodeFinding] = []
     for line_number, line in enumerate(content.splitlines(), start=1):
-        findings.extend(_regex_line_findings(path, line, line_number))
+        findings.extend(_regex_line_findings(path, line, line_number, profile=profile))
         if _looks_like_scripted_command_chain(line):
             findings.append(_finding("scripted_command_chain", path, line_number, "scripted command chains look like target-specific solve traces"))
         if _contains_box_name_literal(line, box_names):
@@ -190,12 +202,20 @@ def _line_findings(
     return tuple(findings)
 
 
-def _regex_line_findings(path: str, line: str, line_number: int) -> tuple[HardcodeFinding, ...]:
+def _regex_line_findings(path: str, line: str, line_number: int, *, profile: str) -> tuple[HardcodeFinding, ...]:
+    allowed = PROFILE_ALLOWED_RULES[_scan_profile(profile)]
     return tuple(
         _finding(rule_id, path, line_number, message)
         for pattern, rule_id, message in LINE_REGEX_RULES
-        if pattern.search(line)
+        if rule_id not in allowed and pattern.search(line)
     )
+
+
+def _scan_profile(value: str) -> str:
+    profile = str(value or "generated_solver_code").strip()
+    if profile not in SCAN_PROFILES:
+        raise ValueError(f"unsupported hardcode scan profile: {profile}")
+    return profile
 
 
 def _multiline_hidden_snippet_findings(

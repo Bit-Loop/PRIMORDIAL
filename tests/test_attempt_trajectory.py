@@ -4,8 +4,8 @@ import json
 from pathlib import Path
 from threading import Thread
 
-from primordial.core.domain.enums import AgentRole, MethodologyPhase, RiskTier, ScopeProfile, TaskKind
-from primordial.core.domain.models import Task
+from primordial.core.domain.enums import AgentRole, MethodologyPhase, PolicyVerdict, RiskTier, ScopeProfile, TaskKind
+from primordial.core.domain.models import PolicyDecision, Task
 from primordial.labs.ctf.trajectory import emit_attempt_trajectory, ingest_attempt_trajectory_summary
 from tests.support import fixture_flag
 from tests.test_workflow_common import WorkflowTestsBase
@@ -27,6 +27,7 @@ class AttemptTrajectoryTests(WorkflowTestsBase):
                 "ctf_attempt_id": "attempt:littlequery",
                 "ctf_ground_truth_flag_sha256": "b" * 64,
                 "local_ctf_autonomous": True,
+                **_local_ctf_authority(),
             },
         )
         task = Task(
@@ -39,6 +40,16 @@ class AttemptTrajectoryTests(WorkflowTestsBase):
             risk_tier=RiskTier.MODERATE,
         )
         self.runtime.store.insert_task(task)
+        self.runtime.store.insert_policy_decision(
+            PolicyDecision(
+                target_id=target.id,
+                task_id=task.id,
+                action_kind=TaskKind.CTF_FLAG_CAPTURE.value,
+                verdict=PolicyVerdict.ALLOW,
+                reason="fixture local CTF trajectory authorization",
+                metadata={"primitive_hint": "ctf-flag-capture"},
+            )
+        )
 
         emit_attempt_trajectory(
             store=self.runtime.store,
@@ -104,3 +115,13 @@ class AttemptTrajectoryTests(WorkflowTestsBase):
         self.assertNotIn(raw_flag, Path(artifact.path).read_text(encoding="utf-8"))
         self.assertNotIn(raw_flag, combined_chunks)
         self.assertIn("ground_truth_flag_sha256", chunks[0].metadata)
+
+
+def _local_ctf_authority(*, phase: int = 1) -> dict[str, object]:
+    return {
+        "ctf_phase": phase,
+        "ctf_phase_status": "ready_for_review",
+        "ctf_environment_proof_ref": "evidence:local-ctf-fixture",
+        "ctf_active_intent": "ctf_solve_autonomous_local",
+        "ctf_allow_in_progress": False,
+    }

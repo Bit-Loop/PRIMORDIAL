@@ -10,6 +10,7 @@ from primordial.core.orchestration.workflow_deps import (
     TaskKind,
     TaskStatus,
 )
+from primordial.labs.ctf.authorization import local_ctf_authorization_error
 
 class WorkflowPlanningPredicatesMixin:
     def _should_plan_service_discovery(self, target: Target) -> bool:
@@ -85,9 +86,11 @@ class WorkflowPlanningPredicatesMixin:
         return False
 
     def _should_plan_ctf_flag_capture(self, target: Target) -> bool:
-        if not (
-            target.metadata.get("local_ctf_autonomous") is True
-            or str(target.metadata.get("ctf_completion_indicator", "")).strip() == "autonomous_flags"
+        if local_ctf_authorization_error(
+            target=target,
+            task=None,
+            store=None,
+            active_intent_id=self._active_intent_id(),
         ):
             return False
         evidence = self.store.list_evidence(target_id=target.id, limit=200)

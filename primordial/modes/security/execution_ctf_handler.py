@@ -2,10 +2,21 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import ipaddress
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import ssl
+import subprocess
+from urllib import error, parse, request
 
+from primordial.labs.ctf.authorization import local_ctf_authorization_error
 from primordial.labs.ctf.hardcode import FLAG_PATTERN, flag_sha256
-from primordial.modes.security.execution_common import *
+from primordial.core.domain.enums import EventType, EvidenceType, VerificationStatus
+from primordial.core.domain.models import ContextSlice, EventRecord, EvidenceRecord, Note, Task, TaskExecutionResult
 
 
 CTF_CAPTURE_PATHS = (
@@ -26,9 +37,10 @@ class PrimitiveCtfHandlerMixin:
             result.success = False
             result.error = "target not found"
             return result
-        if not self._is_local_ctf_autonomous_target(target):
+        authorization_error = self._local_ctf_authorization_error(target, task)
+        if authorization_error:
             result.success = False
-            result.error = "target is not marked as a local autonomous CTF lab"
+            result.error = authorization_error
             return result
 
         candidates = self._ctf_capture_candidate_urls(target)
@@ -178,9 +190,14 @@ class PrimitiveCtfHandlerMixin:
         return result
 
     def _is_local_ctf_autonomous_target(self, target) -> bool:
-        return (
-            target.metadata.get("local_ctf_autonomous") is True
-            or str(target.metadata.get("ctf_completion_indicator", "")).strip() == "autonomous_flags"
+        return self._local_ctf_authorization_error(target, None) == ""
+
+    def _local_ctf_authorization_error(self, target, task) -> str:
+        return local_ctf_authorization_error(
+            target=target,
+            task=task,
+            store=self.store,
+            active_intent_id=self._active_intent_id(),
         )
 
     def _ctf_capture_max_urls(self, task: Task) -> int:

@@ -13,6 +13,7 @@ from primordial.core.domain.enums import AgentRole, ArtifactKind
 from primordial.core.domain.models import ArtifactRecord, AttemptTrajectory, DocumentChunk, Task
 from primordial.core.domain.model_utils import new_id
 from primordial.core.sensitive_text import redact_sensitive_text
+from primordial.labs.ctf.authorization import local_ctf_authorization_error
 from primordial.labs.ctf.hardcode import FLAG_PATTERN
 
 
@@ -35,7 +36,7 @@ def emit_attempt_trajectory(
     evidence_refs: list[str] | tuple[str, ...] = (),
 ) -> AttemptTrajectory | None:
     target = store.get_target(task.target_id) if task.target_id else None
-    if target is None or not _is_ctf_target(target.metadata):
+    if target is None or not _is_ctf_target(target, task=task, store=store):
         return None
     attempt_id = _attempt_id(target.metadata, target.id)
     lock = _lock_for(attempt_id)
@@ -78,7 +79,7 @@ def ingest_attempt_trajectory_summary(
     ground_truth_flag_sha256: str = "",
 ) -> ArtifactRecord | None:
     target = store.get_target(target_id)
-    if target is None or not _is_ctf_target(target.metadata):
+    if target is None or not _is_ctf_target(target, task=None, store=store):
         return None
     rows = store.list_attempt_trajectories(target_id=target_id, attempt_id=attempt_id, limit=1000)
     if not rows:
@@ -171,8 +172,17 @@ def _lock_for(attempt_id: str) -> Lock:
         return lock
 
 
-def _is_ctf_target(metadata: dict[str, Any]) -> bool:
-    return metadata.get("local_ctf_autonomous") is True or str(metadata.get("ctf_completion_indicator") or "") == "autonomous_flags"
+def _is_ctf_target(target: object, *, task: Task | None, store: object | None) -> bool:
+    metadata = getattr(target, "metadata", {})
+    return (
+        local_ctf_authorization_error(
+            target=target,
+            task=task,
+            store=store,
+            active_intent_id=str(metadata.get("ctf_active_intent") or metadata.get("active_intent") or ""),
+        )
+        == ""
+    )
 
 
 def _attempt_id(metadata: dict[str, Any], target_id: str) -> str:

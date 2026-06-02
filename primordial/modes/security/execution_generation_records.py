@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from primordial.modes.security.artifact_safety import safe_artifact_payload
 from primordial.modes.security.execution_common import *
 
 
@@ -37,7 +38,7 @@ class PrimitiveGenerationRecordMixin:
         task_dir = self.config.artifacts_dir / (task.id or "task")
         task_dir.mkdir(parents=True, exist_ok=True)
         path = task_dir / f"{prefix}.json"
-        path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+        path.write_text(json.dumps(safe_artifact_payload(payload), indent=2, sort_keys=True))
         content = path.read_bytes()
         return ArtifactRecord(
             task_id=task.id,

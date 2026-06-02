@@ -36,6 +36,9 @@ fi
 PRIMORDIAL_TEST_DATABASE_URL="${PRIMORDIAL_TEST_DATABASE_URL:-$PRIMORDIAL_DATABASE_URL}" \
   PRIMORDIAL_DATABASE_URL= \
   python3 -m unittest discover -q
+python3 -m unittest tests.test_ctf_lab_phases tests.test_ctf_harness_environment -q
+python3 -m primordial.core.quality.hardcode
+git ls-files '*.py' | xargs python3 -m py_compile
 npm run build
 
 python3 cli.py web --host 127.0.0.1 --port "${PORT}" &

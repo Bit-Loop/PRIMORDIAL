@@ -20,11 +20,14 @@ from urllib.request import urlopen
 from primordial.core.local_runtime import load_project_env
 from primordial.labs.ctf.challenge_index import ChallengeRef, load_phase_challenge_index
 from primordial.labs.ctf.hardcode import canonicalize_flag
+from primordial.labs.ctf.phases import load_ctf_lab_phase_catalog
+from primordial.labs.ctf.safety import safe_evidence_line, safe_evidence_value
 from primordial.labs.ctf.sessions import SolveSession
 
-DEFAULT_LAB_ROOT = Path("/run/media/bitloop/DREAD/primordial-labs")
+DEFAULT_LAB_ROOT = Path(os.environ.get("PRIMORDIAL_LAB_ROOT", "runtime/labs"))
 DEFAULT_KUBERNETES_GOAT_KUBECONFIG = DEFAULT_LAB_ROOT / "kubeconfigs" / "phase5-kind.yaml"
-READY_PHASES = frozenset({0, 1, 2, 3, 4, 5, 6, 7, 8})
+PHASE_CATALOG_PATH = Path("catalog/labs/ctf_lab_phases.yaml")
+RUNNABLE_PHASE_STATUSES = frozenset({"ready_for_review", "complete"})
 GENERATED_MECHANISM_OBJECTIVE_SCOPE = "generated_mechanism_validation"
 PHASE_ZERO_HARNESS_PORT = 3090
 PHASE_ZERO_HARNESS_URL = f"http://127.0.0.1:{PHASE_ZERO_HARNESS_PORT}/"
@@ -79,6 +82,16 @@ GOAD_RELATIVE_ROOT = Path("assets/phase6-goad")
 GOAD_RUNTIME_HOME_RELATIVE = Path("runtime/goad-home")
 GOAD_PYTHON_DEPS_RELATIVE = Path("tools/python-goad-deps")
 GOAD_ANSIBLE_CORE_RELATIVE = Path("tools/python-ansible-core")
+PHASE_BY_ATTEMPT_LAB_ID = {
+    "juice-shop": 1,
+    VULHUB_HTTPD_CVE_2021_41773_LAB_ID: 2,
+    "mbptl": 3,
+    "cicd-goat": 4,
+    "kubernetes-goat": 5,
+    "goad-light": 6,
+    "cloudgoat-localstack-adaptation": 7,
+    "ctf-dojo": 8,
+}
 
 CommandRunner = Callable[[tuple[str, ...]], subprocess.CompletedProcess[str]]
 AttemptCommandRunner = Callable[[tuple[str, ...], Mapping[str, str]], subprocess.CompletedProcess[str]]
@@ -147,7 +160,11 @@ def run_phase(
     http_getter: HttpGetter | None = None,
     timeout_seconds: float = 90.0,
     keep_running: bool = False,
+    allow_in_progress: bool = False,
 ) -> LiveLabRunResult:
+    blocked = _blocked_by_phase_catalog(phase, lab_root=lab_root, allow_in_progress=allow_in_progress)
+    if blocked is not None:
+        return blocked
     if phase == 0:
         return _run_phase_zero_harness(
             lab_root=lab_root,
@@ -375,6 +392,9 @@ def run_autonomous_attempt(
             max_executions=max_executions,
             challenge_ref=challenge_ref,
             attempt_id=attempt_id,
+            phase=phase,
+            environment_proof_ref=readiness.evidence_ref,
+            allow_in_progress=readiness.lab_id.endswith("catalog-blocked") is False and _catalog_phase_status(phase) == "in_progress",
         )
         attempt_env = _primordial_attempt_env(lab_root=lab_root, lab_id=lab_id)
         if attempt_env.get("PRIMORDIAL_TEST_DATABASE_SCHEMA"):
@@ -538,6 +558,7 @@ def run_all(
     command_runner: CommandRunner | None = None,
     http_getter: HttpGetter | None = None,
     timeout_seconds: float = 90.0,
+    allow_in_progress: bool = False,
 ) -> tuple[LiveLabRunResult, ...]:
     return tuple(
         run_phase(
@@ -546,8 +567,41 @@ def run_all(
             command_runner=command_runner,
             http_getter=http_getter,
             timeout_seconds=timeout_seconds,
+            allow_in_progress=allow_in_progress,
         )
         for phase in range(9)
+    )
+
+
+def _blocked_by_phase_catalog(
+    phase: int,
+    *,
+    lab_root: Path,
+    allow_in_progress: bool,
+) -> LiveLabRunResult | None:
+    try:
+        phase_record = load_ctf_lab_phase_catalog(PHASE_CATALOG_PATH).phase(phase)
+    except Exception:
+        return None
+    if phase_record.status in RUNNABLE_PHASE_STATUSES:
+        return None
+    if phase_record.status == "in_progress" and allow_in_progress:
+        return None
+    lab_id = f"phase-{phase_record.number}-catalog-blocked"
+    evidence = _evidence_file(lab_root, phase=phase_record.number, lab_id=lab_id)
+    blocker = f"catalog phase status is {phase_record.status}; pass --allow-in-progress for fixture-only execution"
+    lines = _evidence_header(phase=phase_record.number, lab_id=lab_id) + [
+        f"catalog_phase_id={phase_record.id}",
+        f"catalog_phase_status={phase_record.status}",
+        f"blocker={blocker}",
+    ]
+    return _write_result(
+        phase=phase_record.number,
+        status="blocked",
+        lab_id=lab_id,
+        evidence=evidence,
+        lines=lines,
+        blocker=blocker,
     )
 
 
@@ -1674,7 +1728,9 @@ def _write_result(
     target_url: str = "",
     cleanup_command: tuple[str, ...] = (),
 ) -> LiveLabRunResult:
-    evidence.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    safe_lines = [safe_evidence_line(line) for line in lines]
+    safe_blocker = safe_evidence_value(blocker)
+    evidence.write_text("\n".join(safe_lines).rstrip() + "\n", encoding="utf-8")
     evidence_ref = f"evidence:live-lab:{_sha256_bytes(evidence.read_bytes())[:16]}"
     return LiveLabRunResult(
         phase=phase,
@@ -1682,8 +1738,8 @@ def _write_result(
         lab_id=lab_id,
         evidence_path=str(evidence),
         evidence_ref=evidence_ref,
-        blocker=blocker,
-        target_url=target_url,
+        blocker=safe_blocker,
+        target_url=safe_evidence_value(target_url),
         cleanup_command=cleanup_command,
     )
 
@@ -1712,7 +1768,9 @@ def _write_attempt_result(
             f"solve_session_sha256={_sha256_bytes(session_path.read_bytes())}",
         ]
     )
-    evidence.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    safe_lines = [safe_evidence_line(line) for line in lines]
+    safe_blocker = safe_evidence_value(blocker)
+    evidence.write_text("\n".join(safe_lines).rstrip() + "\n", encoding="utf-8")
     evidence_ref = f"evidence:autonomous-attempt:{_sha256_bytes(evidence.read_bytes())[:16]}"
     return AutonomousAttemptResult(
         phase=phase,
@@ -1725,7 +1783,7 @@ def _write_attempt_result(
         captured_flag_ref=captured_flag_ref,
         benchmark_solve_ref=benchmark_solve_ref,
         flag_verification=flag_verification,
-        blocker=blocker,
+        blocker=safe_blocker,
     )
 
 
@@ -1796,6 +1854,9 @@ def _primordial_attempt_commands(
     max_executions: int,
     challenge_ref: ChallengeRef | None = None,
     attempt_id: str = "",
+    phase: int | None = None,
+    environment_proof_ref: str = "",
+    allow_in_progress: bool = False,
 ) -> tuple[tuple[str, ...], ...]:
     target_handle = _attempt_target_handle(lab_id, challenge_ref=challenge_ref)
     return (
@@ -1824,7 +1885,18 @@ def _primordial_attempt_commands(
             "--display-name",
             f"CTF lab {target_handle}",
             "--metadata-json",
-            json.dumps(_primordial_attempt_metadata(lab_id, target_url, challenge_ref=challenge_ref, attempt_id=attempt_id), sort_keys=True),
+            json.dumps(
+                _primordial_attempt_metadata(
+                    lab_id,
+                    target_url,
+                    challenge_ref=challenge_ref,
+                    attempt_id=attempt_id,
+                    phase=phase,
+                    environment_proof_ref=environment_proof_ref,
+                    allow_in_progress=allow_in_progress,
+                ),
+                sort_keys=True,
+            ),
         ),
         (
             "python3",
@@ -1845,12 +1917,21 @@ def _primordial_attempt_metadata(
     *,
     challenge_ref: ChallengeRef | None = None,
     attempt_id: str = "",
+    phase: int | None = None,
+    environment_proof_ref: str = "",
+    allow_in_progress: bool = False,
 ) -> dict[str, object]:
+    selected_phase = phase if phase is not None else _phase_for_lab_id(lab_id)
     metadata: dict[str, object] = {
         "ctf_completion_indicator": "autonomous_flags",
         "ctf_attempt_id": attempt_id,
         "ctf_lab_id": lab_id,
+        "ctf_phase": selected_phase,
+        "ctf_phase_status": _catalog_phase_status(selected_phase),
         "ctf_target_url": target_url,
+        "ctf_environment_proof_ref": environment_proof_ref,
+        "ctf_active_intent": "ctf_solve_autonomous_local",
+        "ctf_allow_in_progress": allow_in_progress,
         "local_ctf_autonomous": True,
         "writeup_access_policy": "closed_book",
     }
@@ -1858,6 +1939,19 @@ def _primordial_attempt_metadata(
     if challenge_ref is not None:
         metadata.update(challenge_ref.as_metadata())
     return metadata
+
+
+def _phase_for_lab_id(lab_id: str) -> int:
+    return 8 if lab_id.startswith("nyu-ctf-bench") else PHASE_BY_ATTEMPT_LAB_ID.get(lab_id, 0)
+
+
+def _catalog_phase_status(phase: int | None) -> str:
+    if phase is None:
+        return ""
+    try:
+        return load_ctf_lab_phase_catalog(PHASE_CATALOG_PATH).phase(int(phase)).status
+    except Exception:
+        return ""
 
 
 def _attempt_target_handle(lab_id: str, *, challenge_ref: ChallengeRef | None) -> str:
@@ -2097,13 +2191,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--attempt-timeout-seconds", type=float, default=300.0)
     parser.add_argument("--primordial-cycles", type=int, default=3)
     parser.add_argument("--primordial-max-executions", type=int, default=3)
+    parser.add_argument("--allow-in-progress", action="store_true")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
 
     phases = tuple(range(9)) if args.all or not args.phase else tuple(args.phase)
+    explicit_phases = frozenset(args.phase or ())
     results_list: list[LiveLabRunResult] = []
     attempts_list: list[AutonomousAttemptResult] = []
     for phase in phases:
+        catalog_block = _blocked_by_phase_catalog(
+            phase,
+            lab_root=Path(args.lab_root),
+            allow_in_progress=args.allow_in_progress,
+        )
+        if catalog_block is not None:
+            results_list.append(catalog_block)
+            continue
         challenge_refs = _selected_challenge_refs(
             phase,
             lab_root=Path(args.lab_root),
@@ -2142,6 +2246,7 @@ def main(argv: list[str] | None = None) -> int:
             lab_root=Path(args.lab_root),
             timeout_seconds=args.timeout_seconds,
             keep_running=args.attempt_autonomous,
+            allow_in_progress=args.allow_in_progress,
         )
         results_list.append(result)
         if args.attempt_autonomous:
@@ -2177,7 +2282,21 @@ def main(argv: list[str] | None = None) -> int:
                     f"phase={result.phase} solve_status={attempt['solve_status']} "
                     f"attempt_evidence={attempt['evidence_path']}{attempt_blocker}"
                 )
-    return 0 if all(result.status == "ready" for result in results if result.phase in READY_PHASES) else 1
+    return 0 if _successful_runner_exit(results, explicit_phases=explicit_phases) else 1
+
+
+def _successful_runner_exit(results: tuple[LiveLabRunResult, ...], *, explicit_phases: frozenset[int]) -> bool:
+    for result in results:
+        if result.status == "ready":
+            continue
+        if result.phase not in explicit_phases and _is_catalog_in_progress_block(result):
+            continue
+        return False
+    return True
+
+
+def _is_catalog_in_progress_block(result: LiveLabRunResult) -> bool:
+    return result.status == "blocked" and "catalog phase status is in_progress" in result.blocker
 
 
 def _selected_challenge_refs(
