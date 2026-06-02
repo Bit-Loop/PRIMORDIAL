@@ -78,6 +78,7 @@ class RuntimeCaidoCaptureMixin:
             "httpql": httpql,
             "imported_at": utc_now().isoformat(),
             "raw_bodies_stored": False,
+            "snippets_stored": False,
             "request": {
                 "id": request_id,
                 "method": request_payload.get("method") or "",
@@ -86,12 +87,12 @@ class RuntimeCaidoCaptureMixin:
                 "path": request_payload.get("path") or "",
                 "status": request_payload.get("status") or 0,
                 "source": request_payload.get("source") or "",
+                "request_length": request_payload.get("length") or 0,
+                "response_length": request_payload.get("response_length") or 0,
                 "request_sha256": request_payload.get("request_sha256") or "",
                 "response_sha256": request_payload.get("response_sha256") or "",
-                "request_snippet": request_payload.get("request_snippet") or "",
-                "response_snippet": request_payload.get("response_snippet") or "",
-                "request_truncated": bool(request_payload.get("request_truncated")),
-                "response_truncated": bool(request_payload.get("response_truncated")),
+                "request_snippet_stored": False,
+                "response_snippet_stored": False,
             },
         }
         path.write_text(json.dumps(json_ready(payload), indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -107,5 +108,6 @@ class RuntimeCaidoCaptureMixin:
                 "caido_request_id": request_id,
                 "httpql": httpql,
                 "raw_bodies_stored": False,
+                "snippets_stored": False,
             },
         )

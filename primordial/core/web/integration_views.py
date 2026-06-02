@@ -23,12 +23,13 @@ class WebIntegrationViewsMixin:
                     "host": str(metadata.get("host") or ""),
                     "path": str(metadata.get("path") or item.get("title") or "/"),
                     "status": int(metadata.get("status_code", 0) or 0),
-                    "length": len(str(metadata.get("response_snippet") or "")),
+                    "length": int(metadata.get("response_length", 0) or 0),
                     "time": self._time_label(item.get("created_at")),
                     "source": "imported",
                     "mime": str(metadata.get("content_type") or ""),
-                    "requestSnippet": str(metadata.get("request_snippet") or ""),
-                    "responseSnippet": str(metadata.get("response_snippet") or ""),
+                    "requestSnippet": "",
+                    "responseSnippet": "",
+                    "snippetsStored": bool(metadata.get("snippets_stored")),
                     "evidenceId": str(item.get("id") or ""),
                 }
             )

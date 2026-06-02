@@ -65,6 +65,7 @@ def caido_import_event(target: Target, imported: list[dict[str, object]], httpql
             "artifact_ids": [item["artifact"]["id"] for item in imported],
             "evidence_ids": [item["evidence"]["id"] for item in imported],
             "raw_bodies_stored": False,
+            "snippets_stored": False,
         },
     )
 
@@ -99,13 +100,14 @@ def _caido_capture_metadata(
         "host": str(request_payload.get("host") or ""),
         "path": str(request_payload.get("path") or "/"),
         "status_code": int(request_payload.get("status") or 0),
+        "request_length": int(request_payload.get("length") or 0),
+        "response_length": int(request_payload.get("response_length") or 0),
         "request_sha256": request_payload.get("request_sha256") or "",
         "response_sha256": request_payload.get("response_sha256") or "",
-        "request_snippet": request_payload.get("request_snippet") or "",
-        "response_snippet": request_payload.get("response_snippet") or "",
-        "request_truncated": bool(request_payload.get("request_truncated")),
-        "response_truncated": bool(request_payload.get("response_truncated")),
         "raw_bodies_stored": False,
+        "snippets_stored": False,
+        "request_snippet_stored": False,
+        "response_snippet_stored": False,
         "artifact_id": artifact.id,
     }
     if target.metadata.get("active_ip_generation") is not None:
