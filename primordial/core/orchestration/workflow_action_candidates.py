@@ -137,6 +137,19 @@ class WorkflowActionCandidatesMixin:
                 },
             ),
             (
+                self._should_plan_ctf_flag_capture,
+                {
+                    "kind": TaskKind.CTF_FLAG_CAPTURE,
+                    "title": "Run closed-book CTF flag capture",
+                    "summary": f"Search evidence-backed local CTF surfaces for redacted flag capture on {target.handle}.",
+                    "confidence": 0.86,
+                    "subphase": "ctf_flag_capture",
+                    "transition_reason": "The target is a local autonomous CTF lab with current HTTP evidence and no captured flag record.",
+                    "prerequisite": "current-generation local CTF HTTP evidence",
+                    "metadata": {"primitive_hint": "ctf-flag-capture", "closed_book": True},
+                },
+            ),
+            (
                 self._should_plan_ad_enumeration,
                 {
                     "kind": TaskKind.AD_ENUMERATION,

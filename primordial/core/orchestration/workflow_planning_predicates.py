@@ -84,6 +84,34 @@ class WorkflowPlanningPredicatesMixin:
                     return True
         return False
 
+    def _should_plan_ctf_flag_capture(self, target: Target) -> bool:
+        if not (
+            target.metadata.get("local_ctf_autonomous") is True
+            or str(target.metadata.get("ctf_completion_indicator", "")).strip() == "autonomous_flags"
+        ):
+            return False
+        evidence = self.store.list_evidence(target_id=target.id, limit=200)
+        if any(
+            item.metadata.get("kind") == "ctf_flag_capture"
+            and self._evidence_matches_active_generation(target, item)
+            for item in evidence
+        ):
+            return False
+        return any(
+            self._ctf_capture_evidence_signal(target, item)
+            for item in evidence
+        )
+
+    def _ctf_capture_evidence_signal(self, target: Target, evidence) -> bool:
+        if not self._evidence_matches_active_generation(target, evidence):
+            return False
+        if evidence.metadata.get("kind") in {"http_probe", "web_content_discovery", "recon_scan"}:
+            return True
+        effective_url = evidence.metadata.get("effective_url")
+        if isinstance(effective_url, str) and effective_url.startswith(("http://", "https://")):
+            return True
+        return bool(evidence.metadata.get("base_urls") or evidence.metadata.get("discovered"))
+
     def _should_plan_exploit_research(self, target: Target) -> bool:
         if not self._intent_allows_task(target, TaskKind.EXPLOIT_RESEARCH):
             return False

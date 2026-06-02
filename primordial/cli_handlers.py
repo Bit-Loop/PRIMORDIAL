@@ -4,6 +4,7 @@ import argparse
 from collections.abc import Callable
 from dataclasses import dataclass
 import json
+import os
 from typing import Any
 
 from primordial.cli_model_handlers import run_models_command
@@ -124,7 +125,10 @@ def _run_loop(
 ) -> int:
     for _ in range(args.cycles):
         runtime.run_tick(max_executions=args.max_executions)
-    return _print_dashboard(runtime, callbacks)
+    status = _print_dashboard(runtime, callbacks)
+    if os.environ.get("PRIMORDIAL_CTF_AUTONOMOUS_ATTEMPT") == "true":
+        _emit_ctf_capture_refs(runtime)
+    return status
 
 
 def _run_compact(
@@ -357,15 +361,41 @@ def _run_add_target(
     runtime: Any,
     callbacks: CliRuntimeCallbacks,
 ) -> int:
+    metadata = _metadata_json_arg(args.metadata_json, parser)
     runtime.register_target(
         handle=args.handle,
         display_name=args.display_name,
         profile=ScopeProfile(args.profile),
         assets=args.asset or [args.handle],
         in_scope=not args.out_of_scope,
+        metadata=metadata,
     )
     print(callbacks.render_scope(runtime, as_json=getattr(args, "json", False)))
     return 0
+
+
+def _metadata_json_arg(value: str | None, parser: argparse.ArgumentParser) -> dict[str, object]:
+    if not value:
+        return {}
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError as exc:
+        parser.error(f"--metadata-json must be a JSON object: {exc}")
+    if not isinstance(payload, dict):
+        parser.error("--metadata-json must be a JSON object")
+    return payload
+
+
+def _emit_ctf_capture_refs(runtime: Any) -> None:
+    refs: list[str] = []
+    for evidence in runtime.store.list_evidence(limit=500):
+        ref = str(evidence.metadata.get("captured_flag_ref", "")).strip()
+        if not ref.startswith("evidence:captured-flag"):
+            continue
+        if ref not in refs:
+            refs.append(ref)
+    for ref in refs:
+        print(f"captured_flag_ref={ref}")
 
 
 def _run_remove_target(

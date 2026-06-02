@@ -221,8 +221,10 @@ def _database_settings(root: Path) -> tuple[str, str | None]:
     if not database_url:
         database_url = os.getenv("PRIMORDIAL_TEST_DATABASE_URL", "").strip()
         if database_url:
-            digest = hashlib.sha1(str(root).encode("utf-8")).hexdigest()[:12]
-            database_schema = f"primordial_test_{digest}"
+            database_schema = os.getenv("PRIMORDIAL_TEST_DATABASE_SCHEMA", "").strip()
+            if not database_schema:
+                digest = hashlib.sha1(str(root).encode("utf-8")).hexdigest()[:12]
+                database_schema = f"primordial_test_{digest}"
     if not database_url:
         raise RuntimeError(
             "PRIMORDIAL_DATABASE_URL is required. "

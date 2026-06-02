@@ -91,6 +91,7 @@ def _analysis_hot_contract() -> WorkerContract:
             TaskKind.SERVICE_DISCOVERY,
             TaskKind.DNS_ENUMERATION,
             TaskKind.WEB_CONTENT_DISCOVERY,
+            TaskKind.CTF_FLAG_CAPTURE,
             TaskKind.AD_ENUMERATION,
             TaskKind.KERBEROS_USER_DISCOVERY,
             TaskKind.ANALYZE_EVIDENCE,

@@ -284,6 +284,7 @@ def _add_scope_session_commands(
     add_target.add_argument("--profile", choices=profile_choices, default="hack_the_box")
     add_target.add_argument("--display-name")
     add_target.add_argument("--asset", action="append", default=[])
+    add_target.add_argument("--metadata-json", help="JSON object merged into target metadata.")
     add_target.add_argument("--out-of-scope", action="store_true")
     remove_target = subparsers.add_parser("remove-target", help="Remove a target and all linked runtime records.")
     remove_target.add_argument("handle")

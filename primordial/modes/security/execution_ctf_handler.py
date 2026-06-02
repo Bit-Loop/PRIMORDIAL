@@ -1,0 +1,261 @@
+from __future__ import annotations
+
+from primordial.labs.ctf.hardcode import FLAG_PATTERN
+from primordial.modes.security.execution_common import *
+
+
+CTF_CAPTURE_PATHS = (
+    "/",
+    "/robots.txt",
+    "/sitemap.xml",
+    "/.well-known/security.txt",
+    "/flag",
+    "/flag.txt",
+)
+
+
+class PrimitiveCtfHandlerMixin:
+    def _handle_ctf_flag_capture(self, task: Task, context: ContextSlice | None) -> TaskExecutionResult:
+        result = TaskExecutionResult(summary="ctf flag capture completed")
+        target = self.store.get_target(task.target_id)
+        if not target:
+            result.success = False
+            result.error = "target not found"
+            return result
+        if not self._is_local_ctf_autonomous_target(target):
+            result.success = False
+            result.error = "target is not marked as a local autonomous CTF lab"
+            return result
+
+        candidates = self._ctf_capture_candidate_urls(target)
+        max_urls = self._ctf_capture_max_urls(task)
+        probes = self._ctf_capture_probe_urls(candidates[:max_urls])
+        hit = next((probe for probe in probes if probe.get("captured_flag_ref")), None)
+        payload = {
+            "target": target.as_payload(),
+            "closed_book": True,
+            "raw_flags_redacted": True,
+            "candidate_count": len(candidates),
+            "searched_url_count": len(probes),
+            "searched_urls": [probe["url"] for probe in probes],
+            "captured_flag_ref": str(hit.get("captured_flag_ref", "")) if hit else "",
+            "captured_flag_sha256": str(hit.get("captured_flag_sha256", "")) if hit else "",
+            "captured_flag_length": int(hit.get("captured_flag_length", 0)) if hit else 0,
+            "source_url": str(hit.get("url", "")) if hit else "",
+        }
+        artifact = self._write_artifact(
+            task,
+            target.id,
+            f"ctf-flag-capture-{self._safe_artifact_fragment(target.handle)}",
+            payload,
+        )
+        result.artifacts.append(artifact)
+        evidence = EvidenceRecord(
+            target_id=target.id,
+            task_id=task.id,
+            type=EvidenceType.TOOL_OUTPUT,
+            title=f"CTF flag capture: {target.handle}",
+            summary=self._ctf_capture_summary(target.handle, payload),
+            source_ref=artifact.id,
+            verification_status=VerificationStatus.VERIFIED,
+            confidence=0.9 if hit else 0.72,
+            freshness=0.98,
+            artifact_path=artifact.path,
+            metadata={
+                "kind": "ctf_flag_capture",
+                "closed_book": True,
+                "raw_flags_redacted": True,
+                "candidate_count": payload["candidate_count"],
+                "searched_url_count": payload["searched_url_count"],
+                "captured_flag_ref": payload["captured_flag_ref"],
+                "captured_flag_sha256": payload["captured_flag_sha256"],
+                "captured_flag_length": payload["captured_flag_length"],
+                "source_url": payload["source_url"],
+            },
+        )
+        result.evidence.append(evidence)
+        result.notes.append(
+            Note(
+                target_id=target.id,
+                task_id=task.id,
+                title="CTF flag capture summary",
+                body=self._ctf_capture_note(payload),
+                confidence=0.82,
+                freshness=0.94,
+                metadata={
+                    "captured_flag_ref": payload["captured_flag_ref"],
+                    "searched_url_count": payload["searched_url_count"],
+                    "raw_flags_redacted": True,
+                },
+            )
+        )
+        result.events.append(
+            EventRecord(
+                type=EventType.TASK_SUCCEEDED,
+                summary=self._ctf_capture_summary(target.handle, payload),
+                target_id=target.id,
+                task_id=task.id,
+                metadata={
+                    "captured_flag_ref": payload["captured_flag_ref"],
+                    "searched_url_count": payload["searched_url_count"],
+                    "raw_flags_redacted": True,
+                },
+            )
+        )
+        return result
+
+    def _is_local_ctf_autonomous_target(self, target) -> bool:
+        return (
+            target.metadata.get("local_ctf_autonomous") is True
+            or str(target.metadata.get("ctf_completion_indicator", "")).strip() == "autonomous_flags"
+        )
+
+    def _ctf_capture_max_urls(self, task: Task) -> int:
+        try:
+            value = int(task.metadata.get("ctf_capture_max_urls", 40) or 40)
+        except (TypeError, ValueError):
+            value = 40
+        return max(1, min(value, 80))
+
+    def _ctf_capture_candidate_urls(self, target) -> list[str]:
+        bases = self._ctf_capture_base_urls(target)
+        urls: list[str] = []
+        for base in bases:
+            urls.append(base)
+            for path in CTF_CAPTURE_PATHS:
+                urls.append(parse.urljoin(base, path.lstrip("/")))
+        for evidence in self.store.list_evidence(target_id=target.id, limit=200):
+            if not self._records_for_generation([evidence], self._target_active_generation(target)):
+                continue
+            urls.extend(self._ctf_capture_urls_from_evidence(evidence, bases))
+        return self._dedupe_local_http_urls(urls)
+
+    def _ctf_capture_base_urls(self, target) -> list[str]:
+        urls: list[str] = []
+        metadata_url = target.metadata.get("ctf_target_url")
+        if isinstance(metadata_url, str):
+            urls.append(metadata_url)
+        for asset in self._target_scope_assets(target):
+            if asset.asset_type == "webapp" or asset.asset.startswith(("http://", "https://")):
+                urls.append(asset.asset)
+        urls.extend(self._content_discovery_bases(target.id))
+        bases: list[str] = []
+        for url in urls:
+            parsed = parse.urlsplit(str(url))
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                continue
+            base = parse.urlunsplit((parsed.scheme, parsed.netloc, "/", "", ""))
+            bases.append(base)
+        return self._dedupe_local_http_urls(bases)
+
+    def _ctf_capture_urls_from_evidence(self, evidence: EvidenceRecord, bases: list[str]) -> list[str]:
+        values: list[str] = []
+        metadata = evidence.metadata
+        for key in ("effective_url", "requested_url", "source_url"):
+            value = metadata.get(key)
+            if isinstance(value, str):
+                values.append(value)
+        for value in metadata.get("base_urls", []):
+            if isinstance(value, str):
+                values.append(value)
+        for item in metadata.get("discovered", []) + metadata.get("discovery_results", []):
+            if isinstance(item, dict):
+                url = item.get("url")
+                path = item.get("path")
+                if isinstance(url, str):
+                    values.append(url)
+                elif isinstance(path, str):
+                    values.extend(parse.urljoin(base, path.lstrip("/")) for base in bases)
+        return values
+
+    def _dedupe_local_http_urls(self, values: list[str]) -> list[str]:
+        urls: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            parsed = parse.urlsplit(str(value).strip())
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                continue
+            if not self._is_loopback_host(parsed.hostname or ""):
+                continue
+            normalized = parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path or "/", "", ""))
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            urls.append(normalized)
+        return urls
+
+    def _is_loopback_host(self, host: str) -> bool:
+        normalized = host.strip().lower().strip("[]")
+        return normalized in {"localhost", "127.0.0.1", "::1"}
+
+    def _ctf_capture_probe_urls(self, urls: list[str]) -> list[dict[str, object]]:
+        probes: list[dict[str, object]] = []
+        for url in urls:
+            probes.append(self._ctf_capture_probe_url(url))
+        return probes
+
+    def _ctf_capture_probe_url(self, url: str) -> dict[str, object]:
+        request_object = request.Request(url, headers={"User-Agent": "Primordial/0.1", "Accept": "*/*"}, method="GET")
+        try:
+            with request.urlopen(
+                request_object,
+                timeout=5,
+                context=ssl._create_unverified_context() if url.startswith("https://") else None,
+            ) as response:
+                body = response.read(262144)
+                final_url = response.geturl()
+                status = int(response.status)
+        except error.HTTPError as exc:
+            body = exc.read(262144)
+            final_url = exc.geturl()
+            status = int(exc.code)
+        except (error.URLError, OSError, ssl.SSLError, ValueError) as exc:
+            return {"url": self._sanitize_surface_url(url), "status_code": 0, "error": type(exc).__name__}
+
+        captured = self._ctf_capture_redacted_flag(body)
+        return {
+            "url": self._sanitize_surface_url(final_url),
+            "status_code": status,
+            **captured,
+        }
+
+    def _ctf_capture_redacted_flag(self, body: bytes) -> dict[str, object]:
+        decoded = self._decode_response_body(body, {})
+        match = FLAG_PATTERN.search(decoded)
+        if not match:
+            return {"captured_flag_ref": "", "captured_flag_sha256": "", "captured_flag_length": 0}
+        raw = match.group(0)
+        digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        return {
+            "captured_flag_ref": f"evidence:captured-flag:{digest[:16]}",
+            "captured_flag_sha256": digest,
+            "captured_flag_length": len(raw),
+        }
+
+    def _ctf_capture_summary(self, handle: str, payload: dict[str, object]) -> str:
+        if payload["captured_flag_ref"]:
+            return f"Closed-book local CTF flag capture found a redacted flag ref for {handle}."
+        return (
+            "Closed-book local CTF flag capture searched "
+            f"{payload['searched_url_count']} URL(s) for {handle} without finding a flag."
+        )
+
+    def _ctf_capture_note(self, payload: dict[str, object]) -> str:
+        lines = [
+            "Mode: closed-book local CTF flag capture.",
+            f"Candidate URLs: {payload['candidate_count']}",
+            f"Searched URLs: {payload['searched_url_count']}",
+        ]
+        if payload["captured_flag_ref"]:
+            lines.extend(
+                [
+                    f"Captured flag ref: {payload['captured_flag_ref']}",
+                    f"Flag SHA-256: {payload['captured_flag_sha256']}",
+                    f"Flag length: {payload['captured_flag_length']}",
+                    f"Source URL: {payload['source_url']}",
+                ]
+            )
+        else:
+            lines.append("No flag was observed in the bounded local HTTP search.")
+        lines.append("Raw flag values are intentionally omitted.")
+        return "\n".join(lines)

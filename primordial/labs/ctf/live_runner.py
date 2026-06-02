@@ -16,6 +16,7 @@ from typing import Mapping
 from urllib.error import URLError
 from urllib.request import urlopen
 
+from primordial.core.local_runtime import load_project_env
 from primordial.labs.ctf.sessions import SolveSession
 
 DEFAULT_LAB_ROOT = Path("/run/media/bitloop/DREAD/primordial-labs")
@@ -230,9 +231,17 @@ def run_autonomous_attempt(
     command_results: list[subprocess.CompletedProcess[str]] = []
     try:
         commands = _primordial_attempt_commands(lab_id, target_url, cycles=cycles, max_executions=max_executions)
+        attempt_env = _primordial_attempt_env(lab_root=lab_root, lab_id=lab_id)
+        if attempt_env.get("PRIMORDIAL_TEST_DATABASE_SCHEMA"):
+            lines.append("isolated_runtime_schema=true")
         lines.append(f"command_count={len(commands)}")
         for index, command in enumerate(commands, start=1):
-            result = _run_attempt_command(command, command_runner=command_runner, timeout_seconds=timeout_seconds)
+            result = _run_attempt_command(
+                command,
+                command_runner=command_runner,
+                timeout_seconds=timeout_seconds,
+                attempt_env=attempt_env,
+            )
             command_results.append(result)
             lines.extend(_attempt_command_lines(index, result))
             if result.returncode != 0:
@@ -1011,8 +1020,9 @@ def _run_attempt_command(
     *,
     command_runner: AttemptCommandRunner | None,
     timeout_seconds: float,
+    attempt_env: Mapping[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    env = _primordial_attempt_env()
+    env = dict(attempt_env or _primordial_attempt_env())
     if command_runner is not None:
         return command_runner(command, env)
     try:
@@ -1235,6 +1245,17 @@ def _primordial_attempt_commands(
             target_url,
             "--display-name",
             f"CTF lab {lab_id}",
+            "--metadata-json",
+            json.dumps(
+                {
+                    "ctf_completion_indicator": "autonomous_flags",
+                    "ctf_lab_id": lab_id,
+                    "ctf_target_url": target_url,
+                    "local_ctf_autonomous": True,
+                    "writeup_access_policy": "closed_book",
+                },
+                sort_keys=True,
+            ),
         ),
         (
             "python3",
@@ -1249,13 +1270,44 @@ def _primordial_attempt_commands(
     )
 
 
-def _primordial_attempt_env() -> dict[str, str]:
-    return {
+def _primordial_attempt_env(
+    *,
+    lab_root: Path | None = None,
+    lab_id: str = "",
+) -> dict[str, str]:
+    env = {
         "PRIMORDIAL_AUTONOMY_MODE": "high_autonomy",
         "PRIMORDIAL_ALLOW_EXPLOITATIVE_ACTIONS": "true",
         "PRIMORDIAL_ALLOW_REMOTE_PREMIUM": "false",
         "PRIMORDIAL_CTF_AUTONOMOUS_ATTEMPT": "true",
     }
+    database_url = _primordial_database_url()
+    if database_url and lab_root is not None and lab_id:
+        schema = _ctf_attempt_schema(lab_id)
+        env.update(
+            {
+                "PRIMORDIAL_DATABASE_URL": "",
+                "PRIMORDIAL_TEST_DATABASE_URL": database_url,
+                "PRIMORDIAL_TEST_DATABASE_SCHEMA": schema,
+                "PRIMORDIAL_RUNTIME_DIR": str(lab_root / "runtime" / "primordial-attempts" / schema),
+            }
+        )
+    return env
+
+
+def _primordial_database_url() -> str:
+    if os.environ.get("PRIMORDIAL_DATABASE_URL", "").strip():
+        return os.environ["PRIMORDIAL_DATABASE_URL"].strip()
+    if os.environ.get("PRIMORDIAL_TEST_DATABASE_URL", "").strip():
+        return os.environ["PRIMORDIAL_TEST_DATABASE_URL"].strip()
+    load_project_env(Path.cwd())
+    return os.environ.get("PRIMORDIAL_DATABASE_URL", "").strip() or os.environ.get("PRIMORDIAL_TEST_DATABASE_URL", "").strip()
+
+
+def _ctf_attempt_schema(lab_id: str) -> str:
+    stamp = str(time.time_ns())
+    digest = hashlib.sha1(f"{lab_id}:{stamp}".encode("utf-8")).hexdigest()[:12]
+    return f"primordial_ctf_{digest}"
 
 
 def _target_url_for_phase(phase: int) -> str:

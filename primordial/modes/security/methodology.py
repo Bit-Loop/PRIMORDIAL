@@ -61,6 +61,14 @@ DEFAULT_BLUEPRINTS: dict[TaskKind, TaskBlueprint] = {
         default_priority=86,
         max_attempts=1,
     ),
+    TaskKind.CTF_FLAG_CAPTURE: TaskBlueprint(
+        phase=MethodologyPhase.ANALYSIS,
+        role=AgentRole.ANALYSIS_WORKER,
+        capabilities=("ctf-flag-capture", "flag-collection"),
+        risk_tier=RiskTier.MODERATE,
+        default_priority=83,
+        max_attempts=1,
+    ),
     TaskKind.AD_ENUMERATION: TaskBlueprint(
         phase=MethodologyPhase.RECON,
         role=AgentRole.RECON_WORKER,

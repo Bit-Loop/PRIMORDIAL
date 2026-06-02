@@ -59,6 +59,7 @@ class TaskKind(StrEnum):
     SERVICE_DISCOVERY = "service_discovery"
     DNS_ENUMERATION = "dns_enumeration"
     WEB_CONTENT_DISCOVERY = "web_content_discovery"
+    CTF_FLAG_CAPTURE = "ctf_flag_capture"
     AD_ENUMERATION = "ad_enumeration"
     KERBEROS_USER_DISCOVERY = "kerberos_user_discovery"
     KERBEROS_ATTACK_CHECK = "kerberos_attack_check"

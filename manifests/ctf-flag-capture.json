@@ -1,0 +1,19 @@
+{
+  "name": "ctf-flag-capture",
+  "version": "0.1.0",
+  "description": "Search evidence-backed local CTF HTTP surfaces for flags without using hidden solutions or persisting raw flag values.",
+  "capability_tags": ["ctf-flag-capture", "flag-collection", "evidence-collection"],
+  "allowed_phases": ["analysis"],
+  "runtime": "host",
+  "risk_tier": "moderate",
+  "side_effect_level": "read_only",
+  "required_secrets": [],
+  "input_schema": {"target_id": "string", "base_urls": "array<string>"},
+  "output_schema": {"captured_flag_ref": "string", "candidate_count": "integer", "searched_url_count": "integer"},
+  "timeout_seconds": 90,
+  "retry_policy": {"max_attempts": 1},
+  "evidence_adapter": "ctf_flag_capture_results",
+  "sandbox_profile": "host-readonly-network",
+  "healthcheck": "HTTP client available for local CTF flag capture",
+  "metadata": {"closed_book": true, "raw_flags_redacted": true, "local_targets_only": true}
+}

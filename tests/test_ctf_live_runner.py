@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import subprocess
 import tempfile
@@ -252,6 +253,11 @@ class CTFLiveRunnerTests(unittest.TestCase):
         self.assertEqual(attempt.status, "attempted")
         self.assertEqual(attempt.solve_status, "attempted")
         self.assertEqual(calls[0][:3], ("python3", "-m", "primordial.cli"))
+        metadata = json.loads(calls[1][calls[1].index("--metadata-json") + 1])
+        self.assertTrue(metadata["local_ctf_autonomous"])
+        self.assertEqual(metadata["ctf_completion_indicator"], "autonomous_flags")
+        self.assertEqual(metadata["ctf_target_url"], "http://127.0.0.1:3100/")
+        self.assertEqual(metadata["writeup_access_policy"], "closed_book")
         self.assertIn("primordial_command_1.stdout_sha256=", evidence)
         self.assertIn("completion_indicator=autonomous_flags", evidence)
         self.assertNotIn("Dashboard", evidence)
