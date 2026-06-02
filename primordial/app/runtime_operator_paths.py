@@ -112,6 +112,14 @@ class RuntimeOperatorPathsMixin:
         )
         has_shell = self._has_shell_or_credentialed_access(evidence, interests, findings)
         lab_credentials_configured = self._lab_credentials_configured()
+        intent_policy = self.intent_policy()
+        allows_exploit_research = bool(intent_policy.public_poc_research and intent_policy.searchsploit_allowed)
+        allows_poc_validation = bool(intent_policy.poc_applicability_validation)
+        allows_kerberos = bool(
+            intent_policy.kerberos_policy.asrep_roast_check_allowed
+            or intent_policy.kerberos_policy.kerberoast_check_allowed
+        )
+        allows_credential_validation = bool(intent_policy.credential_policy.credential_validation_allowed)
         has_exploit_candidates = any(
             item.metadata.get("kind") == "exploit_research" and int(item.metadata.get("match_count", 0) or 0) > 0
             for item in evidence
@@ -136,20 +144,31 @@ class RuntimeOperatorPathsMixin:
             and self._has_any_capability(capabilities, "exploit-research", "searchsploit")
             and has_versioned_service_terms
         ):
-            actions.append((0.78, "Run evidence-backed Searchsploit research. Prerequisite: service/version terms from stored recon evidence."))
+            if allows_exploit_research:
+                actions.append((0.78, "Run evidence-backed Searchsploit research. Prerequisite: service/version terms from stored recon evidence."))
+            else:
+                actions.append((0.78, "Switch to an operator intent that allows public PoC research before running Searchsploit. Prerequisite: active intent policy currently blocks it."))
         elif (
             {"tcp_service_discovery", "dns_enumeration", "ad_enumeration"}.intersection(evidence_kinds)
             and "exploit_research" not in evidence_kinds
             and self._has_any_capability(capabilities, "exploit-research", "searchsploit")
         ):
-            actions.append((0.77, "Collect current service/version evidence before Searchsploit research. Prerequisite: exact product/version terms are not yet stored."))
+            if allows_exploit_research:
+                actions.append((0.77, "Collect current service/version evidence before Searchsploit research. Prerequisite: exact product/version terms are not yet stored."))
+            else:
+                actions.append((0.77, "Keep collecting exact service/version evidence; Searchsploit is blocked by the active operator intent."))
         if has_exploit_candidates:
-            if self._poc_adaptation_available(capabilities):
+            if self._poc_adaptation_available(capabilities) and allows_poc_validation:
                 actions.append((0.76, "Run gated public PoC applicability validation against exact service/version evidence. Prerequisite: retained non-DoS Searchsploit candidates."))
+            elif self._poc_adaptation_available(capabilities):
+                actions.append((0.76, "Switch to an operator intent that allows PoC applicability validation before reviewing retained public exploit references."))
             else:
                 actions.append((0.76, "Add a gated PoC applicability/adaptation primitive before validating retained public exploit references. Prerequisite: retained non-DoS Searchsploit candidates."))
         if has_ad_ports and "ad_enumeration" in evidence_kinds and "kerberos_user_discovery" not in evidence_kinds:
-            actions.append((0.74, "Add or run Kerberos/LDAP user discovery before AS-REP/Kerberoast checks. Prerequisite: AD enumeration evidence exists."))
+            if allows_kerberos:
+                actions.append((0.74, "Add or run Kerberos/LDAP user discovery before AS-REP/Kerberoast checks. Prerequisite: AD enumeration evidence exists."))
+            else:
+                actions.append((0.74, "Verify lab/AD operator intent before Kerberos/LDAP user discovery. Prerequisite: active intent blocks principal discovery."))
         if has_lpe_candidate and has_shell:
             actions.append((0.80, "Verify local privilege-escalation candidate. Prerequisite: credentialed shell/access evidence exists."))
         elif has_lpe_candidate:
@@ -159,7 +178,10 @@ class RuntimeOperatorPathsMixin:
             and self._has_any_capability(capabilities, "credentialed-access-check", "smb-session", "winrm")
             and not lab_credentials_configured
         ):
-            actions.append((0.72, "Configure known credentials before credentialed Windows SMB/WinRM verification. Prerequisite: operator-provided username/password."))
+            if allows_credential_validation:
+                actions.append((0.72, "Configure known credentials before credentialed Windows SMB/WinRM verification. Prerequisite: operator-provided username/password."))
+            else:
+                actions.append((0.72, "Switch to an intent that allows credential validation before configuring SMB/WinRM verification credentials."))
 
         return [f"{text} Confidence: {score:.2f}." for score, text in sorted(actions, reverse=True)[:5]]
 
