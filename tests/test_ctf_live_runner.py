@@ -81,6 +81,33 @@ class CTFLiveRunnerTests(unittest.TestCase):
         self.assertIn("kubectl_pods.stdout_sha256=", evidence)
         self.assertNotIn("metadata", evidence)
 
+    def test_phase_three_runner_starts_mbptl_compose_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lab_root = Path(temp_dir)
+            compose_file = lab_root / "assets/phase3-mbptl/mbptl/docker-compose.yml"
+            compose_file.parent.mkdir(parents=True)
+            compose_file.write_text("services:\n  main:\n    image: local\n", encoding="utf-8")
+
+            result = run_phase(
+                3,
+                lab_root=lab_root,
+                command_runner=_runner(stdout='{"Service":"main","State":"running"}'),
+                http_getter=lambda _url: b"mbptl ready body",
+                timeout_seconds=0.01,
+                keep_running=True,
+            )
+
+            evidence = Path(result.evidence_path).read_text(encoding="utf-8")
+
+        self.assertEqual(result.status, "ready")
+        self.assertEqual(result.lab_id, "mbptl")
+        self.assertEqual(result.target_url, "http://127.0.0.1:3183/")
+        self.assertIn("upstream_lab=https://github.com/bayufedra/MBPTL", evidence)
+        self.assertIn("docker_compose_up.returncode=0", evidence)
+        self.assertIn("http.body_sha256=", evidence)
+        self.assertIn("cleanup_deferred=true", evidence)
+        self.assertNotIn("mbptl ready body", evidence)
+
     def test_phase_eight_runner_starts_nyu_littlequery_compose_target(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             lab_root = Path(temp_dir)

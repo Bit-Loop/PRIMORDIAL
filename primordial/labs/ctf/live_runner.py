@@ -20,7 +20,10 @@ from primordial.labs.ctf.sessions import SolveSession
 
 DEFAULT_LAB_ROOT = Path("/run/media/bitloop/DREAD/primordial-labs")
 DEFAULT_KUBERNETES_GOAT_KUBECONFIG = DEFAULT_LAB_ROOT / "kubeconfigs" / "phase5-kind.yaml"
-READY_PHASES = frozenset({1, 2, 5, 7, 8})
+READY_PHASES = frozenset({1, 2, 3, 5, 7, 8})
+MBPTL_RELATIVE_COMPOSE = Path("assets/phase3-mbptl/mbptl/docker-compose.yml")
+MBPTL_PROJECT = "primordial-mbptl"
+MBPTL_MAIN_URL = "http://127.0.0.1:3183/"
 NYU_LITTLEQUERY_RELATIVE_COMPOSE = Path("assets/phase8-nyu-ctf-bench/test/2017/CSAW-Quals/web/littlequery/docker-compose.yml")
 NYU_LITTLEQUERY_PROJECT = "primordial-nyu-littlequery"
 
@@ -110,6 +113,14 @@ def run_phase(
             container_name="primordial-live-vulhub-httpd",
             host_port=3180,
             container_port=80,
+            lab_root=lab_root,
+            command_runner=command_runner,
+            http_getter=http_getter,
+            timeout_seconds=timeout_seconds,
+            keep_running=keep_running,
+        )
+    if phase == 3:
+        return _run_mbptl_lab(
             lab_root=lab_root,
             command_runner=command_runner,
             http_getter=http_getter,
@@ -342,6 +353,104 @@ def _run_docker_http_lab(
             removed = _run(("docker", "rm", "-f", container_name), command_runner=command_runner, check=False)
             lines.extend(_command_lines("docker_rm", removed))
     return _write_result(phase=phase, status=status, lab_id=lab_id, evidence=evidence, lines=lines, blocker=blocker)
+
+
+def _run_mbptl_lab(
+    *,
+    lab_root: Path,
+    command_runner: CommandRunner | None,
+    http_getter: HttpGetter | None,
+    timeout_seconds: float,
+    keep_running: bool,
+) -> LiveLabRunResult:
+    phase = 3
+    lab_id = "mbptl"
+    evidence = _evidence_file(lab_root, phase=phase, lab_id=lab_id)
+    compose_file = lab_root / MBPTL_RELATIVE_COMPOSE
+    compose_dir = compose_file.parent
+    env = {"WEB1_PORT": "3183", "WEB2_PORT": "3184"}
+    down_command = (
+        "docker",
+        "compose",
+        "--project-directory",
+        str(compose_dir),
+        "-f",
+        str(compose_file),
+        "-p",
+        MBPTL_PROJECT,
+        "down",
+        "--remove-orphans",
+    )
+    lines = _evidence_header(phase=phase, lab_id=lab_id) + [
+        "upstream_lab=https://github.com/bayufedra/MBPTL",
+        f"compose_file={compose_file}",
+        f"target_url={MBPTL_MAIN_URL}",
+    ]
+    status = "blocked"
+    blocker = ""
+    started = False
+    try:
+        if not compose_file.is_file():
+            raise RuntimeError(f"compose file is missing: {compose_file}")
+        up = _run(
+            (
+                "docker",
+                "compose",
+                "--project-directory",
+                str(compose_dir),
+                "-f",
+                str(compose_file),
+                "-p",
+                MBPTL_PROJECT,
+                "up",
+                "-d",
+            ),
+            command_runner=command_runner,
+            env=env,
+        )
+        started = True
+        lines.extend(_command_lines("docker_compose_up", up))
+        ps = _run(
+            (
+                "docker",
+                "compose",
+                "--project-directory",
+                str(compose_dir),
+                "-f",
+                str(compose_file),
+                "-p",
+                MBPTL_PROJECT,
+                "ps",
+                "--format",
+                "json",
+            ),
+            command_runner=command_runner,
+            env=env,
+        )
+        lines.extend(_command_lines("docker_compose_ps", ps))
+        body = _wait_http(MBPTL_MAIN_URL, timeout_seconds=timeout_seconds, http_getter=http_getter)
+        lines.extend(_http_lines(MBPTL_MAIN_URL, body))
+        status = "ready"
+    except Exception as exc:  # noqa: BLE001 - lab readiness failures must be recorded as blockers
+        status = "blocked"
+        blocker = str(exc)
+        lines.append(f"blocker={blocker}")
+    finally:
+        if keep_running and started and status == "ready":
+            lines.append("cleanup_deferred=true")
+        else:
+            down = _run(down_command, command_runner=command_runner, check=False, env=env)
+            lines.extend(_command_lines("docker_compose_down", down))
+    return _write_result(
+        phase=phase,
+        status=status,
+        lab_id=lab_id,
+        evidence=evidence,
+        lines=lines,
+        blocker=blocker,
+        target_url=MBPTL_MAIN_URL,
+        cleanup_command=down_command,
+    )
 
 
 def _run_localstack_lab(
@@ -835,6 +944,7 @@ def _target_url_for_phase(phase: int) -> str:
     urls = {
         1: "http://127.0.0.1:3100/",
         2: "http://127.0.0.1:3180/",
+        3: MBPTL_MAIN_URL,
         5: "kubernetes://kind-primordial-k8s",
         7: "http://127.0.0.1:4566/",
     }
