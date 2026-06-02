@@ -57,6 +57,33 @@ class CTFLiveRunnerTests(unittest.TestCase):
         self.assertNotIn("healthy lab body", evidence)
         self.assertNotIn(fixture_flag(), evidence)
 
+    def test_phase_two_runner_mounts_generated_flag_without_raw_flag_evidence(self) -> None:
+        calls: list[tuple[str, ...]] = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = run_phase(
+                2,
+                lab_root=Path(temp_dir),
+                command_runner=_runner(calls=calls),
+                http_getter=lambda _url: b"vulnerable apache lab",
+                timeout_seconds=0.01,
+            )
+
+            evidence = Path(result.evidence_path).read_text(encoding="utf-8")
+            raw_flag = (
+                Path(temp_dir) / "runtime/phase2-vulhub-httpd-cve-2021-41773/primordial_flag.txt"
+            ).read_text(encoding="utf-8").strip()
+
+        docker_run = next(command for command in calls if command[:2] == ("docker", "run"))
+        self.assertEqual(result.status, "ready")
+        self.assertEqual(result.lab_id, "vulhub-httpd-cve-2021-41773")
+        self.assertTrue(raw_flag.startswith("ctf{phase2-"))
+        self.assertIn("vulnerability_cve_id=CVE-2021-41773", evidence)
+        self.assertIn("flag_mount_container_path=/primordial_flag.txt", evidence)
+        self.assertIn("flag_value_sha256=", evidence)
+        self.assertIn("flag_value_redacted=true", evidence)
+        self.assertIn("/primordial_flag.txt:ro", " ".join(docker_run))
+        self.assertNotIn(raw_flag, evidence)
+
     def test_phase_seven_runner_uses_localstack_and_hashes_cli_output(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             result = run_phase(
@@ -362,8 +389,10 @@ class CTFLiveRunnerTests(unittest.TestCase):
         self.assertNotIn("PRIMORDIAL_DATABASE_URL is required", evidence)
 
 
-def _runner(stdout: str = "ok"):
+def _runner(stdout: str = "ok", calls: list[tuple[str, ...]] | None = None):
     def run(command: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
+        if calls is not None:
+            calls.append(command)
         if command[:3] == ("docker", "rm", "-f"):
             selected_stdout = command[-1]
         elif command[:3] == ("docker", "network", "create"):

