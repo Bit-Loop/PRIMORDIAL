@@ -31,6 +31,7 @@ from primordial.core.providers.agent_chat_client import (
     AgentChatResponse,
     AgentChatSettings,
 )
+from primordial.core.sensitive_text import redact_sensitive_text
 from primordial.core.workers import WorkerContract, WorkerOffer
 
 
@@ -160,7 +161,7 @@ class AgentChatPremiumReviewRunner:
                 estimated_cost_usd=estimated_cost,
             )
         except Exception as exc:  # noqa: BLE001 - cost telemetry must not hide a completed review
-            payload["error"] = str(exc)
+            payload["error"] = _redact_agent_chat_text(str(exc))
             return payload
         payload["recorded"] = True
         return payload
@@ -246,10 +247,10 @@ class AgentChatPremiumReviewRunner:
             f"Structured output: {structured}",
         ]
         if response.warnings:
-            lines.append("Warnings: " + "; ".join(response.warnings))
+            lines.append("Warnings: " + "; ".join(_redact_agent_chat_value(response.warnings)))
         if response.text:
             lines.append("")
-            lines.append(response.text[:4000])
+            lines.append(_redact_agent_chat_text(response.text)[:4000])
         return "\n".join(lines)
 
     def _trace(
@@ -301,7 +302,7 @@ def _remote_review_failure_result(
 ) -> TaskExecutionResult:
     result = TaskExecutionResult(summary="remote premium review failed")
     result.success = False
-    result.error = str(exc)
+    result.error = _redact_agent_chat_text(str(exc))
     result.traces.append(
         runner._trace(
             task,
@@ -309,7 +310,7 @@ def _remote_review_failure_result(
             summary="Agent chat API call failed",
             model=model,
             provider=runner.client.settings.provider,
-            metadata={"error": str(exc)},
+            metadata={"error": _redact_agent_chat_text(str(exc))},
         )
     )
     result.events.append(
@@ -318,7 +319,7 @@ def _remote_review_failure_result(
             summary="Remote premium review failed",
             target_id=target.id,
             task_id=task.id,
-            metadata={"error": str(exc), "adapter": "agent_chat_api"},
+            metadata={"error": _redact_agent_chat_text(str(exc)), "adapter": "agent_chat_api"},
         )
     )
     return result
@@ -371,9 +372,9 @@ def _remote_review_trace(
             "conversation_id": response.conversation_id,
             "elapsed_seconds": response.elapsed_seconds,
             "session_resumed": response.session_resumed,
-            "warnings": response.warnings,
+            "warnings": _redact_agent_chat_value(response.warnings),
             "structured_output": structured,
-            "remote_cost": cost_payload,
+            "remote_cost": _redact_agent_chat_value(cost_payload),
         },
     )
 
@@ -401,8 +402,8 @@ def _remote_review_evidence(
         freshness=0.95,
         metadata={
             "kind": "premium_review_result",
-            "review": review if structured else {},
-            "response_text": response.text,
+            "review": _redact_agent_chat_value(review) if structured else {},
+            "response_text": _redact_agent_chat_text(response.text),
             "structured_output": structured,
             "provider": response.provider,
             "model": response.model or model or "provider-default",
@@ -410,7 +411,7 @@ def _remote_review_evidence(
             "conversation_id": response.conversation_id,
             "adapter": "agent_chat_api",
             "expected_output_type": runner._expected_output_type(task),
-            "remote_cost": cost_payload,
+            "remote_cost": _redact_agent_chat_value(cost_payload),
         },
     )
 
@@ -457,7 +458,7 @@ def _remote_review_event(
             "provider": response.provider,
             "model": response.model or model or "provider-default",
             "structured_output": structured,
-            "remote_cost": cost_payload,
+            "remote_cost": _redact_agent_chat_value(cost_payload),
         },
     )
 
@@ -486,3 +487,19 @@ def parse_review_json(text: str) -> dict[str, Any] | None:
         if isinstance(parsed, dict):
             return parsed
     return None
+
+
+def _redact_agent_chat_text(value: object) -> str:
+    return redact_sensitive_text(str(value or ""))
+
+
+def _redact_agent_chat_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _redact_agent_chat_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_agent_chat_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [_redact_agent_chat_value(item) for item in value]
+    if isinstance(value, str):
+        return _redact_agent_chat_text(value)
+    return value
