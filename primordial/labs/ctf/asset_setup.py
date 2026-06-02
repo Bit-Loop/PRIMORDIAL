@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import argparse
+import fnmatch
 import hashlib
 import json
 from pathlib import Path
@@ -23,6 +24,7 @@ class LabAsset:
     dest_name: str
     required_tools: tuple[str, ...] = ()
     denied_paths: tuple[str, ...] = ()
+    denied_name_patterns: tuple[str, ...] = ()
     sparse_paths: tuple[str, ...] = ()
     provisioning_note: str = ""
 
@@ -114,6 +116,7 @@ LAB_ASSETS: tuple[LabAsset, ...] = (
         dest_name="phase8-ctf-dojo",
         required_tools=("git", "docker", "python3"),
         denied_paths=("writeups/", "solutions/", "trajectories/", "find_writeups.py"),
+        denied_name_patterns=("writeup*", "*solution*", "solve.*"),
         provisioning_note="CTF-Dojo assets are cloned as executable benchmark scaffolding, not solution context.",
     ),
     LabAsset(
@@ -123,7 +126,15 @@ LAB_ASSETS: tuple[LabAsset, ...] = (
         dest_name="phase8-nyu-ctf-bench",
         required_tools=("git", "docker", "python3"),
         denied_paths=("writeups/", "solutions/", "leaderboard_submissions/"),
-        provisioning_note="NYU CTF Bench is cloned for local benchmark tasks and evidence-backed scoring.",
+        denied_name_patterns=("writeup*", "*solution*", "solve.*", "hints"),
+        sparse_paths=(
+            "README.md",
+            "development_dataset.json",
+            "python",
+            "scripts",
+            "test/2017/CSAW-Quals/web/littlequery",
+        ),
+        provisioning_note="NYU CTF Bench uses a sparse local checkout seeded with benchmark metadata and one runnable web challenge.",
     ),
 )
 
@@ -157,6 +168,7 @@ def setup_asset(
     for name, result in tool_results:
         lines.extend(_command_lines(f"tool_{_label(name)}", result))
     lines.extend(f"denied_path={path}" for path in asset.denied_paths)
+    lines.extend(f"denied_name_pattern={pattern}" for pattern in asset.denied_name_patterns)
     if asset.provisioning_note:
         lines.append(f"provisioning_note={asset.provisioning_note}")
     try:
@@ -283,7 +295,26 @@ def _remove_denied_paths(asset: LabAsset, asset_dir: Path) -> tuple[str, ...]:
         else:
             target.unlink()
         removed.append(rel_path)
+    for target in _matching_denied_name_paths(asset, asset_dir):
+        rel_path = target.relative_to(root).as_posix()
+        if target.is_dir():
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+        removed.append(rel_path)
     return tuple(removed)
+
+
+def _matching_denied_name_paths(asset: LabAsset, asset_dir: Path) -> tuple[Path, ...]:
+    if not asset.denied_name_patterns:
+        return ()
+    root = asset_dir.resolve()
+    matches: list[Path] = []
+    for target in root.rglob("*"):
+        name = target.name
+        if any(fnmatch.fnmatchcase(name, pattern) for pattern in asset.denied_name_patterns):
+            matches.append(target)
+    return tuple(sorted(matches, key=lambda path: len(path.parts), reverse=True))
 
 
 def _probe_tools(
