@@ -3,8 +3,8 @@ from __future__ import annotations
 from primordial.app.runtime_deps import (
     json_ready,
     Path,
-    re,
 )
+from primordial.core.sensitive_text import redact_sensitive_text
 
 class RuntimeInspectionMixin:
     def inspect_object(self, kind: str, object_id: str, *, limit: int = 25) -> dict[str, object]:
@@ -225,16 +225,7 @@ class RuntimeInspectionMixin:
         }
 
     def _redact_inspector_text(self, text: str) -> str:
-        redacted = re.sub(
-            r"(?i)(api[_-]?key|token|secret|password|passwd|webhook)([\"']?\s*[:=]\s*[\"']?)([^\"'\s,}]{4,})",
-            lambda match: f"{match.group(1)}{match.group(2)}[redacted]",
-            text,
-        )
-        return re.sub(
-            r"(?i)(authorization\s*:\s*bearer\s+)([A-Za-z0-9._~+/=-]{8,})",
-            lambda match: f"{match.group(1)}[redacted]",
-            redacted,
-        )
+        return redact_sensitive_text(text)
 
     def _inspect_error_detail(self, payload: dict[str, object], related: dict[str, object]) -> dict[str, object]:
         messages: list[dict[str, str]] = []
