@@ -27,6 +27,7 @@ class PrimitiveContentHandlerMixin:
             {
                 "target": target.as_payload(),
                 "base_urls": bases,
+                "urls_redacted": True,
                 "word_count": len(words),
                 "extensions": list(CONTENT_DISCOVERY_EXTENSIONS),
                 "discovered": discovered,
@@ -47,6 +48,7 @@ class PrimitiveContentHandlerMixin:
             metadata={
                 "kind": "web_content_discovery",
                 "base_urls": bases,
+                "urls_redacted": True,
                 "word_count": len(words),
                 "extensions": list(CONTENT_DISCOVERY_EXTENSIONS),
                 "discovered": discovered,

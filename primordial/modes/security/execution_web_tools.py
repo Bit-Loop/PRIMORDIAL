@@ -97,16 +97,19 @@ class PrimitiveWebToolMixin:
                 body = response.read(4096)
                 status = int(response.status)
                 headers = {key.lower(): value for key, value in response.headers.items()}
+                final_url = response.geturl()
         except error.HTTPError as exc:
             body = exc.read(4096)
             status = int(exc.code)
             headers = {key.lower(): value for key, value in exc.headers.items()}
+            final_url = exc.geturl()
         except Exception:
             return None
         if status not in CONTENT_DISCOVERY_INTERESTING_STATUS:
             return None
         return {
-            "url": url,
+            "url": self._sanitize_surface_url(final_url),
+            "url_redacted": True,
             "path": path,
             "status_code": status,
             "content_type": headers.get("content-type", ""),
