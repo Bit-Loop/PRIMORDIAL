@@ -35,13 +35,16 @@ class FailureAnalysis:
     ) -> FailureAnalysis:
         root_cause = _required(suspected_root_cause, "suspected_root_cause")
         fix = _required(proposed_fix, "proposed_fix")
+        evidence_refs = _text_tuple(related_evidence, "related_evidence")
+        policy_refs = _text_tuple(related_policy_decisions, "related_policy_decisions")
+        model_refs = _text_tuple(related_model_runs, "related_model_runs")
         payload = {
             "id": id,
             "solve_session_id": solve_session_id,
             "failure_class": failure_class,
-            "related_evidence": tuple(related_evidence),
-            "related_policy_decisions": tuple(related_policy_decisions),
-            "related_model_runs": tuple(related_model_runs),
+            "related_evidence": evidence_refs,
+            "related_policy_decisions": policy_refs,
+            "related_model_runs": model_refs,
             "suspected_root_cause": root_cause,
             "proposed_fix": fix,
             "github_issue_id": github_issue_id,
@@ -51,9 +54,9 @@ class FailureAnalysis:
             id=_required(id, "id"),
             solve_session_id=_required(solve_session_id, "solve_session_id"),
             failure_class=_required(failure_class, "failure_class"),
-            related_evidence=_text_tuple(related_evidence),
-            related_policy_decisions=_text_tuple(related_policy_decisions),
-            related_model_runs=_text_tuple(related_model_runs),
+            related_evidence=evidence_refs,
+            related_policy_decisions=policy_refs,
+            related_model_runs=model_refs,
             suspected_root_cause=root_cause,
             proposed_fix=fix,
             github_issue_id=str(github_issue_id).strip(),
@@ -68,5 +71,7 @@ def _required(value: str, name: str) -> str:
     return text
 
 
-def _text_tuple(value: list[str] | tuple[str, ...]) -> tuple[str, ...]:
+def _text_tuple(value: list[str] | tuple[str, ...], name: str) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(f"FailureAnalysis {name} must be a list or tuple")
     return tuple(str(item).strip() for item in value if str(item).strip())
