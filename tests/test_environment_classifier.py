@@ -1,17 +1,13 @@
 from __future__ import annotations
 
 import unittest
-from pathlib import Path
 
 from primordial.core.environment import EnvironmentClassifier
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-
-
 class EnvironmentClassifierTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.classifier = EnvironmentClassifier.from_goal_file(REPO_ROOT / "goal" / "fragments" / "environments.yaml")
+        self.classifier = EnvironmentClassifier.default()
 
     def test_profile_label_alone_does_not_upgrade_operator_intent(self) -> None:
         classification = self.classifier.classify(profile="hack_the_box")

@@ -9,6 +9,35 @@ import yaml
 
 SAFE_ENVIRONMENT = "real_world"
 SAFE_DEFAULT_INTENT = "recon_only"
+DEFAULT_ENVIRONMENTS = {
+    "real_world": {
+        "label": "Real-world authorized target",
+        "default_intent": SAFE_DEFAULT_INTENT,
+        "verified_lab": False,
+    },
+    "platform_lab": {
+        "label": "Verified platform lab",
+        "default_intent": "htb_lab",
+        "verified_lab": True,
+    },
+    "local_ctf_container": {
+        "label": "Verified local CTF/container lab",
+        "default_intent": "local_ctf_container",
+        "verified_lab": True,
+    },
+}
+DEFAULT_PROFILE_UPGRADES = {
+    "hack_the_box": {
+        "environment": "platform_lab",
+        "default_intent": "htb_lab",
+        "requires_environment_proof": True,
+    },
+    "co_internal_lab": {
+        "environment": "local_ctf_container",
+        "default_intent": "local_ctf_container",
+        "requires_environment_proof": True,
+    },
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,16 +133,27 @@ class EnvironmentClassifier:
 
     @classmethod
     def default(cls) -> "EnvironmentClassifier":
+        environments = {
+            environment_id: EnvironmentDefinition(
+                id=environment_id,
+                label=str(item["label"]),
+                default_intent=str(item["default_intent"]),
+                verified_lab=bool(item["verified_lab"]),
+            )
+            for environment_id, item in DEFAULT_ENVIRONMENTS.items()
+        }
+        upgrades = {
+            profile: ProfileIntentUpgrade(
+                profile=profile,
+                environment=str(item["environment"]),
+                default_intent=str(item["default_intent"]),
+                requires_environment_proof=bool(item["requires_environment_proof"]),
+            )
+            for profile, item in DEFAULT_PROFILE_UPGRADES.items()
+        }
         return cls(
-            environments={
-                SAFE_ENVIRONMENT: EnvironmentDefinition(
-                    id=SAFE_ENVIRONMENT,
-                    label="Real-world authorized target",
-                    default_intent=SAFE_DEFAULT_INTENT,
-                    verified_lab=False,
-                )
-            },
-            profile_upgrades={},
+            environments=environments,
+            profile_upgrades=upgrades,
         )
 
     def classify(

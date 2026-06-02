@@ -13,17 +13,6 @@ from primordial.app.runtime_deps import (
 
 class RuntimeEnvironmentMixin:
     def _load_environment_classifier(self, project_root: Path) -> EnvironmentClassifier:
-        candidates = [
-            project_root / "goal" / "fragments" / "environments.yaml",
-            Path(__file__).resolve().parents[2] / "goal" / "fragments" / "environments.yaml",
-        ]
-        for environment_contract in candidates:
-            if not environment_contract.exists():
-                continue
-            try:
-                return EnvironmentClassifier.from_goal_file(environment_contract)
-            except Exception:  # noqa: BLE001 - fall back to the next deterministic source.
-                continue
         return EnvironmentClassifier.default()
 
     def _classify_environment(
