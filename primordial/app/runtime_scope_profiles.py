@@ -72,12 +72,19 @@ class RuntimeScopeProfilesMixin:
         for profile_id, payload in sorted(custom.items()):
             if not isinstance(payload, dict):
                 continue
+            base_profile = str(payload.get("base_profile", ScopeProfile.HACKERONE.value))
+            environment = self._classify_environment(
+                profile=base_profile,
+                resolved_profile=base_profile,
+            )
             custom_profiles.append(
                 {
                     "id": str(profile_id),
                     "label": str(payload.get("label", profile_id)),
-                    "base_profile": str(payload.get("base_profile", ScopeProfile.HACKERONE.value)),
+                    "base_profile": base_profile,
                     "description": str(payload.get("description", "")),
+                    "default_intent": environment.default_intent,
+                    "environment_classification": environment.as_payload(),
                     "builtin": False,
                 }
             )
