@@ -97,7 +97,7 @@ class SolveSession:
         blocked = {
             "action_id": _required(action_id, "action_id"),
             "reason": _required(reason, "reason"),
-            "policy_decision_id": _required(policy_decision_id, "policy_decision_id"),
+            "policy_decision_id": _policy_ref(policy_decision_id, "policy_decision_id"),
         }
         reject_hidden_flag_material(blocked, path="solve_session.blocked_action", label="SolveSession")
         return replace(self, blocked_actions=self.blocked_actions + (blocked,))
@@ -110,7 +110,7 @@ class SolveSession:
         decision: str,
     ) -> SolveSession:
         policy_decision = {
-            "decision_id": _required(decision_id, "decision_id"),
+            "decision_id": _policy_ref(decision_id, "decision_id"),
             "action": _required(action, "action"),
             "decision": _required(decision, "decision"),
         }
@@ -127,7 +127,7 @@ class SolveSession:
         submission = {
             "challenge_id": _required(challenge_id, "challenge_id"),
             "captured_flag_ref": _required(captured_flag_ref, "captured_flag_ref"),
-            "policy_decision_id": _required(policy_decision_id, "policy_decision_id"),
+            "policy_decision_id": _policy_ref(policy_decision_id, "policy_decision_id"),
         }
         reject_hidden_flag_material(submission, path="solve_session.flag_submission", label="SolveSession")
         if self.active_intent not in CTF_SOLVE_INTENTS:
@@ -189,6 +189,13 @@ def _evidence_ref(value: str, name: str) -> str:
     text = _required(value, name)
     if not text.startswith("evidence:"):
         raise ValueError(f"SolveSession {name} must use evidence:<id>")
+    return text
+
+
+def _policy_ref(value: str, name: str) -> str:
+    text = _required(value, name)
+    if not text.startswith("policy:"):
+        raise ValueError(f"SolveSession {name} must use policy:<id>")
     return text
 
 
