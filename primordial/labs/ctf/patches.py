@@ -42,10 +42,10 @@ class PatchProposal:
         benchmark_run_id: str = "",
     ) -> PatchProposal:
         change = _required(proposed_change, "proposed_change")
-        normalized_files = _text_tuple(files_changed)
-        normalized_tests = _text_tuple(tests_added)
-        validations = _result_tuple(validation_results)
-        regressions = _result_tuple(regression_results)
+        normalized_files = _text_tuple(files_changed, "files_changed")
+        normalized_tests = _text_tuple(tests_added, "tests_added")
+        validations = _result_tuple(validation_results, "validation_results")
+        regressions = _result_tuple(regression_results, "regression_results")
         hardcode_scan = _hardcode_result_dict(hardcode_scan_result)
         normalized_status = _required(status, "status")
         payload = {
@@ -89,17 +89,24 @@ def _required(value: str, name: str) -> str:
     return text
 
 
-def _text_tuple(value: list[str] | tuple[str, ...]) -> tuple[str, ...]:
+def _text_tuple(value: list[str] | tuple[str, ...], name: str) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(f"PatchProposal {name} must be a list or tuple")
     return tuple(str(item).strip() for item in value if str(item).strip())
 
 
 def _result_tuple(
     value: list[Mapping[str, str]] | tuple[Mapping[str, str], ...],
+    name: str,
 ) -> tuple[dict[str, str], ...]:
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(f"PatchProposal {name} must be a list or tuple")
     return tuple(_result_dict(item) for item in value)
 
 
 def _result_dict(value: Mapping[str, str]) -> dict[str, str]:
+    if not isinstance(value, Mapping):
+        raise ValueError("PatchProposal result entries must be mappings")
     return {str(key): str(item) for key, item in dict(value).items()}
 
 
