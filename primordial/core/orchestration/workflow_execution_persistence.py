@@ -22,6 +22,7 @@ from primordial.core.orchestration.workflow_deps import (
     TaskStatus,
     utc_now,
 )
+from primordial.core.sensitive_text import redact_sensitive_text
 
 class WorkflowExecutionPersistenceMixin:
     def _persist_execution_result(self, task: Task, run: TaskRun, result, report: OrchestrationReport) -> None:
@@ -250,8 +251,8 @@ class WorkflowExecutionPersistenceMixin:
             else:
                 task.status = TaskStatus.FAILED
                 run.status = TaskRunStatus.TIMED_OUT if result_timed_out else TaskRunStatus.FAILED
-            run.error = result.error
-            run.trace_summary = result.error or result.summary
+            run.error = self._redact_result_error(result.error)
+            run.trace_summary = run.error or result.summary
             if result_timed_out:
                 run.metadata["timed_out"] = True
                 task.metadata["last_run_timed_out"] = True
@@ -272,10 +273,11 @@ class WorkflowExecutionPersistenceMixin:
         self.store.insert_event(
             EventRecord(
                 type=EventType.TASK_SUCCEEDED if result.success else EventType.TASK_FAILED,
-                summary=(result.summary if result.success else result.error or result.summary) or task.title,
+                summary=(result.summary if result.success else self._redact_result_error(result.error) or result.summary)
+                or task.title,
                 target_id=task.target_id,
                 task_id=task.id,
-                metadata={"error": result.error} if result.error else {},
+                metadata={"error": self._redact_result_error(result.error)} if result.error else {},
             )
         )
         if self.event_bus is not None:
@@ -289,3 +291,6 @@ class WorkflowExecutionPersistenceMixin:
                 },
             )
         report.completed_runs.append(run)
+
+    def _redact_result_error(self, value: object) -> str:
+        return redact_sensitive_text(str(value or "")).strip()
