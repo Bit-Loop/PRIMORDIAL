@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import subprocess
 import time
 from typing import Mapping
@@ -21,7 +22,9 @@ from primordial.labs.ctf.sessions import SolveSession
 
 DEFAULT_LAB_ROOT = Path("/run/media/bitloop/DREAD/primordial-labs")
 DEFAULT_KUBERNETES_GOAT_KUBECONFIG = DEFAULT_LAB_ROOT / "kubeconfigs" / "phase5-kind.yaml"
-READY_PHASES = frozenset({1, 2, 3, 4, 5, 6, 7, 8})
+READY_PHASES = frozenset({0, 1, 2, 3, 4, 5, 6, 7, 8})
+PHASE_ZERO_HARNESS_PORT = 3090
+PHASE_ZERO_HARNESS_URL = f"http://127.0.0.1:{PHASE_ZERO_HARNESS_PORT}/"
 MBPTL_RELATIVE_COMPOSE = Path("assets/phase3-mbptl/mbptl/docker-compose.yml")
 MBPTL_PROJECT = "primordial-mbptl"
 MBPTL_MAIN_URL = "http://127.0.0.1:3183/"
@@ -101,6 +104,14 @@ def run_phase(
     timeout_seconds: float = 90.0,
     keep_running: bool = False,
 ) -> LiveLabRunResult:
+    if phase == 0:
+        return _run_phase_zero_harness(
+            lab_root=lab_root,
+            http_getter=http_getter,
+            timeout_seconds=timeout_seconds,
+            keep_running=keep_running,
+            command_runner=command_runner,
+        )
     if phase == 1:
         return _run_docker_http_lab(
             phase=1,
@@ -173,6 +184,93 @@ def run_phase(
             keep_running=keep_running,
         )
     return _blocked_phase_result(phase, lab_root=lab_root)
+
+
+def _run_phase_zero_harness(
+    *,
+    lab_root: Path,
+    http_getter: HttpGetter | None,
+    timeout_seconds: float,
+    keep_running: bool,
+    command_runner: CommandRunner | None,
+) -> LiveLabRunResult:
+    phase = 0
+    lab_id = "local-harness"
+    evidence = _evidence_file(lab_root, phase=phase, lab_id=lab_id)
+    harness_root = lab_root / "runtime" / "phase0-harness"
+    site_dir = harness_root / "site"
+    pid_file = harness_root / "server.pid"
+    url = PHASE_ZERO_HARNESS_URL
+    lines = _evidence_header(phase=phase, lab_id=lab_id) + [
+        "harness=python-http-local",
+        f"target_url={url}",
+    ]
+    status = "blocked"
+    blocker = ""
+    process: subprocess.Popen[str] | None = None
+    cleanup_command: tuple[str, ...] = ()
+    try:
+        site_dir.mkdir(parents=True, exist_ok=True)
+        flag = _phase_zero_flag()
+        flag_path = site_dir / "flag.txt"
+        flag_path.write_text(flag + "\n", encoding="utf-8")
+        (site_dir / "index.html").write_text(_phase_zero_index(), encoding="utf-8")
+        lines.extend(
+            [
+                f"harness_root={harness_root}",
+                f"flag_file_sha256={_sha256_bytes(flag_path.read_bytes())}",
+                f"flag_value_sha256={_sha256_text(flag)}",
+                f"flag_value_bytes={len(flag.encode('utf-8'))}",
+                "flag_value_redacted=true",
+            ]
+        )
+        _stop_stale_phase_zero_server(pid_file)
+        if command_runner is None:
+            process = subprocess.Popen(
+                (
+                    "python3",
+                    "-m",
+                    "http.server",
+                    str(PHASE_ZERO_HARNESS_PORT),
+                    "--bind",
+                    "127.0.0.1",
+                    "--directory",
+                    str(site_dir),
+                ),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+            pid_file.write_text(str(process.pid), encoding="utf-8")
+            cleanup_command = ("kill", str(process.pid))
+            lines.append(f"server_pid={process.pid}")
+        else:
+            lines.append("server_pid=simulated")
+        body = _wait_http(url, timeout_seconds=timeout_seconds, http_getter=http_getter)
+        lines.extend(_http_lines(url, body))
+        status = "ready"
+    except Exception as exc:  # noqa: BLE001 - harness readiness failures are recorded as blockers
+        status = "blocked"
+        blocker = str(exc)
+        lines.append(f"blocker={blocker}")
+    finally:
+        if keep_running and status == "ready":
+            lines.append("cleanup_deferred=true")
+        elif process is not None:
+            _terminate_process(process)
+            lines.append("cleanup_deferred=false")
+        elif command_runner is not None:
+            lines.append("cleanup_deferred=false")
+    return _write_result(
+        phase=phase,
+        status=status,
+        lab_id=lab_id,
+        evidence=evidence,
+        lines=lines,
+        blocker=blocker,
+        target_url=url,
+        cleanup_command=cleanup_command if keep_running and status == "ready" else (),
+    )
 
 
 def run_autonomous_attempt(
@@ -1064,6 +1162,46 @@ def _cleanup_command_for_phase(phase: int) -> tuple[str, ...]:
     return ("docker", "rm", "-f", container) if container else ()
 
 
+def _phase_zero_flag() -> str:
+    digest = hashlib.sha256(f"phase0:{time.time_ns()}:{os.getpid()}".encode("utf-8")).hexdigest()[:24]
+    return "ctf" + "{" + f"phase0-{digest}" + "}"
+
+
+def _phase_zero_index() -> str:
+    return (
+        "<!doctype html>\n"
+        "<html><head><title>PRIMORDIAL Phase 0 Harness</title></head>\n"
+        "<body><h1>Local CTF Harness</h1><a href=\"/flag.txt\">health artifact</a></body></html>\n"
+    )
+
+
+def _stop_stale_phase_zero_server(pid_file: Path) -> None:
+    try:
+        pid = int(pid_file.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    except OSError:
+        return
+    finally:
+        try:
+            pid_file.unlink()
+        except OSError:
+            pass
+
+
+def _terminate_process(process: subprocess.Popen[str]) -> None:
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=5)
+
+
 def _wait_http(url: str, *, timeout_seconds: float, http_getter: HttpGetter | None) -> bytes:
     deadline = time.monotonic() + timeout_seconds
     last_error = ""
@@ -1312,6 +1450,7 @@ def _ctf_attempt_schema(lab_id: str) -> str:
 
 def _target_url_for_phase(phase: int) -> str:
     urls = {
+        0: PHASE_ZERO_HARNESS_URL,
         1: "http://127.0.0.1:3100/",
         2: "http://127.0.0.1:3180/",
         3: MBPTL_MAIN_URL,

@@ -11,6 +11,29 @@ from tests.support import fixture_flag
 
 
 class CTFLiveRunnerTests(unittest.TestCase):
+    def test_phase_zero_runner_starts_local_harness_without_raw_flag_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = run_phase(
+                0,
+                lab_root=Path(temp_dir),
+                command_runner=_runner(),
+                http_getter=lambda _url: b"phase zero harness",
+                timeout_seconds=0.01,
+            )
+
+            evidence = Path(result.evidence_path).read_text(encoding="utf-8")
+            raw_flag = (Path(temp_dir) / "runtime/phase0-harness/site/flag.txt").read_text(encoding="utf-8").strip()
+
+        self.assertEqual(result.status, "ready")
+        self.assertEqual(result.lab_id, "local-harness")
+        self.assertEqual(result.target_url, "http://127.0.0.1:3090/")
+        self.assertTrue(raw_flag.startswith("ctf{phase0-"))
+        self.assertIn("harness=python-http-local", evidence)
+        self.assertIn("flag_value_sha256=", evidence)
+        self.assertIn("flag_value_redacted=true", evidence)
+        self.assertIn("http.body_sha256=", evidence)
+        self.assertNotIn(raw_flag, evidence)
+
     def test_phase_one_runner_writes_hashed_http_evidence_without_raw_body(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             result = run_phase(
@@ -57,12 +80,12 @@ class CTFLiveRunnerTests(unittest.TestCase):
 
     def test_unsupported_phases_record_concrete_blockers(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            result = run_phase(0, lab_root=Path(temp_dir), command_runner=_runner())
+            result = run_phase(99, lab_root=Path(temp_dir), command_runner=_runner())
 
             evidence = Path(result.evidence_path).read_text(encoding="utf-8")
 
         self.assertEqual(result.status, "blocked")
-        self.assertIn("Phase 0", result.blocker)
+        self.assertIn("not configured", result.blocker)
         self.assertIn("blocker=", evidence)
 
     def test_phase_five_runner_hashes_kubernetes_goat_cluster_evidence(self) -> None:
@@ -209,7 +232,7 @@ class CTFLiveRunnerTests(unittest.TestCase):
             )
 
         self.assertEqual([result.phase for result in results], list(range(9)))
-        self.assertEqual([result.status for result in results if result.phase in {1, 2, 5, 7}], ["ready"] * 4)
+        self.assertEqual([result.status for result in results if result.phase in {0, 1, 2, 5, 7}], ["ready"] * 5)
 
     def test_phase_runner_can_defer_cleanup_while_autonomous_attempt_uses_live_lab(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
