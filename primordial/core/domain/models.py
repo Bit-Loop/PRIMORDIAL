@@ -31,6 +31,7 @@ from primordial.core.domain.enums import (
 )
 from primordial.core.domain.model_records import (
     AgentTrace,
+    AttemptTrajectory,
     ArtifactRecord,
     CheckpointRecord,
     DiscordDelivery,
@@ -59,6 +60,7 @@ from primordial.core.domain.model_utils import json_ready, new_id, parse_datetim
 __all__ = [
     "AgentRole",
     "AgentTrace",
+    "AttemptTrajectory",
     "ArtifactKind",
     "ArtifactRecord",
     "CheckpointKind",

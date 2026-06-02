@@ -51,6 +51,7 @@ from primordial.core.domain.enums import (
 )
 from primordial.core.domain.models import (
     AgentTrace,
+    AttemptTrajectory,
     ArtifactRecord,
     new_id as _new_id,
     CheckpointRecord,

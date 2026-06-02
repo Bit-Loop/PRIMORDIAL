@@ -296,6 +296,26 @@ class AgentTrace:
 
 
 @dataclass(slots=True)
+class AttemptTrajectory:
+    attempt_id: str
+    target_id: str
+    task_id: str | None
+    challenge_id: str
+    repo_relpath_sha: str
+    step_index: int
+    kind: str
+    role: str
+    payload_json: dict[str, Any]
+    evidence_refs: list[str] = field(default_factory=list)
+    redacted: bool = True
+    id: str = field(default_factory=lambda: new_id("trajectory"))
+    created_at: datetime = field(default_factory=utc_now)
+
+    def as_payload(self) -> dict[str, Any]:
+        return json_ready(self)
+
+
+@dataclass(slots=True)
 class EventRecord:
     type: EventType
     summary: str

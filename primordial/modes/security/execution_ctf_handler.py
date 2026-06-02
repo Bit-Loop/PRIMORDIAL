@@ -4,7 +4,7 @@ import base64
 import binascii
 import ipaddress
 
-from primordial.labs.ctf.hardcode import FLAG_PATTERN
+from primordial.labs.ctf.hardcode import FLAG_PATTERN, flag_sha256
 from primordial.modes.security.execution_common import *
 
 
@@ -56,6 +56,8 @@ class PrimitiveCtfHandlerMixin:
         browser_hit = next((item for item in browser_interactions if item.get("captured_flag_ref")), None)
         browser_benchmark_hit = next((item for item in browser_interactions if item.get("benchmark_solve_ref")), None)
         hit = hit or browser_hit
+        flag_verification = self._ctf_flag_verification(target, hit) if hit else ""
+        solve_status = self._ctf_solve_status_from_verification(flag_verification) if hit else ""
         payload = {
             "target": target.as_payload(),
             "closed_book": True,
@@ -78,6 +80,8 @@ class PrimitiveCtfHandlerMixin:
             "captured_flag_ref": str(hit.get("captured_flag_ref", "")) if hit else "",
             "captured_flag_sha256": str(hit.get("captured_flag_sha256", "")) if hit else "",
             "captured_flag_length": int(hit.get("captured_flag_length", 0)) if hit else 0,
+            "flag_verification": flag_verification,
+            "solve_status": solve_status,
             "source_url": str(hit.get("url", "")) if hit else "",
             "benchmark_solve_ref": str(browser_benchmark_hit.get("benchmark_solve_ref", "")) if browser_benchmark_hit else "",
             "benchmark_solved_count": int(browser_benchmark_hit.get("benchmark_solved_count", 0)) if browser_benchmark_hit else 0,
@@ -116,6 +120,8 @@ class PrimitiveCtfHandlerMixin:
                 "captured_flag_ref": payload["captured_flag_ref"],
                 "captured_flag_sha256": payload["captured_flag_sha256"],
                 "captured_flag_length": payload["captured_flag_length"],
+                "flag_verification": payload["flag_verification"],
+                "solve_status": payload["solve_status"],
                 "source_url": payload["source_url"],
                 "benchmark_solve_ref": payload["benchmark_solve_ref"],
                 "benchmark_solved_count": payload["benchmark_solved_count"],
@@ -133,6 +139,8 @@ class PrimitiveCtfHandlerMixin:
                 freshness=0.94,
                 metadata={
                     "captured_flag_ref": payload["captured_flag_ref"],
+                    "flag_verification": payload["flag_verification"],
+                    "solve_status": payload["solve_status"],
                     "benchmark_solve_ref": payload["benchmark_solve_ref"],
                     "searched_url_count": payload["searched_url_count"],
                     "kubernetes_probe_count": payload["kubernetes_probe_count"],
@@ -153,6 +161,8 @@ class PrimitiveCtfHandlerMixin:
                 task_id=task.id,
                 metadata={
                     "captured_flag_ref": payload["captured_flag_ref"],
+                    "flag_verification": payload["flag_verification"],
+                    "solve_status": payload["solve_status"],
                     "benchmark_solve_ref": payload["benchmark_solve_ref"],
                     "searched_url_count": payload["searched_url_count"],
                     "kubernetes_probe_count": payload["kubernetes_probe_count"],
@@ -339,12 +349,32 @@ class PrimitiveCtfHandlerMixin:
         if not match:
             return {"captured_flag_ref": "", "captured_flag_sha256": "", "captured_flag_length": 0}
         raw = match.group(0)
-        digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        digest = flag_sha256(raw)
         return {
             "captured_flag_ref": f"evidence:captured-flag:{digest[:16]}",
             "captured_flag_sha256": digest,
             "captured_flag_length": len(raw),
         }
+
+    def _ctf_flag_verification(self, target, hit: dict[str, object] | None) -> str:
+        if not hit:
+            return ""
+        expected = str(target.metadata.get("ctf_ground_truth_flag_sha256") or "").strip()
+        captured = str(hit.get("captured_flag_sha256") or "").strip()
+        if not captured:
+            return ""
+        if not expected:
+            return "unverified"
+        return "verified" if captured == expected else "wrong"
+
+    def _ctf_solve_status_from_verification(self, verification: str) -> str:
+        if verification == "verified":
+            return "solved_verified"
+        if verification == "wrong":
+            return "solved_wrong_flag"
+        if verification == "unverified":
+            return "solved_unverified"
+        return ""
 
     def _ctf_kubernetes_probes(self, target) -> list[dict[str, object]]:
         kubeconfig = str(target.metadata.get("ctf_kubeconfig") or "").strip()
@@ -1256,6 +1286,7 @@ class PrimitiveCtfHandlerMixin:
                 [
                     f"Captured flag ref: {payload['captured_flag_ref']}",
                     f"Flag SHA-256: {payload['captured_flag_sha256']}",
+                    f"Flag verification: {payload['flag_verification']}",
                     f"Flag length: {payload['captured_flag_length']}",
                     f"Source URL: {payload['source_url']}",
                 ]

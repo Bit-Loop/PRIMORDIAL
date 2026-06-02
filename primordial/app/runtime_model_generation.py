@@ -8,6 +8,7 @@ from primordial.app.runtime_deps import (
     time,
 )
 from primordial.core.sensitive_text import redact_sensitive_text
+from primordial.labs.ctf.trajectory import emit_attempt_trajectory
 
 class RuntimeModelGenerationMixin:
     def _worker_ai_generate(
@@ -23,7 +24,7 @@ class RuntimeModelGenerationMixin:
         prompt = self._with_worker_rag_context(task, prompt, role=role)
         if self._use_only_wrapper_mode():
             try:
-                return self._wrapper_ai_generate(
+                payload = self._wrapper_ai_generate(
                     role=role,
                     system=system,
                     prompt=prompt,
@@ -31,6 +32,8 @@ class RuntimeModelGenerationMixin:
                     temperature=temperature,
                     persist=False,
                 )
+                self._emit_ctf_model_trajectory(task, role=role, payload=payload, prompt=prompt)
+                return payload
             except Exception as exc:  # noqa: BLE001 - wrapper AI is opportunistic and must not stall autonomy
                 self.store.insert_event(
                     EventRecord(
@@ -72,7 +75,7 @@ class RuntimeModelGenerationMixin:
                 )
             )
             return None
-        return {
+        payload = {
             "model": response.model,
             "text": response.text,
             "elapsed_seconds": response.elapsed_seconds,
@@ -81,6 +84,28 @@ class RuntimeModelGenerationMixin:
             "prompt_tokens": response.prompt_tokens,
             "completion_tokens": response.completion_tokens,
         }
+        self._emit_ctf_model_trajectory(task, role=role, payload=payload, prompt=prompt)
+        return payload
+
+    def _emit_ctf_model_trajectory(self, task: Task, *, role: str, payload: dict[str, object], prompt: str) -> None:
+        try:
+            emit_attempt_trajectory(
+                store=self.store,
+                runtime_dir=self.config.runtime_dir,
+                task=task,
+                kind="think",
+                role=role,
+                payload={
+                    "model": payload.get("model", ""),
+                    "prompt_summary": _trajectory_excerpt(prompt),
+                    "response_summary": _trajectory_excerpt(str(payload.get("text") or "")),
+                    "prompt_tokens": payload.get("prompt_tokens"),
+                    "completion_tokens": payload.get("completion_tokens"),
+                    "elapsed_seconds": payload.get("elapsed_seconds"),
+                },
+            )
+        except Exception:
+            return
 
     def _with_worker_rag_context(self, task: Task, prompt: str, *, role: str) -> str:
         query = " ".join(part for part in [task.title, task.summary, task.kind.value] if part)
@@ -220,3 +245,8 @@ class RuntimeModelGenerationMixin:
         if not text or self._operator_answer_violates_contract(text):
             return None
         return {"model": model, "text": text, "elapsed_seconds": elapsed}
+
+
+def _trajectory_excerpt(value: str, limit: int = 2000) -> str:
+    text = " ".join(str(value or "").split())
+    return text[:limit]

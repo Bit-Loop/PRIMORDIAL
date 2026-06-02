@@ -8,7 +8,22 @@ from primordial.labs.ctf.hidden_material import reject_hidden_flag_material
 
 
 CTF_SOLVE_INTENTS = frozenset({"ctf_solve_assisted", "ctf_solve_autonomous_local"})
-SOLVED_STATUSES = frozenset({"solved", "complete", "completed"})
+SOLVED_STATUSES = frozenset({"solved", "complete", "completed", "solved_verified", "solved_unverified", "solved_wrong_flag"})
+CTF_SOLVE_STATUSES = frozenset(
+    {
+        "in_progress",
+        "solved_verified",
+        "solved_unverified",
+        "solved_wrong_flag",
+        "no_solve_timeout",
+        "no_solve_budget",
+        "blocked_tool",
+        "blocked_scope",
+        "blocked_infra",
+        "attempted",
+        "blocked",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +163,8 @@ class SolveSession:
         )
 
     def complete(self, *, result: str, solve_status: str, report_ref: str = "") -> SolveSession:
+        if solve_status not in CTF_SOLVE_STATUSES and solve_status not in SOLVED_STATUSES:
+            raise ValueError("SolveSession solve_status is not recognized")
         if solve_status in SOLVED_STATUSES and not self.evidence_ids:
             raise ValueError("solved SolveSession requires supporting evidence")
         completion = {

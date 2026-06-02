@@ -114,3 +114,54 @@ class RuntimeCheckpointsTracesMixin:
     def get_trace(self, trace_id: str) -> AgentTrace | None:
         row = self._query_one("SELECT * FROM agent_traces WHERE id = %s", (trace_id,))
         return self._trace_from_row(row) if row else None
+
+    def insert_attempt_trajectory(self, trajectory: AttemptTrajectory) -> None:
+        self._execute(
+            """
+            INSERT INTO attempt_trajectories
+            (id, attempt_id, target_id, task_id, challenge_id, repo_relpath_sha, step_index,
+                kind, role, payload_json, evidence_refs, redacted, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (attempt_id, step_index) DO UPDATE SET id = EXCLUDED.id, target_id = EXCLUDED.target_id,
+                task_id = EXCLUDED.task_id, challenge_id = EXCLUDED.challenge_id, repo_relpath_sha = EXCLUDED.repo_relpath_sha,
+                kind = EXCLUDED.kind, role = EXCLUDED.role, payload_json = EXCLUDED.payload_json,
+                evidence_refs = EXCLUDED.evidence_refs, redacted = EXCLUDED.redacted, created_at = EXCLUDED.created_at
+            """,
+            (
+                trajectory.id,
+                trajectory.attempt_id,
+                trajectory.target_id,
+                trajectory.task_id,
+                trajectory.challenge_id,
+                trajectory.repo_relpath_sha,
+                trajectory.step_index,
+                trajectory.kind,
+                trajectory.role,
+                _dump(trajectory.payload_json),
+                _dump(trajectory.evidence_refs),
+                bool(trajectory.redacted),
+                trajectory.created_at.isoformat(),
+            ),
+        )
+
+    def list_attempt_trajectories(
+        self,
+        *,
+        target_id: str | None = None,
+        attempt_id: str | None = None,
+        limit: int = 100,
+    ) -> list[AttemptTrajectory]:
+        where: list[str] = []
+        params: list[Any] = []
+        if target_id:
+            where.append("target_id = %s")
+            params.append(target_id)
+        if attempt_id:
+            where.append("attempt_id = %s")
+            params.append(attempt_id)
+        clause = f"WHERE {' AND '.join(where)}" if where else ""
+        rows = self._query(
+            f"SELECT * FROM attempt_trajectories {clause} ORDER BY attempt_id ASC, step_index ASC LIMIT %s",
+            (*params, limit),
+        )
+        return [self._attempt_trajectory_from_row(row) for row in rows]

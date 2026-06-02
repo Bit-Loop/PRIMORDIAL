@@ -299,6 +299,23 @@ CREATE TABLE IF NOT EXISTS agent_traces (
     created_at TIMESTAMPTZ NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS attempt_trajectories (
+    id TEXT PRIMARY KEY,
+    attempt_id TEXT NOT NULL,
+    target_id TEXT NOT NULL REFERENCES targets(id) ON DELETE CASCADE,
+    task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+    challenge_id TEXT NOT NULL,
+    repo_relpath_sha TEXT NOT NULL,
+    step_index INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    role TEXT NOT NULL,
+    payload_json JSONB NOT NULL,
+    evidence_refs JSONB NOT NULL,
+    redacted BOOLEAN NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    UNIQUE(attempt_id, step_index)
+);
+
 CREATE TABLE IF NOT EXISTS events (
     id TEXT PRIMARY KEY,
     event_type TEXT NOT NULL,
@@ -405,6 +422,8 @@ CREATE INDEX IF NOT EXISTS idx_memory_target_layer ON memory_entries(target_id, 
 CREATE INDEX IF NOT EXISTS idx_notifications_status ON notifications(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_sync_status ON external_sync_jobs(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at);
+CREATE INDEX IF NOT EXISTS idx_attempt_trajectories_target ON attempt_trajectories(target_id);
+CREATE INDEX IF NOT EXISTS idx_attempt_trajectories_attempt ON attempt_trajectories(attempt_id, step_index);
 CREATE INDEX IF NOT EXISTS idx_operator_messages_created_at ON operator_messages(created_at);
 CREATE INDEX IF NOT EXISTS idx_record_embeddings_record ON record_embeddings(record_type, record_id);
 CREATE INDEX IF NOT EXISTS idx_record_embeddings_target ON record_embeddings(target_id);

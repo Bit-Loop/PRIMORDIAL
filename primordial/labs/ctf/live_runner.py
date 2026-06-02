@@ -18,6 +18,8 @@ from urllib.error import URLError
 from urllib.request import urlopen
 
 from primordial.core.local_runtime import load_project_env
+from primordial.labs.ctf.challenge_index import ChallengeRef, load_phase_challenge_index
+from primordial.labs.ctf.hardcode import canonicalize_flag
 from primordial.labs.ctf.sessions import SolveSession
 
 DEFAULT_LAB_ROOT = Path("/run/media/bitloop/DREAD/primordial-labs")
@@ -118,6 +120,7 @@ class AutonomousAttemptResult:
     solve_session_path: str
     captured_flag_ref: str = ""
     benchmark_solve_ref: str = ""
+    flag_verification: str = ""
     blocker: str = ""
 
     def as_payload(self) -> dict[str, object]:
@@ -131,6 +134,7 @@ class AutonomousAttemptResult:
             "solve_session_path": self.solve_session_path,
             "captured_flag_ref": self.captured_flag_ref,
             "benchmark_solve_ref": self.benchmark_solve_ref,
+            "flag_verification": self.flag_verification,
             "blocker": self.blocker,
         }
 
@@ -316,6 +320,7 @@ def run_autonomous_attempt(
     max_executions: int = 3,
     timeout_seconds: float = 300.0,
     cleanup_live_lab: bool = False,
+    challenge_ref: ChallengeRef | None = None,
 ) -> AutonomousAttemptResult:
     phase = readiness.phase
     lab_id = readiness.lab_id
@@ -362,7 +367,15 @@ def run_autonomous_attempt(
     )
     command_results: list[subprocess.CompletedProcess[str]] = []
     try:
-        commands = _primordial_attempt_commands(lab_id, target_url, cycles=cycles, max_executions=max_executions)
+        attempt_id = _ctf_attempt_id(lab_id, challenge_ref=challenge_ref)
+        commands = _primordial_attempt_commands(
+            lab_id,
+            target_url,
+            cycles=cycles,
+            max_executions=max_executions,
+            challenge_ref=challenge_ref,
+            attempt_id=attempt_id,
+        )
         attempt_env = _primordial_attempt_env(lab_root=lab_root, lab_id=lab_id)
         if attempt_env.get("PRIMORDIAL_TEST_DATABASE_SCHEMA"):
             lines.append("isolated_runtime_schema=true")
@@ -401,6 +414,30 @@ def run_autonomous_attempt(
 
     captured_flag_ref = _captured_flag_ref_from_results(command_results)
     if captured_flag_ref:
+        flag_verification = _flag_verification_from_results(command_results)
+        solve_status = _solve_status_for_flag_verification(flag_verification)
+        if flag_verification == "wrong":
+            lines.extend(_cleanup_live_lab_lines(readiness) if cleanup_live_lab else ())
+            session = session.record_action(
+                action_id=f"action:phase{phase}:wrong-flag",
+                action_type="primordial_autonomous_wrong_flag",
+                status="completed_wrong_flag",
+                evidence_ids=[captured_flag_ref],
+                metadata={"command_count": len(command_results), "captured_flag_ref": captured_flag_ref, "flag_verification": flag_verification},
+            ).complete(result="wrong_flag", solve_status=solve_status, report_ref=captured_flag_ref)
+            lines.extend([f"captured_flag_ref={captured_flag_ref}", f"flag_verification={flag_verification}"])
+            return _write_attempt_result(
+                phase=phase,
+                lab_id=lab_id,
+                status="attempted",
+                solve_status=solve_status,
+                evidence=evidence,
+                session_path=session_path,
+                session=session,
+                lines=lines,
+                captured_flag_ref=captured_flag_ref,
+                flag_verification=flag_verification,
+            )
         if not _captured_flag_counts_as_phase_completion(readiness):
             lines.extend(_cleanup_live_lab_lines(readiness) if cleanup_live_lab else ())
             session = session.record_action(
@@ -436,16 +473,19 @@ def run_autonomous_attempt(
             policy_decision_id="policy:local-ctf-autonomous-allow",
         ).complete(result="solved", solve_status="solved", report_ref=captured_flag_ref)
         lines.append(f"captured_flag_ref={captured_flag_ref}")
+        if flag_verification:
+            lines.append(f"flag_verification={flag_verification}")
         return _write_attempt_result(
             phase=phase,
             lab_id=lab_id,
             status="solved",
-            solve_status="solved",
+            solve_status=solve_status,
             evidence=evidence,
             session_path=session_path,
             session=session,
             lines=lines,
             captured_flag_ref=captured_flag_ref,
+            flag_verification=flag_verification,
         )
 
     benchmark_solve_ref = _benchmark_solve_ref_from_results(command_results)
@@ -1372,6 +1412,99 @@ def _run_nyu_littlequery_lab(
     )
 
 
+def _run_challenge_compose_lab(
+    *,
+    phase: int,
+    challenge_ref: ChallengeRef,
+    lab_root: Path,
+    command_runner: CommandRunner | None,
+    http_getter: HttpGetter | None,
+    timeout_seconds: float,
+    keep_running: bool,
+) -> LiveLabRunResult:
+    lab_id = challenge_ref.lab_id
+    evidence = _evidence_file(lab_root, phase=phase, lab_id=f"{lab_id}-{challenge_ref.challenge_id}-{challenge_ref.repo_relpath_sha[:8]}")
+    compose_file = Path(challenge_ref.compose_path)
+    service_name = _compose_first_service(compose_file)
+    project = f"primordial-{lab_id}-{challenge_ref.repo_relpath_sha[:12]}".replace("_", "-")
+    lines = _evidence_header(phase=phase, lab_id=lab_id) + [
+        f"challenge_id={challenge_ref.challenge_id}",
+        f"category={challenge_ref.category}",
+        f"repo_relpath_sha={challenge_ref.repo_relpath_sha}",
+        f"compose_file={compose_file}",
+    ]
+    status = "blocked"
+    blocker = ""
+    target_url = ""
+    started = False
+    down_command = ("docker", "compose", "-f", str(compose_file), "-p", project, "down", "--remove-orphans")
+    try:
+        if not compose_file.is_file():
+            raise RuntimeError(f"challenge compose file is missing: {compose_file}")
+        network = _run(("docker", "network", "create", "ctfnet"), command_runner=command_runner, check=False)
+        lines.extend(_command_lines("docker_network_create", network))
+        up = _run(("docker", "compose", "-f", str(compose_file), "-p", project, "up", "-d"), command_runner=command_runner)
+        started = True
+        lines.extend(_command_lines("docker_compose_up", up))
+        ps = _run(("docker", "compose", "-f", str(compose_file), "-p", project, "ps", "--format", "json"), command_runner=command_runner)
+        lines.extend(_command_lines("docker_compose_ps", ps))
+        target = _run(
+            (
+                "docker",
+                "inspect",
+                f"{project}-{service_name}-1",
+                "--format",
+                "{{range .NetworkSettings.Networks}}http://{{.IPAddress}}/{{end}}",
+            ),
+            command_runner=command_runner,
+        )
+        lines.extend(_command_lines("docker_inspect_target", target))
+        target_url = target.stdout.strip()
+        if not target_url.startswith("http://"):
+            raise RuntimeError("challenge target URL was not discovered")
+        lines.append(f"target_url={target_url}")
+        body = _wait_http(target_url, timeout_seconds=timeout_seconds, http_getter=http_getter)
+        lines.extend(_http_lines(target_url, body))
+        status = "ready"
+    except Exception as exc:  # noqa: BLE001 - challenge readiness failures must be evidence, not crashes
+        blocker = str(exc)
+        lines.append(f"blocker={blocker}")
+    finally:
+        if keep_running and started and status == "ready":
+            lines.append("cleanup_deferred=true")
+        else:
+            down = _run(down_command, command_runner=command_runner, check=False)
+            lines.extend(_command_lines("docker_compose_down", down))
+    return _write_result(
+        phase=phase,
+        status=status,
+        lab_id=lab_id,
+        evidence=evidence,
+        lines=lines,
+        blocker=blocker,
+        target_url=target_url,
+        cleanup_command=down_command,
+    )
+
+
+def _compose_first_service(compose_file: Path) -> str:
+    try:
+        lines = compose_file.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return "challenge"
+    in_services = False
+    for line in lines:
+        if re.match(r"^services:\s*$", line):
+            in_services = True
+            continue
+        if not in_services:
+            continue
+        match = re.match(r"^  ([A-Za-z0-9_.-]+):\s*$", line)
+        if match:
+            return match.group(1)
+    return "challenge"
+
+
 def _blocked_phase_result(phase: int, *, lab_root: Path) -> LiveLabRunResult:
     blockers = {
         0: "Phase 0 is harness/source validation only; use the CTF unit and hardcode gates.",
@@ -1567,6 +1700,7 @@ def _write_attempt_result(
     lines: list[str],
     captured_flag_ref: str = "",
     benchmark_solve_ref: str = "",
+    flag_verification: str = "",
     blocker: str = "",
 ) -> AutonomousAttemptResult:
     session_path.write_text(json.dumps(asdict(session), indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -1590,6 +1724,7 @@ def _write_attempt_result(
         solve_session_path=str(session_path),
         captured_flag_ref=captured_flag_ref,
         benchmark_solve_ref=benchmark_solve_ref,
+        flag_verification=flag_verification,
         blocker=blocker,
     )
 
@@ -1659,7 +1794,10 @@ def _primordial_attempt_commands(
     *,
     cycles: int,
     max_executions: int,
+    challenge_ref: ChallengeRef | None = None,
+    attempt_id: str = "",
 ) -> tuple[tuple[str, ...], ...]:
+    target_handle = _attempt_target_handle(lab_id, challenge_ref=challenge_ref)
     return (
         (
             "python3",
@@ -1678,15 +1816,15 @@ def _primordial_attempt_commands(
             "-m",
             "primordial.cli",
             "add-target",
-            lab_id,
+            target_handle,
             "--profile",
             "hack_the_box",
             "--asset",
             target_url,
             "--display-name",
-            f"CTF lab {lab_id}",
+            f"CTF lab {target_handle}",
             "--metadata-json",
-            json.dumps(_primordial_attempt_metadata(lab_id, target_url), sort_keys=True),
+            json.dumps(_primordial_attempt_metadata(lab_id, target_url, challenge_ref=challenge_ref, attempt_id=attempt_id), sort_keys=True),
         ),
         (
             "python3",
@@ -1701,16 +1839,37 @@ def _primordial_attempt_commands(
     )
 
 
-def _primordial_attempt_metadata(lab_id: str, target_url: str) -> dict[str, object]:
+def _primordial_attempt_metadata(
+    lab_id: str,
+    target_url: str,
+    *,
+    challenge_ref: ChallengeRef | None = None,
+    attempt_id: str = "",
+) -> dict[str, object]:
     metadata: dict[str, object] = {
         "ctf_completion_indicator": "autonomous_flags",
+        "ctf_attempt_id": attempt_id,
         "ctf_lab_id": lab_id,
         "ctf_target_url": target_url,
         "local_ctf_autonomous": True,
         "writeup_access_policy": "closed_book",
     }
     metadata.update(ATTEMPT_METADATA_BY_LAB_ID.get(lab_id, {}))
+    if challenge_ref is not None:
+        metadata.update(challenge_ref.as_metadata())
     return metadata
+
+
+def _attempt_target_handle(lab_id: str, *, challenge_ref: ChallengeRef | None) -> str:
+    if challenge_ref is None:
+        return lab_id
+    return f"{lab_id}-{challenge_ref.challenge_id}-{challenge_ref.repo_relpath_sha[:8]}"
+
+
+def _ctf_attempt_id(lab_id: str, *, challenge_ref: ChallengeRef | None) -> str:
+    if challenge_ref is None:
+        return f"attempt:{lab_id}:{time.time_ns()}"
+    return f"attempt:{lab_id}:{challenge_ref.repo_relpath_sha[:16]}:{time.time_ns()}"
 
 
 def _primordial_attempt_env(
@@ -1794,6 +1953,49 @@ def _benchmark_solve_ref_from_results(results: list[subprocess.CompletedProcess[
         if ref:
             return ref
     return ""
+
+
+def _verify_flag(captured: str, expected_sha256: str | None) -> str:
+    captured_hash = _sha256_text(canonicalize_flag(captured))
+    expected = str(expected_sha256 or "").strip()
+    if not expected:
+        return "unverified"
+    return "verified" if captured_hash == expected else "wrong"
+
+
+def _flag_verification_from_results(results: list[subprocess.CompletedProcess[str]]) -> str:
+    for result in results:
+        value = _flag_verification_from_text(f"{result.stdout or ''}\n{result.stderr or ''}")
+        if value:
+            return value
+    return "unverified"
+
+
+def _flag_verification_from_text(text: str) -> str:
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            payload = None
+        if isinstance(payload, dict):
+            value = str(payload.get("flag_verification", "")).strip()
+            if value in {"verified", "unverified", "wrong"}:
+                return value
+        match = re.search(r"\bflag_verification\s*[=:]\s*(verified|unverified|wrong)\b", stripped)
+        if match:
+            return match.group(1)
+    return ""
+
+
+def _solve_status_for_flag_verification(flag_verification: str) -> str:
+    if flag_verification == "verified":
+        return "solved_verified"
+    if flag_verification == "wrong":
+        return "solved_wrong_flag"
+    return "solved_unverified"
 
 
 def _captured_flag_counts_as_phase_completion(readiness: LiveLabRunResult) -> bool:
@@ -1885,6 +2087,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run local PRIMORDIAL CTF lab evidence probes.")
     parser.add_argument("--phase", type=int, choices=range(9), action="append")
     parser.add_argument("--all", action="store_true")
+    parser.add_argument("--lab", default="")
+    parser.add_argument("--challenge", action="append", default=[])
+    parser.add_argument("--category", action="append", default=[])
+    parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--lab-root", default=str(DEFAULT_LAB_ROOT))
     parser.add_argument("--timeout-seconds", type=float, default=90.0)
     parser.add_argument("--attempt-autonomous", action="store_true")
@@ -1898,6 +2104,39 @@ def main(argv: list[str] | None = None) -> int:
     results_list: list[LiveLabRunResult] = []
     attempts_list: list[AutonomousAttemptResult] = []
     for phase in phases:
+        challenge_refs = _selected_challenge_refs(
+            phase,
+            lab_root=Path(args.lab_root),
+            lab=args.lab,
+            challenges=args.challenge,
+            categories=args.category,
+            limit=args.limit,
+        )
+        if challenge_refs:
+            for challenge_ref in challenge_refs:
+                result = _run_challenge_compose_lab(
+                    phase=phase,
+                    challenge_ref=challenge_ref,
+                    lab_root=Path(args.lab_root),
+                    command_runner=None,
+                    http_getter=None,
+                    timeout_seconds=args.timeout_seconds,
+                    keep_running=args.attempt_autonomous,
+                )
+                results_list.append(result)
+                if args.attempt_autonomous:
+                    attempts_list.append(
+                        run_autonomous_attempt(
+                            result,
+                            lab_root=Path(args.lab_root),
+                            cycles=args.primordial_cycles,
+                            max_executions=args.primordial_max_executions,
+                            timeout_seconds=args.attempt_timeout_seconds,
+                            cleanup_live_lab=True,
+                            challenge_ref=challenge_ref,
+                        )
+                    )
+            continue
         result = run_phase(
             phase,
             lab_root=Path(args.lab_root),
@@ -1918,25 +2157,57 @@ def main(argv: list[str] | None = None) -> int:
             )
     results = tuple(results_list)
     attempts = tuple(attempts_list)
-    attempt_by_phase = {attempt.phase: attempt.as_payload() for attempt in attempts}
-    payload = [
-        {**result.as_payload(), **({"autonomous_attempt": attempt_by_phase[result.phase]} if result.phase in attempt_by_phase else {})}
-        for result in results
-    ]
+    attempt_payloads = [attempt.as_payload() for attempt in attempts]
+    payload = []
+    for index, result in enumerate(results):
+        item = result.as_payload()
+        if index < len(attempt_payloads):
+            item["autonomous_attempt"] = attempt_payloads[index]
+        payload.append(item)
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
-        for result in results:
+        for index, result in enumerate(results):
             blocker = f" blocker={result.blocker}" if result.blocker else ""
             print(f"phase={result.phase} status={result.status} evidence={result.evidence_path}{blocker}")
-            if result.phase in attempt_by_phase:
-                attempt = attempt_by_phase[result.phase]
+            if args.attempt_autonomous and index < len(attempt_payloads):
+                attempt = attempt_payloads[index]
                 attempt_blocker = f" blocker={attempt['blocker']}" if attempt["blocker"] else ""
                 print(
                     f"phase={result.phase} solve_status={attempt['solve_status']} "
                     f"attempt_evidence={attempt['evidence_path']}{attempt_blocker}"
                 )
     return 0 if all(result.status == "ready" for result in results if result.phase in READY_PHASES) else 1
+
+
+def _selected_challenge_refs(
+    phase: int,
+    *,
+    lab_root: Path,
+    lab: str,
+    challenges: list[str],
+    categories: list[str],
+    limit: int,
+) -> tuple[ChallengeRef, ...]:
+    if phase != 8 or not (lab or challenges or categories or limit):
+        return ()
+    result = load_phase_challenge_index(phase, lab_root=lab_root, include_parked=True)
+    selected = list(result.challenges)
+    if lab:
+        selected = [item for item in selected if item.lab_id == lab]
+    challenge_set = {item.strip().lower() for item in challenges if item.strip()}
+    if challenge_set:
+        selected = [
+            item
+            for item in selected
+            if item.challenge_id.lower() in challenge_set or item.repo_relpath.lower() in challenge_set
+        ]
+    category_set = {item.strip().lower() for item in categories if item.strip()}
+    if category_set:
+        selected = [item for item in selected if item.category.lower() in category_set]
+    if limit > 0:
+        selected = selected[:limit]
+    return tuple(selected)
 
 
 if __name__ == "__main__":

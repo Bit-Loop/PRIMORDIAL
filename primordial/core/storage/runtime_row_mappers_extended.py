@@ -137,6 +137,23 @@ class RuntimeRowMappersExtendedMixin:
             created_at=parse_datetime(row["created_at"]),
         )
 
+    def _attempt_trajectory_from_row(self, row: Any) -> AttemptTrajectory:
+        return AttemptTrajectory(
+            id=row["id"],
+            attempt_id=row["attempt_id"],
+            target_id=row["target_id"],
+            task_id=row["task_id"],
+            challenge_id=row["challenge_id"],
+            repo_relpath_sha=row["repo_relpath_sha"],
+            step_index=int(row["step_index"]),
+            kind=row["kind"],
+            role=row["role"],
+            payload_json=_load(row["payload_json"], {}),
+            evidence_refs=_load(row["evidence_refs"], []),
+            redacted=bool(row["redacted"]),
+            created_at=parse_datetime(row["created_at"]),
+        )
+
     def _event_from_row(self, row: Any) -> EventRecord:
         return EventRecord(
             id=row["id"],

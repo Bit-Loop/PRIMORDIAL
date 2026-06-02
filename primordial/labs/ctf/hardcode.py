@@ -79,6 +79,20 @@ LINE_REGEX_RULES = (
 )
 
 
+def canonicalize_flag(value: str) -> str:
+    text = str(value or "").strip()
+    match = re.match(r"(?P<prefix>[A-Za-z][A-Za-z0-9_-]*)(?P<body>\{.*\})\Z", text, re.DOTALL)
+    if not match:
+        return text
+    prefix = match.group("prefix")
+    normalized_prefix = prefix.lower() if prefix.lower() in {"flag", "ctf", "htb"} else prefix
+    return f"{normalized_prefix}{match.group('body')}"
+
+
+def flag_sha256(value: str) -> str:
+    return hashlib.sha256(canonicalize_flag(value).encode("utf-8")).hexdigest()
+
+
 @dataclass(frozen=True, slots=True)
 class HardcodeFinding:
     rule_id: str

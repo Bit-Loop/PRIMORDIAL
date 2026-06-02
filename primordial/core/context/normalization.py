@@ -25,6 +25,7 @@ RAG_CORPUS_TYPES = frozenset(
         "vuln_intel",
         "package_security",
         "cloud_security",
+        "ctf_trajectory",
         "general_security",
     }
 )

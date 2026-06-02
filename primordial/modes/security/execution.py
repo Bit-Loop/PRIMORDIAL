@@ -28,6 +28,11 @@ from primordial.modes.security.execution_kerberos_user_tools import PrimitiveKer
 from primordial.modes.security.execution_kerberos_attack_tools import PrimitiveKerberosAttackToolMixin
 from primordial.modes.security.execution_credential_tools import PrimitiveCredentialToolMixin
 from primordial.modes.security.execution_probe_tools import PrimitiveProbeToolMixin
+from primordial.labs.ctf.trajectory import (
+    complete_attempt_trajectory,
+    emit_attempt_trajectory,
+    ingest_attempt_trajectory_summary,
+)
 
 __all__ = ["AiGenerateCallable", "PrimitiveExecutor"]
 
@@ -53,7 +58,82 @@ class PrimitiveExecutor(PrimitiveReconHandlerMixin, PrimitiveServiceHandlerMixin
 
     def execute(self, task: Task, context: ContextSlice | None) -> TaskExecutionResult:
         handler = getattr(self, f"_handle_{task.kind.value}", self._handle_generic)
-        return handler(task, context)
+        self._emit_ctf_trajectory(
+            task,
+            kind="tool_call",
+            payload={"task_kind": task.kind.value, "title": task.title, "summary": task.summary},
+        )
+        result = handler(task, context)
+        evidence_refs = [f"evidence:{item.id}" for item in result.evidence]
+        self._emit_ctf_trajectory(
+            task,
+            kind="observation",
+            payload={
+                "success": result.success,
+                "summary": result.summary,
+                "error": result.error or "",
+                "evidence_count": len(result.evidence),
+                "artifact_count": len(result.artifacts),
+            },
+            evidence_refs=evidence_refs,
+        )
+        if task.kind == TaskKind.CTF_FLAG_CAPTURE:
+            verdict = self._ctf_verdict_payload(result)
+            self._emit_ctf_trajectory(task, kind="verdict", payload=verdict, evidence_refs=evidence_refs)
+            self._ingest_ctf_trajectory(task, verdict)
+        return result
+
+    def _emit_ctf_trajectory(
+        self,
+        task: Task,
+        *,
+        kind: str,
+        payload: dict[str, object],
+        evidence_refs: list[str] | tuple[str, ...] = (),
+    ) -> None:
+        try:
+            emit_attempt_trajectory(
+                store=self.store,
+                runtime_dir=self.config.runtime_dir,
+                task=task,
+                kind=kind,
+                role=task.role,
+                payload=payload,
+                evidence_refs=evidence_refs,
+            )
+        except Exception:
+            return
+
+    def _ctf_verdict_payload(self, result: TaskExecutionResult) -> dict[str, object]:
+        ctf_evidence = next((item for item in result.evidence if item.metadata.get("kind") == "ctf_flag_capture"), None)
+        metadata = ctf_evidence.metadata if ctf_evidence else {}
+        return {
+            "captured_flag_ref": metadata.get("captured_flag_ref", ""),
+            "flag_verification": metadata.get("flag_verification", ""),
+            "solve_status": metadata.get("solve_status", ""),
+            "captured_flag_length": metadata.get("captured_flag_length", 0),
+            "source_url": metadata.get("source_url", ""),
+        }
+
+    def _ingest_ctf_trajectory(self, task: Task, verdict: dict[str, object]) -> None:
+        try:
+            target = self.store.get_target(task.target_id) if task.target_id else None
+            if target is None:
+                return
+            attempt_id = str(target.metadata.get("ctf_attempt_id") or f"attempt:{target.id}")
+            ingest_attempt_trajectory_summary(
+                store=self.store,
+                runtime_dir=self.config.runtime_dir,
+                target_id=target.id,
+                attempt_id=attempt_id,
+                task_id=task.id,
+                outcome=str(verdict.get("solve_status") or "attempted"),
+                flag_verification=str(verdict.get("flag_verification") or ""),
+                ground_truth_flag_sha256=str(target.metadata.get("ctf_ground_truth_flag_sha256") or ""),
+            )
+            complete_attempt_trajectory(attempt_id)
+        except Exception:
+            return
 
     def _active_intent_policy(self) -> OperatorIntentPolicy | None:
         return self.active_intent_policy_loader() if self.active_intent_policy_loader else None
