@@ -109,16 +109,53 @@ class PrimitiveProbeToolMixin:
             "effective_url": effective_url,
             "status_code": status_code,
             "content_type": content_type,
-            "headers": headers,
+            "headers": self._sanitize_response_headers(headers),
+            "headers_redacted": True,
             "title": parser.title,
-            "page_links": parser.links[:self.config.max_evidence_items],
-            "scripts": parser.scripts[:self.config.max_evidence_items],
-            "forms": parser.forms[:self.config.max_evidence_items],
+            "page_links": self._sanitize_surface_urls(parser.links)[:self.config.max_evidence_items],
+            "scripts": self._sanitize_surface_urls(parser.scripts)[:self.config.max_evidence_items],
+            "forms": self._sanitize_surface_urls(parser.forms)[:self.config.max_evidence_items],
+            "surface_urls_redacted": True,
             "resolved_ips": resolved_ips,
             "discovery_results": discovery_results,
             "ssl_verification_disabled": ssl_verification_disabled,
             "host_header": host_header or "",
         }
+
+    def _sanitize_response_headers(self, headers: dict[str, str]) -> dict[str, str]:
+        sensitive = {
+            "authorization",
+            "cookie",
+            "set-cookie",
+            "x-api-key",
+            "x-auth-token",
+            "x-csrf-token",
+            "x-xsrf-token",
+        }
+        sanitized: dict[str, str] = {}
+        for key, value in headers.items():
+            normalized = str(key).strip().lower()
+            if normalized in sensitive or "token" in normalized or "secret" in normalized:
+                sanitized[normalized] = "<redacted>"
+            else:
+                sanitized[normalized] = str(value)
+        return sanitized
+
+    def _sanitize_surface_urls(self, values: list[str]) -> list[str]:
+        sanitized: list[str] = []
+        for value in values:
+            sanitized.append(self._sanitize_surface_url(value))
+        return sanitized
+
+    def _sanitize_surface_url(self, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        parsed = parse.urlsplit(text)
+        if not parsed.query:
+            return text
+        redacted_query = parse.urlencode([(key, "<redacted>") for key, _ in parse.parse_qsl(parsed.query, keep_blank_values=True)])
+        return parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, redacted_query, parsed.fragment))
 
     def _run_content_discovery(self, base_url: str, host_header: str | None) -> list[dict[str, object]]:
         parsed = parse.urlsplit(base_url)

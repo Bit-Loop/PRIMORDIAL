@@ -112,9 +112,11 @@ class PrimitiveReconHandlerMixin:
             "title": probe["title"],
             "server": probe["headers"].get("server"),
             "headers": probe["headers"],
+            "headers_redacted": bool(probe.get("headers_redacted")),
             "page_links": probe["page_links"],
             "scripts": probe["scripts"],
             "forms": probe["forms"],
+            "surface_urls_redacted": bool(probe.get("surface_urls_redacted")),
             "resolved_ips": probe["resolved_ips"],
             "discovery_results": probe["discovery_results"],
             "ssl_verification_disabled": probe["ssl_verification_disabled"],
@@ -139,6 +141,8 @@ class PrimitiveReconHandlerMixin:
             "forms": probe["forms"][:self.config.max_evidence_items],
             "resolved_ips": probe["resolved_ips"],
             "headers": probe["headers"],
+            "headers_redacted": bool(probe.get("headers_redacted")),
+            "surface_urls_redacted": bool(probe.get("surface_urls_redacted")),
         }
 
     def _recon_failure_result(
