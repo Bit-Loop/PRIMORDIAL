@@ -4,6 +4,7 @@ from dataclasses import dataclass, replace
 
 from primordial.core.domain.enums import EventType
 from primordial.core.domain.models import EventRecord, OperatorMessage, Target, Task
+from primordial.core.sensitive_text import redact_sensitive_text
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,12 +151,13 @@ def guardrail_fallback_draft(draft: OperatorAiDraft, *, body: str, route: Operat
 
 
 def provider_failure_draft(exc: Exception) -> OperatorAiDraft:
+    error = redact_sensitive_text(str(exc))
     return OperatorAiDraft(
-        body=f"AI response failed: {exc}",
+        body=f"AI response failed: {error}",
         model="deterministic-state",
-        metadata={"ok": False, "error": str(exc)},
+        metadata={"ok": False, "error": error},
         ok=False,
-        error=str(exc),
+        error=error,
     )
 
 

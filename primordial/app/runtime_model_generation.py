@@ -7,6 +7,7 @@ from primordial.app.runtime_deps import (
     Task,
     time,
 )
+from primordial.core.sensitive_text import redact_sensitive_text
 
 class RuntimeModelGenerationMixin:
     def _worker_ai_generate(
@@ -37,7 +38,11 @@ class RuntimeModelGenerationMixin:
                         summary="Worker wrapper AI generation unavailable",
                         target_id=task.target_id,
                         task_id=task.id,
-                        metadata={"error": str(exc), "model": self._wrapper_model_label(), "wrapper_mode": True},
+                        metadata={
+                            "error": redact_sensitive_text(str(exc)),
+                            "model": self._wrapper_model_label(),
+                            "wrapper_mode": True,
+                        },
                     )
                 )
                 return None
@@ -63,7 +68,7 @@ class RuntimeModelGenerationMixin:
                     summary="Worker AI generation unavailable",
                     target_id=task.target_id,
                     task_id=task.id,
-                    metadata={"error": str(exc), "model": model},
+                    metadata={"error": redact_sensitive_text(str(exc)), "model": model},
                 )
             )
             return None
@@ -208,7 +213,7 @@ class RuntimeModelGenerationMixin:
                     type=EventType.OPERATOR_AI_RESPONSE,
                     summary="Operator state AI review unavailable",
                     target_id=target_id,
-                    metadata={"error": str(exc), "model": route_model},
+                    metadata={"error": redact_sensitive_text(str(exc)), "model": route_model},
                 )
             )
             return None
