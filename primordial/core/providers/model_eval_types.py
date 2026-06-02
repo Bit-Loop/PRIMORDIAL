@@ -6,6 +6,7 @@ from primordial.core.providers.model_eval_deps import (
     dataclass,
     field,
 )
+from primordial.core.sensitive_text import redact_sensitive_text
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,8 +113,8 @@ class ModelEvalResult:
             "score": round(self.score, 4),
             "passed": self.passed,
             "elapsed_seconds": self.elapsed_seconds,
-            "reasons": list(self.reasons),
-            "output_excerpt": self.output_excerpt,
+            "reasons": _json_safe(self.reasons),
+            "output_excerpt": redact_sensitive_text(self.output_excerpt),
             "stage": self.stage,
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
@@ -125,13 +126,13 @@ class ModelEvalResult:
             "ttft_seconds": self.ttft_seconds,
             "load_time_seconds": self.load_time_seconds,
             "load_state": self.load_state,
-            "error": self.error,
+            "error": redact_sensitive_text(self.error or "") if self.error else None,
             "host_metrics_before": _json_safe(self.host_metrics_before),
             "host_metrics_after": _json_safe(self.host_metrics_after),
             "provider_state_before": _json_safe(self.provider_state_before),
             "provider_state_after": _json_safe(self.provider_state_after),
-            "reasoning_content_excerpt": self.reasoning_content_excerpt,
-            "finish_reason": self.finish_reason,
+            "reasoning_content_excerpt": redact_sensitive_text(self.reasoning_content_excerpt),
+            "finish_reason": redact_sensitive_text(self.finish_reason or "") if self.finish_reason else None,
             "load_config": _json_safe(self.load_config),
             "tuned_profile_applied": self.tuned_profile_applied,
             "estimated_runtime_seconds": self.estimated_runtime_seconds,
@@ -166,8 +167,8 @@ class ModelRoleSuggestion:
             "confidence": round(self.confidence, 4),
             "fit_score": round(self.fit_score, 4),
             "status": self.status,
-            "reasons": list(self.reasons),
-            "warnings": list(self.warnings),
+            "reasons": _json_safe(self.reasons),
+            "warnings": _json_safe(self.warnings),
             "metrics": _json_safe(self.metrics),
             "metadata_factors": _json_safe(self.metadata_factors),
         }

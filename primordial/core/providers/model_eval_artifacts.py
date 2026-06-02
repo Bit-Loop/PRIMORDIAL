@@ -7,6 +7,8 @@ import math
 from pathlib import Path
 from typing import Protocol
 
+from primordial.core.sensitive_text import redact_sensitive_text
+
 
 class ModelEvalArtifactSummary(Protocol):
     aggregate_rows: list[dict[str, object]]
@@ -59,8 +61,10 @@ MODEL_EVAL_AGGREGATE_JSON_FIELDS: tuple[tuple[str, object], ...] = (
 
 
 def json_safe(value: object) -> object:
-    if value is None or isinstance(value, (str, bool, int)):
+    if value is None or isinstance(value, (bool, int)):
         return value
+    if isinstance(value, str):
+        return redact_sensitive_text(value)
     if isinstance(value, float):
         return value if math.isfinite(value) else None
     if isinstance(value, datetime):
@@ -68,12 +72,12 @@ def json_safe(value: object) -> object:
     if isinstance(value, Path):
         return str(value)
     if isinstance(value, bytes):
-        return value.decode("utf-8", errors="replace")
+        return redact_sensitive_text(value.decode("utf-8", errors="replace"))
     if isinstance(value, dict):
         return {str(key): json_safe(item) for key, item in value.items()}
     if isinstance(value, (list, tuple, set)):
         return [json_safe(item) for item in value]
-    return str(value)
+    return redact_sensitive_text(str(value))
 
 
 def write_model_eval_artifacts(

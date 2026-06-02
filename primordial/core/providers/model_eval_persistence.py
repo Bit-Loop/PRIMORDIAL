@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from primordial.core.providers.model_eval_artifacts import json_safe
+
 
 def persist_model_eval_summary(summary: Any, store: object) -> None:
     from primordial.core.domain.enums import AgentRole, EventType
@@ -32,7 +34,7 @@ def persist_model_eval_summary(summary: Any, store: object) -> None:
                     "tokens_per_second": result.tokens_per_second,
                     "ttft_seconds": result.ttft_seconds,
                     "retry_count": result.retry_count,
-                    "reasons": result.reasons,
+                    "reasons": json_safe(result.reasons),
                 },
             )
         )
