@@ -4,7 +4,7 @@ import base64
 import binascii
 import hashlib
 
-from primordial.adapters.caido_redaction import redacted_snippet
+from primordial.adapters.caido_redaction import redact_query_string, redact_request_path, redacted_snippet
 
 
 def normalize_request_summary(payload: dict[str, object] | None) -> dict[str, object]:
@@ -12,13 +12,15 @@ def normalize_request_summary(payload: dict[str, object] | None) -> dict[str, ob
     response_payload = payload.get("response") if isinstance(payload.get("response"), dict) else {}
     query = str(payload.get("query") or "")
     path = str(payload.get("path") or "/")
+    redacted_query = redact_query_string(query)
+    redacted_path = redact_request_path(path, query)
     return {
         "id": str(payload.get("id") or ""),
         "method": str(payload.get("method") or ""),
         "host": str(payload.get("host") or ""),
         "port": payload.get("port"),
-        "path": f"{path}?{query}" if query and "?" not in path else path,
-        "query": query,
+        "path": redacted_path,
+        "query": redacted_query,
         "is_tls": bool(payload.get("isTls")),
         "length": int(payload.get("length") or 0),
         "created_at": payload.get("createdAt"),

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from primordial.adapters.caido_redaction import redact_request_path
+
 
 @dataclass(frozen=True, slots=True)
 class CaidoConnection:
@@ -39,7 +41,7 @@ class ParsedRawRequest:
             "port": self.port,
             "is_tls": self.is_tls,
             "sni": self.sni,
-            "path": self.path,
+            "path": redact_request_path(self.path),
             "raw_sha256": self.raw_sha256,
             "headers": sorted(self.headers),
             "connection": self.connection_info,

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+from urllib import parse
 
 from primordial.adapters.caido_constants import SENSITIVE_HEADER_RE, SENSITIVE_PARAM_RE
+from primordial.core.sensitive_text import redact_sensitive_text
 
 
 def redacted_snippet(value: str, max_chars: int) -> dict[str, object]:
@@ -12,13 +14,44 @@ def redacted_snippet(value: str, max_chars: int) -> dict[str, object]:
             name = line.split(":", 1)[0]
             redacted_lines.append(f"{name}: [redacted]")
         else:
-            redacted_lines.append(SENSITIVE_PARAM_RE.sub(r"\1=[redacted]", line))
+            redacted_lines.append(redact_sensitive_text(SENSITIVE_PARAM_RE.sub(r"\1=[redacted]", line)))
     redacted = "\n".join(redacted_lines)
     selected_max = max(256, int(max_chars))
     return {
         "text": redacted[:selected_max],
         "truncated": len(redacted) > selected_max,
     }
+
+
+def redact_request_path(path: object, query: object = "") -> str:
+    raw_path = str(path or "/").strip() or "/"
+    raw_query = str(query or "").strip()
+    path_part, embedded_query = _split_request_target(raw_path)
+    selected_query = raw_query or embedded_query
+    redacted_path = redact_sensitive_text(path_part or "/")
+    redacted_query = redact_query_string(selected_query)
+    return f"{redacted_path}?{redacted_query}" if redacted_query else redacted_path
+
+
+def redact_query_string(query: object) -> str:
+    raw_query = str(query or "").strip().lstrip("?")
+    if not raw_query:
+        return ""
+    pairs = parse.parse_qsl(raw_query, keep_blank_values=True)
+    if not pairs:
+        return "[redacted]"
+    return parse.urlencode([(key, "[redacted]") for key, _ in pairs])
+
+
+def _split_request_target(path: str) -> tuple[str, str]:
+    parsed = parse.urlsplit(path)
+    if parsed.scheme in {"http", "https"}:
+        selected_path = parsed.path or "/"
+        return selected_path, parsed.query
+    if "?" not in path:
+        return path or "/", ""
+    selected_path, selected_query = path.split("?", 1)
+    return selected_path or "/", selected_query
 
 
 def sanitize_graphql_errors(errors: object, secret: str) -> list[object]:

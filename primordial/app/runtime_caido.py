@@ -13,6 +13,7 @@ from primordial.app.runtime_deps import (
     EventType,
     selected_caido_request_ids,
 )
+from primordial.adapters.caido_redaction import redact_request_path
 
 class RuntimeCaidoMixin:
     def caido_status_payload(self, *, check_health: bool = False) -> dict[str, object]:
@@ -184,7 +185,7 @@ class RuntimeCaidoMixin:
                         "method": parsed.method,
                         "host": parsed.host,
                         "port": parsed.port,
-                        "path": parsed.path,
+                        "path": redact_request_path(parsed.path),
                         "is_tls": parsed.is_tls,
                         "caido_session_id": selected_session_id,
                         "caido_task_id": task.get("id") or "",
