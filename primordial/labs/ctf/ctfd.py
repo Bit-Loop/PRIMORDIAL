@@ -22,12 +22,13 @@ class FakeCTFdClient:
         scoreboard: Mapping[str, Mapping[str, Any]],
     ) -> FakeCTFdClient:
         normalized_challenges = {}
-        for challenge in challenges:
+        for challenge in _record_sequence(challenges, label="challenges"):
             metadata = _challenge_metadata(challenge)
             normalized_challenges[metadata["id"]] = metadata
+        raw_scoreboard = _record_mapping(scoreboard, label="scoreboard")
         normalized_scoreboard = {
             str(challenge_id).strip(): _scoreboard_metadata(challenge_id, record)
-            for challenge_id, record in scoreboard.items()
+            for challenge_id, record in raw_scoreboard.items()
         }
         return cls(challenges=normalized_challenges, scoreboard=normalized_scoreboard)
 
@@ -81,6 +82,8 @@ class FakeCTFdClient:
 
 
 def _challenge_metadata(value: Mapping[str, Any]) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError("FakeCTFdClient challenges entries must be mappings")
     reject_hidden_flag_material(value, path="ctfd", label="FakeCTFdClient")
     metadata = {
         "id": _required(str(value.get("id", "")), "id"),
@@ -97,10 +100,24 @@ def _challenge_metadata(value: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _scoreboard_metadata(challenge_id: object, value: Mapping[str, Any]) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError("FakeCTFdClient scoreboard entries must be mappings")
     reject_hidden_flag_material(value, path="ctfd", label="FakeCTFdClient")
     metadata = dict(value)
     metadata["challenge_id"] = _required(str(challenge_id), "challenge_id")
     return metadata
+
+
+def _record_sequence(value: Any, *, label: str) -> tuple[Any, ...]:
+    if not isinstance(value, list | tuple):
+        raise ValueError(f"FakeCTFdClient {label} must be a list")
+    return tuple(value)
+
+
+def _record_mapping(value: Any, *, label: str) -> Mapping[Any, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"FakeCTFdClient {label} must be a mapping")
+    return value
 
 
 def _export_challenges(export: Mapping[str, Any]) -> tuple[dict[str, Any], ...]:
