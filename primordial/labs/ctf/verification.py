@@ -33,6 +33,8 @@ class SolveVerifier:
             errors.append("supporting evidence")
         if not _has_allowed_policy_decision(session):
             errors.append("allowed policy decision")
+        if _has_unapproved_flag_submission(session):
+            errors.append("allowed flag submission policy decision")
         if _has_hard_fail_finding(hardcode_scan_result):
             errors.append("passing hardcode scan")
         review_required = _has_review_finding(hardcode_scan_result)
@@ -50,6 +52,24 @@ def _has_allowed_policy_decision(session: SolveSession) -> bool:
         _normalized(str(decision.get("decision", ""))) in {"allow", "allowed"}
         for decision in session.policy_decisions
     )
+
+
+def _has_unapproved_flag_submission(session: SolveSession) -> bool:
+    allowed_policy_ids = {
+        str(decision.get("decision_id", "")).strip()
+        for decision in session.policy_decisions
+        if _normalized(str(decision.get("decision", ""))) in {"allow", "allowed"}
+    }
+    for action in session.actions:
+        if _normalized(str(action.get("action_type", ""))) != "ctfd_flag_submission":
+            continue
+        metadata = action.get("metadata", {})
+        if not isinstance(metadata, Mapping):
+            return True
+        policy_decision_id = str(metadata.get("policy_decision_id", "")).strip()
+        if not policy_decision_id or policy_decision_id not in allowed_policy_ids:
+            return True
+    return False
 
 
 def _scan_status(value: Mapping[str, Any]) -> str:
