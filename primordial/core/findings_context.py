@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import re
+from urllib import parse
 
 from primordial.core.domain.models import EvidenceRecord, Finding, Interest, Note, Target, utc_now
 
@@ -26,6 +27,12 @@ class TargetFindingsWorkspace:
 
 
 class FindingsContextService:
+    SECRET_VALUE_RE = re.compile(
+        r"(?i)\b(api[_-]?key|token|secret|password|passwd|pwd|webhook|authorization)\b([\"']?\s*[:=]\s*[\"']?)([^\"'\s,}]{4,})"
+    )
+    BEARER_RE = re.compile(r"(?i)\b(bearer\s+)[A-Za-z0-9._~+/\-]+=*")
+    FLAG_RE = re.compile(r"(?i)\b(?:flag|htb|thm)\{[^}\s]{4,}\}")
+
     def __init__(self, findings_dir: Path, notion_exports_dir: Path) -> None:
         self.findings_dir = findings_dir
         self.notion_exports_dir = notion_exports_dir
@@ -116,7 +123,7 @@ class FindingsContextService:
             "",
         ]
         for item in evidence[:50]:
-            evidence_lines.append(f"- `{item.id}` {item.title}: {item.summary}")
+            evidence_lines.append(self._redact_export_text(f"- `{item.id}` {item.title}: {item.summary}"))
         workspace.evidence_path.write_text("\n".join(evidence_lines).rstrip() + "\n", encoding="utf-8")
 
     def _notion_export_lines(
@@ -131,26 +138,26 @@ class FindingsContextService:
         self._extend_export_section(
             export_lines,
             "Observed Evidence",
-            [f"- `{item.id}` {item.title}: {item.summary}" for item in evidence[:25]],
+            [self._redact_export_text(f"- `{item.id}` {item.title}: {item.summary}") for item in evidence[:25]],
             "- No evidence recorded.",
         )
         self._extend_export_section(
             export_lines,
             "Reviewed Findings",
-            [f"- `{finding.severity.value}` {finding.title}: {finding.summary}" for finding in findings[:25]],
+            [self._redact_export_text(f"- `{finding.severity.value}` {finding.title}: {finding.summary}") for finding in findings[:25]],
             "- No reviewed findings recorded.",
         )
         self._extend_export_section(
             export_lines,
             "Operator Notes",
-            [f"- {note.title}: {note.body[:500]}" for note in notes[:25]],
+            [self._redact_export_text(f"- {note.title}: {note.body[:500]}") for note in notes[:25]],
             "- No operator notes recorded.",
         )
         self._extend_export_section(export_lines, "Candidate Tasks", [], "- No candidate tasks recorded.")
         self._extend_export_section(
             export_lines,
             "Hypotheses",
-            [f"- `{interest.status.value}` {interest.title}: {interest.summary}" for interest in interests[:25]],
+            [self._redact_export_text(f"- `{interest.status.value}` {interest.title}: {interest.summary}") for interest in interests[:25]],
             "- No open interests recorded.",
         )
         self._append_static_empty_export_sections(export_lines)
@@ -180,8 +187,25 @@ class FindingsContextService:
             "",
             "## AI Agent Guidance",
             "",
-            self.read_guidance(target, max_chars=2400) or "No target-specific guidance recorded.",
+            self._redact_export_text(self.read_guidance(target, max_chars=2400)) or "No target-specific guidance recorded.",
         ]
+
+    def _redact_export_text(self, value: str) -> str:
+        redacted = self.SECRET_VALUE_RE.sub(lambda match: f"{match.group(1)}{match.group(2)}[redacted]", str(value or ""))
+        redacted = self.BEARER_RE.sub(lambda match: f"{match.group(1)}[redacted]", redacted)
+        redacted = self.FLAG_RE.sub("[redacted-flag]", redacted)
+        return self._redact_export_url_queries(redacted)
+
+    def _redact_export_url_queries(self, value: str) -> str:
+        def replace(match: re.Match[str]) -> str:
+            raw_url = match.group(0)
+            parsed = parse.urlsplit(raw_url)
+            if not parsed.query:
+                return raw_url
+            query = parse.urlencode([(key, "[redacted]") for key, _ in parse.parse_qsl(parsed.query, keep_blank_values=True)])
+            return parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, query, parsed.fragment))
+
+        return re.sub(r"https?://[^\s`<>\"]+", replace, value)
 
     def _extend_export_section(self, lines: list[str], title: str, rows: list[str], empty_message: str) -> None:
         lines.extend(["", f"## {title}", ""])
