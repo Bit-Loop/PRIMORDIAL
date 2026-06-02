@@ -64,7 +64,17 @@ def _required(value: str, name: str) -> str:
 
 
 def _path_tuple(value: list[str] | tuple[str, ...]) -> tuple[str, ...]:
-    return tuple(str(item).strip().lstrip("/") for item in value if str(item).strip())
+    return tuple(_package_path(item) for item in value if str(item).strip())
+
+
+def _package_path(value: object) -> str:
+    path = str(value).strip().replace("\\", "/")
+    if path.startswith("/") or re.match(r"^[A-Za-z]:/", path):
+        raise ValueError("ClosedBookPackage candidate paths must be archive-relative")
+    parts = tuple(part for part in path.split("/") if part)
+    if any(part in {".", ".."} for part in parts):
+        raise ValueError("ClosedBookPackage candidate paths must not contain traversal components")
+    return "/".join(parts)
 
 
 def _normalize_prefixes(value: tuple[str, ...]) -> tuple[str, ...]:
