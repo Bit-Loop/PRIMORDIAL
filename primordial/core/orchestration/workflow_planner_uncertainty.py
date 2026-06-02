@@ -16,6 +16,7 @@ from primordial.core.orchestration.workflow_deps import (
     TaskStatus,
     utc_now,
 )
+from primordial.core.sensitive_text import redact_sensitive_text
 
 class WorkflowPlannerUncertaintyMixin:
     def create_planner_uncertainty_escalation(
@@ -256,7 +257,7 @@ class WorkflowPlannerUncertaintyMixin:
                 )
             except Exception as exc:  # noqa: BLE001 - RAG is advisory and must not block planner review packets
                 return {
-                    "query": query,
+                    "query": redact_sensitive_text(query),
                     "purpose": "planner_review",
                     "role": "local_deep",
                     "target_id": target.id,
@@ -267,7 +268,7 @@ class WorkflowPlannerUncertaintyMixin:
                     "prompt_context": "",
                 }
         return {
-            "query": query,
+            "query": redact_sensitive_text(query),
             "purpose": "planner_review",
             "role": "local_deep",
             "target_id": target.id,

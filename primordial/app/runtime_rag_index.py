@@ -7,6 +7,7 @@ from primordial.app.runtime_deps import (
     Target,
     Task,
 )
+from primordial.core.sensitive_text import redact_sensitive_text
 
 class RuntimeRagIndexMixin:
     def rag_ingest_document(
@@ -57,7 +58,7 @@ class RuntimeRagIndexMixin:
         payload_results = [item.as_payload() for item in results]
         return {
             "target": target_record.as_payload() if target_record else None,
-            "query": query,
+            "query": redact_sensitive_text(query),
             "corpus_types": corpus_types or [],
             "filters": filters or {},
             "results": payload_results,

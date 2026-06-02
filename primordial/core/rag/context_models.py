@@ -5,6 +5,7 @@ from typing import Any
 
 from primordial.core.context.normalization import metadata_value
 from primordial.core.domain.enums import TaskKind
+from primordial.core.sensitive_text import redact_sensitive_text
 
 
 RESTRICTED_DOMAINS = {
@@ -95,7 +96,7 @@ class RagContextPack:
 
     def as_payload(self) -> dict[str, object]:
         return {
-            "query": self.query,
+            "query": redact_sensitive_text(self.query),
             "purpose": self.purpose,
             "role": self.role,
             "target_id": self.target_id,

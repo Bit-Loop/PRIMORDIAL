@@ -13,6 +13,7 @@ from primordial.app.runtime_deps import (
     validate_rag_citations,
     vulnerability_hints_from_results,
 )
+from primordial.core.sensitive_text import redact_sensitive_text
 
 class RuntimeRagAnswersMixin:
     def rag_eval_probes(
@@ -38,7 +39,7 @@ class RuntimeRagAnswersMixin:
             top = rows if isinstance(rows, list) else []
             results.append(
                 {
-                    "query": query,
+                    "query": redact_sensitive_text(query),
                     "result_count": len(top),
                     "top_citations": [self._rag_payload_citation_id(item) for item in top[:5] if isinstance(item, dict)],
                     "top_results": top[:3],
@@ -130,7 +131,7 @@ class RuntimeRagAnswersMixin:
             payload_results.append(payload)
         return {
             "target": target_record.as_payload(),
-            "query": query,
+            "query": redact_sensitive_text(query),
             "corpus_types": ["vuln_intel", "cve_advisory", "exploit_note"],
             "results": payload_results,
         }
@@ -162,7 +163,7 @@ class RuntimeRagAnswersMixin:
             [item for item in search.get("results", []) if isinstance(item, dict)]
         )
         return {
-            "query": query,
+            "query": redact_sensitive_text(query),
             "search": search,
             **hints,
         }
@@ -174,7 +175,7 @@ class RuntimeRagAnswersMixin:
         hints = self.workflow.build_rag_task_hints(target_record, query=query, limit=limit)
         return {
             "target": target_record.as_payload(),
-            "query": query,
+            "query": redact_sensitive_text(query),
             "hints": {
                 "accepted": hints.get("accepted", []),
                 "rejected": hints.get("rejected", []),
@@ -204,7 +205,7 @@ class RuntimeRagAnswersMixin:
         purpose = self._operator_rag_context_purpose(question)
         if not target_id:
             return {
-                "query": question,
+                "query": redact_sensitive_text(question),
                 "purpose": purpose,
                 "role": "operator_chat",
                 "target_id": None,
@@ -225,7 +226,7 @@ class RuntimeRagAnswersMixin:
             )
         except Exception as exc:  # noqa: BLE001 - retrieval must not break operator Q&A
             return {
-                "query": question,
+                "query": redact_sensitive_text(question),
                 "purpose": purpose,
                 "role": "operator_chat",
                 "target_id": target_id,
