@@ -90,6 +90,21 @@ class CTFAssetSetupTests(unittest.TestCase):
         self.assertIn("denied_path_removed=solutions/", evidence)
         self.assertFalse((Path(result.asset_path) / "solutions").exists())
 
+    def test_phase_seven_clones_official_cloudgoat_reference_for_localstack_adaptation(self) -> None:
+        calls: list[tuple[str, ...]] = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch("primordial.labs.ctf.asset_setup.shutil.which", return_value="/usr/bin/tool"):
+                result = setup_phase_assets(7, lab_root=Path(temp_dir), command_runner=_runner(calls))[0]
+            evidence = Path(result.evidence_path).read_text(encoding="utf-8")
+
+        clone = next(command for command in calls if command[:2] == ("git", "clone"))
+        self.assertEqual(result.status, "asset_ready")
+        self.assertEqual(result.lab_id, "cloudgoat")
+        self.assertEqual(clone[-2], "https://github.com/RhinoSecurityLabs/cloudgoat.git")
+        self.assertIn("provisioning_note=CloudGoat is cloned as the official scenario reference", evidence)
+        self.assertIn("tool_aws.returncode=0", evidence)
+        self.assertIn("denied_path_removed=solutions/", evidence)
+
 
 def _runner(calls: list[tuple[str, ...]]):
     def run(command: tuple[str, ...]) -> subprocess.CompletedProcess[str]:

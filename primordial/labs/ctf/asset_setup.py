@@ -90,6 +90,15 @@ LAB_ASSETS: tuple[LabAsset, ...] = (
         provisioning_note="Use GOAD-Light first; VM provisioning requires local virtualization and Ansible/Vagrant tooling.",
     ),
     LabAsset(
+        phase=7,
+        lab_id="cloudgoat",
+        repo_url="https://github.com/RhinoSecurityLabs/cloudgoat.git",
+        dest_name="phase7-cloudgoat",
+        required_tools=("git", "docker", "terraform", "python3", "aws"),
+        denied_paths=("writeups/", "solutions/", "walkthroughs/", "docs/solutions/"),
+        provisioning_note="CloudGoat is cloned as the official scenario reference; provisioning stays on LocalStack/local adaptation only.",
+    ),
+    LabAsset(
         phase=8,
         lab_id="dreadgoad",
         repo_url="https://github.com/dreadnode/DreadGOAD.git",
