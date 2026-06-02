@@ -69,6 +69,7 @@ class CTFHarnessGOADTests(unittest.TestCase):
         self.assertEqual(result.domain, "goad.local")
         self.assertEqual(result.action_ids, ("kerberos-ticket-audit", "smb-share-audit"))
         self.assertEqual(result.credential_ids, ("goad-user",))
+        self.assertIn("local_ad_lab_environment_verified", result.exit_gates)
         self.assertIn("kerberos_and_smb_actions_policy_gated", result.exit_gates)
         self.assertIn("credential_use_requires_operator_supplied_material", result.exit_gates)
         self.assertIn("evidence:goad-dc-health", result.evidence_refs)

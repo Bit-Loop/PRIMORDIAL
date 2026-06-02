@@ -63,6 +63,7 @@ class CTFHarnessKubernetesGoatTests(unittest.TestCase):
         self.assertEqual(result.namespace, "kg-local")
         self.assertEqual(result.resource_ids, ("kg-web-service",))
         self.assertEqual(result.reset_ids, ("kg-local-reset",))
+        self.assertIn("local_cluster_environment_verified", result.exit_gates)
         self.assertIn("namespace_scope_enforced", result.exit_gates)
         self.assertIn("cluster_mutations_reset_between_runs", result.exit_gates)
         self.assertIn("evidence:kubernetes-goat-health", result.evidence_refs)

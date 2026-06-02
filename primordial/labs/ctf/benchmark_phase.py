@@ -11,6 +11,7 @@ from primordial.labs.ctf.targets import CTFTarget
 
 BENCHMARK_TARGET_FAMILIES = frozenset({"dreadgoad", "ctf_dojo", "nyu_ctf_bench"})
 BENCHMARK_EXIT_GATES = (
+    "benchmark_environment_verified",
     "target_rotation_and_reset_verified",
     "aggregate_scoring_uses_evidence_backed_results",
 )
@@ -72,8 +73,6 @@ def _validate_phase_and_target(phase: CTFLabPhase, target: CTFTarget, proof: Env
     if target.target_family not in phase.target_families:
         raise ValueError("Benchmark controls target_family must be allowed by phase")
     missing_gates = [gate for gate in BENCHMARK_EXIT_GATES if gate not in phase.exit_gates]
-    if "benchmark_environment_verified" not in phase.exit_gates:
-        missing_gates.append("benchmark_environment_verified")
     if missing_gates:
         raise ValueError("Benchmark controls phase is missing exit gate(s): " + ", ".join(missing_gates))
     if not phase.environment_proof_required:

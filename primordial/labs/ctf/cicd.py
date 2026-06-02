@@ -11,6 +11,7 @@ from primordial.labs.ctf.targets import CTFTarget
 
 CICD_GOAT_TARGET_FAMILY = "ci_cd_goat"
 CICD_GOAT_EXIT_GATES = (
+    "local_container_environment_verified",
     "ci_cd_attack_paths_bound_to_lab_scope",
     "no_external_pipeline_mutation_without_verified_lab",
 )
@@ -83,8 +84,6 @@ def _validate_phase_and_target(phase: CTFLabPhase, target: CTFTarget, proof: Env
     if target.target_family not in phase.target_families:
         raise ValueError("CI/CD Goat controls target_family must be allowed by phase")
     missing_gates = [gate for gate in CICD_GOAT_EXIT_GATES if gate not in phase.exit_gates]
-    if "local_container_environment_verified" not in phase.exit_gates:
-        missing_gates.append("local_container_environment_verified")
     if missing_gates:
         raise ValueError("CI/CD Goat controls phase is missing exit gate(s): " + ", ".join(missing_gates))
     if not phase.environment_proof_required:

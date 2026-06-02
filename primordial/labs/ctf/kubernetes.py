@@ -11,6 +11,7 @@ from primordial.labs.ctf.targets import CTFTarget
 
 KUBERNETES_GOAT_TARGET_FAMILY = "kubernetes_goat"
 KUBERNETES_GOAT_EXIT_GATES = (
+    "local_cluster_environment_verified",
     "namespace_scope_enforced",
     "cluster_mutations_reset_between_runs",
 )
@@ -84,8 +85,6 @@ def _validate_phase_and_target(
     if target.target_family not in phase.target_families:
         raise ValueError("Kubernetes Goat controls target_family must be allowed by phase")
     missing_gates = [gate for gate in KUBERNETES_GOAT_EXIT_GATES if gate not in phase.exit_gates]
-    if "local_cluster_environment_verified" not in phase.exit_gates:
-        missing_gates.append("local_cluster_environment_verified")
     if missing_gates:
         raise ValueError("Kubernetes Goat controls phase is missing exit gate(s): " + ", ".join(missing_gates))
     if not phase.environment_proof_required:

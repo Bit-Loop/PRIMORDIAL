@@ -67,6 +67,7 @@ class CTFHarnessCloudGoatTests(unittest.TestCase):
         self.assertEqual(result.region, "us-east-1")
         self.assertEqual(result.resource_ids, ("cloudgoat-iam-role",))
         self.assertEqual(result.teardown_ids, ("cloudgoat-destroy",))
+        self.assertIn("sandbox_cloud_account_verified", result.exit_gates)
         self.assertIn("account_boundary_and_region_scope_enforced", result.exit_gates)
         self.assertIn("teardown_evidence_recorded", result.exit_gates)
         self.assertIn("evidence:cloudgoat-account-boundary", result.evidence_refs)

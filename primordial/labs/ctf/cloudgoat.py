@@ -11,6 +11,7 @@ from primordial.labs.ctf.targets import CTFTarget
 
 CLOUDGOAT_TARGET_FAMILY = "cloudgoat"
 CLOUDGOAT_EXIT_GATES = (
+    "sandbox_cloud_account_verified",
     "account_boundary_and_region_scope_enforced",
     "teardown_evidence_recorded",
 )
@@ -102,8 +103,6 @@ def _validate_phase_and_target(
     if target.target_family not in phase.target_families:
         raise ValueError("CloudGoat controls target_family must be allowed by phase")
     missing_gates = [gate for gate in CLOUDGOAT_EXIT_GATES if gate not in phase.exit_gates]
-    if "sandbox_cloud_account_verified" not in phase.exit_gates:
-        missing_gates.append("sandbox_cloud_account_verified")
     if missing_gates:
         raise ValueError("CloudGoat controls phase is missing exit gate(s): " + ", ".join(missing_gates))
     if not phase.environment_proof_required:

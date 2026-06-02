@@ -58,6 +58,7 @@ class CTFHarnessCICDGoatTests(unittest.TestCase):
         self.assertEqual(result.status, "verified")
         self.assertEqual(result.attack_path_ids, ("cicd-goat-jenkins-path",))
         self.assertEqual(result.pipeline_action_ids, ("local-job-trigger-review",))
+        self.assertIn("local_container_environment_verified", result.exit_gates)
         self.assertIn("ci_cd_attack_paths_bound_to_lab_scope", result.exit_gates)
         self.assertIn("no_external_pipeline_mutation_without_verified_lab", result.exit_gates)
         self.assertIn("evidence:cicd-goat-health", result.evidence_refs)

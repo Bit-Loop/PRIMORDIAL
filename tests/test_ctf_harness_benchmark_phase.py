@@ -69,6 +69,7 @@ class CTFHarnessBenchmarkPhaseTests(unittest.TestCase):
         self.assertEqual(result.status, "verified")
         self.assertEqual(result.rotation_ids, ("ctf-dojo-target-a", "ctf-dojo-target-b"))
         self.assertEqual(result.scoring_result_ids, ("score-a", "score-b"))
+        self.assertIn("benchmark_environment_verified", result.exit_gates)
         self.assertIn("target_rotation_and_reset_verified", result.exit_gates)
         self.assertIn("aggregate_scoring_uses_evidence_backed_results", result.exit_gates)
         self.assertIn("evidence:benchmark-reset-b", result.evidence_refs)

@@ -11,6 +11,7 @@ from primordial.labs.ctf.targets import CTFTarget
 
 GOAD_TARGET_FAMILIES = frozenset({"goad_light", "goad"})
 GOAD_EXIT_GATES = (
+    "local_ad_lab_environment_verified",
     "kerberos_and_smb_actions_policy_gated",
     "credential_use_requires_operator_supplied_material",
 )
@@ -76,8 +77,6 @@ def _validate_phase_and_target(phase: CTFLabPhase, target: CTFTarget, proof: Env
     if target.target_family not in phase.target_families:
         raise ValueError("GOAD controls target_family must be allowed by phase")
     missing_gates = [gate for gate in GOAD_EXIT_GATES if gate not in phase.exit_gates]
-    if "local_ad_lab_environment_verified" not in phase.exit_gates:
-        missing_gates.append("local_ad_lab_environment_verified")
     if missing_gates:
         raise ValueError("GOAD controls phase is missing exit gate(s): " + ", ".join(missing_gates))
     if not phase.environment_proof_required:
