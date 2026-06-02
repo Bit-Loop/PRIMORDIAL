@@ -7,6 +7,7 @@ from typing import Any
 
 from primordial.labs.ctf.hidden_material import reject_hidden_flag_material
 from primordial.labs.ctf.scoring import (
+    REVIEW_STATUSES,
     SCORING_KEYS,
     SOLVED_STATUSES,
     compute_scoring_summary,
@@ -17,6 +18,8 @@ from primordial.labs.ctf.scoring import (
 CLOSED_BOOK_MODES = frozenset({"closed_book", "closed-book", "closed book"})
 HIDDEN_SOLUTION_AVAILABLE = frozenset({"available_to_agent", "agent_access", "available", "exposed"})
 FORBIDDEN_ACTIVE_SOURCE_REF_MARKERS = ("writeup", "solution", "postmortem")
+PASS_HARDCODE_SCAN_STATUSES = frozenset({"pass", "passed"})
+REVIEW_HARDCODE_SEVERITIES = frozenset({"review"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,6 +139,7 @@ class BenchmarkRun:
             raise ValueError("BenchmarkRun finalized runs cannot update scoring summary")
         if not isinstance(scoring_summary, Mapping):
             raise ValueError("BenchmarkRun scoring summary malformed")
+        _validate_scored_solve_hardcode_scans(self.solve_results)
         extra_summary = dict(scoring_summary)
         computed_overrides = tuple(key for key in SCORING_KEYS if key in extra_summary)
         if computed_overrides:
@@ -237,6 +241,41 @@ def _mapping_dict(value: Mapping[str, Any], name: str) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise ValueError(f"BenchmarkRun {name} malformed")
     return dict(value)
+
+
+def _validate_scored_solve_hardcode_scans(solve_results: tuple[dict[str, Any], ...]) -> None:
+    for solve_result in solve_results:
+        status = _normalized(solve_result.get("solve_status", ""))
+        result = _normalized(solve_result.get("result", ""))
+        scan = solve_result.get("hardcode_scan_result", {})
+        if status in SOLVED_STATUSES or result in SOLVED_STATUSES:
+            if not _clean_hardcode_scan(scan):
+                raise ValueError("solved BenchmarkRun result requires passing hardcode scan")
+        elif status in REVIEW_STATUSES or result in REVIEW_STATUSES:
+            if not _review_only_hardcode_scan(scan):
+                raise ValueError("review BenchmarkRun result requires review-only hardcode scan findings")
+
+
+def _clean_hardcode_scan(value: Any) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    findings = value.get("findings", ())
+    return _normalized(value.get("status", "")) in PASS_HARDCODE_SCAN_STATUSES and not findings
+
+
+def _review_only_hardcode_scan(value: Any) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    findings = value.get("findings", ())
+    if not isinstance(findings, (list, tuple)) or not findings:
+        return False
+    return all(_finding_severity(finding) in REVIEW_HARDCODE_SEVERITIES for finding in findings)
+
+
+def _finding_severity(finding: Any) -> str:
+    if isinstance(finding, Mapping):
+        return _normalized(finding.get("severity", ""))
+    return _normalized(getattr(finding, "severity", ""))
 
 
 def _model_versions_dict(value: Mapping[str, str]) -> dict[str, str]:
