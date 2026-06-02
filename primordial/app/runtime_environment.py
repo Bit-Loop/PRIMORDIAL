@@ -39,6 +39,40 @@ class RuntimeEnvironmentMixin:
             return OperatorIntentRegistry.DEFAULT_INTENT_ID
         return classification.default_intent
 
+    def _select_operator_intent_for_session(
+        self,
+        previous_intent_id: object,
+        classification: EnvironmentClassification,
+    ) -> str:
+        default_intent = self._default_operator_intent_for_environment(classification)
+        previous_intent = str(previous_intent_id or "").strip()
+        if not previous_intent or previous_intent == OperatorIntentRegistry.DEFAULT_INTENT_ID:
+            return default_intent
+        try:
+            intent = self.operator_intents.get(previous_intent)
+        except KeyError:
+            return default_intent
+        if not self._intent_has_lab_permissions(intent.policy):
+            return intent.id
+        if not classification.verified_lab:
+            return default_intent
+        if intent.id != default_intent:
+            return default_intent
+        return intent.id
+
+    def _intent_has_lab_permissions(self, policy: object) -> bool:
+        lab_policy = getattr(policy, "lab_policy", None)
+        if lab_policy is None:
+            return False
+        return any(
+            bool(getattr(lab_policy, field, False))
+            for field in (
+                "lab_flag_collection_allowed",
+                "htb_lab_behavior_allowed",
+                "reverse_shell_allowed",
+            )
+        )
+
     def _operator_intent_exists(self, intent_id: str) -> bool:
         self._load_operator_intents()
         try:

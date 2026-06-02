@@ -9,7 +9,6 @@ from primordial.app.runtime_deps import (
     EventType,
     MethodologyName,
     NotionSyncService,
-    OperatorIntentRegistry,
     RuntimeSignal,
     ScopeProfile,
     SecurityModeServices,
@@ -107,8 +106,7 @@ class RuntimeLifecycleMixin:
         if previous_session is not None:
             previous_intent = previous_session.metadata.get("operator_intent_id")
         classification = environment_classification or self._classify_environment(profile=profile.value)
-        default_intent = self._default_operator_intent_for_environment(classification)
-        selected_intent = str(previous_intent) if previous_intent and previous_intent != OperatorIntentRegistry.DEFAULT_INTENT_ID else default_intent
+        selected_intent = self._select_operator_intent_for_session(previous_intent, classification)
         self.store.pause_active_sessions()
         session = Session(
             methodology=methodology,
