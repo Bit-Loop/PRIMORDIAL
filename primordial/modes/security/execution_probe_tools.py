@@ -105,8 +105,9 @@ class PrimitiveProbeToolMixin:
         discovery_results = self._run_content_discovery(effective_url, host_header)
         return {
             "asset_label": asset_label,
-            "requested_url": requested_url,
-            "effective_url": effective_url,
+            "requested_url": self._sanitize_surface_url(requested_url),
+            "effective_url": self._sanitize_surface_url(effective_url),
+            "urls_redacted": True,
             "status_code": status_code,
             "content_type": content_type,
             "headers": self._sanitize_response_headers(headers),
@@ -177,9 +178,10 @@ class PrimitiveProbeToolMixin:
                     results.append(
                         {
                             "path": path,
-                            "url": response.geturl(),
+                            "url": self._sanitize_surface_url(response.geturl()),
                             "status": response.status,
                             "content_type": response.headers.get("Content-Type", ""),
+                            "url_redacted": True,
                         }
                     )
             except error.HTTPError as exc:
@@ -187,9 +189,10 @@ class PrimitiveProbeToolMixin:
                     results.append(
                         {
                             "path": path,
-                            "url": exc.geturl(),
+                            "url": self._sanitize_surface_url(exc.geturl()),
                             "status": exc.code,
                             "content_type": exc.headers.get("Content-Type", ""),
+                            "url_redacted": True,
                         }
                     )
             except Exception:

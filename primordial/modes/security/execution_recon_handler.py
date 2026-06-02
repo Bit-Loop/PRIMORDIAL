@@ -57,7 +57,14 @@ class PrimitiveReconHandlerMixin:
     ) -> None:
         probe = self._probe_url(url=plan["url"], host_header=plan.get("host_header"), asset_label=plan["asset_label"])
         if probe.get("error"):
-            errors.append({"asset": str(plan["asset_label"]), "url": str(plan["url"]), "error": str(probe["error"])})
+            errors.append(
+                {
+                    "asset": str(plan["asset_label"]),
+                    "url": self._sanitize_surface_url(str(plan["url"])),
+                    "url_redacted": "true",
+                    "error": str(probe["error"]),
+                }
+            )
             return
         content_paths = [entry["path"] for entry in probe["discovery_results"] if entry.get("status")]
         auth_candidates = self._extract_auth_surfaces(
@@ -107,6 +114,7 @@ class PrimitiveReconHandlerMixin:
             "asset": plan["asset_label"],
             "requested_url": probe["requested_url"],
             "effective_url": probe["effective_url"],
+            "urls_redacted": bool(probe.get("urls_redacted")),
             "status_code": probe["status_code"],
             "content_type": probe["content_type"],
             "title": probe["title"],
@@ -131,6 +139,7 @@ class PrimitiveReconHandlerMixin:
         return {
             "requested_url": probe["requested_url"],
             "effective_url": probe["effective_url"],
+            "urls_redacted": bool(probe.get("urls_redacted")),
             "status_code": probe["status_code"],
             "content_type": probe["content_type"],
             "title": probe["title"],
