@@ -37,6 +37,7 @@ class RuntimeIntentControlMixin:
         self._load_operator_intents()
         intent = self.operator_intents.get(intent_id)
         session = self.store.get_active_session() or self.start_session()
+        self._ensure_operator_intent_allowed_for_session(intent, session)
         session.metadata["operator_intent_id"] = intent.id
         session.updated_at = utc_now()
         self.store.insert_session(session)
@@ -61,6 +62,8 @@ class RuntimeIntentControlMixin:
             raise ValueError(f"unsupported execution mode: {mode}")
         self._load_operator_intents()
         intent = self.operator_intents.get(intent_id)
+        session = self.store.get_active_session() or self.start_session()
+        self._ensure_operator_intent_allowed_for_session(intent, session)
         execution_mode = self.update_execution_mode(selected_mode, interval_seconds=interval_seconds)
         operator_intent = self.set_operator_intent(intent.id)
         return {

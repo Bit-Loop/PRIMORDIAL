@@ -60,6 +60,48 @@ class RuntimeEnvironmentMixin:
             return default_intent
         return intent.id
 
+    def _ensure_operator_intent_allowed_for_session(self, intent: object, session: object) -> None:
+        policy = getattr(intent, "policy", None)
+        if not self._intent_has_lab_permissions(policy):
+            return
+        classification = self._environment_classification_for_session(session)
+        default_intent = self._default_operator_intent_for_environment(classification)
+        intent_id = str(getattr(intent, "id", "")).strip()
+        if classification.verified_lab and intent_id == default_intent:
+            return
+        raise ValueError(
+            f"operator intent {intent_id or 'unknown'} requires verified matching lab environment; "
+            f"current environment is {classification.environment} with default intent {default_intent}"
+        )
+
+    def _environment_classification_for_session(self, session: object) -> EnvironmentClassification:
+        metadata = getattr(session, "metadata", {})
+        payload = metadata.get("environment_classification") if isinstance(metadata, dict) else None
+        profile = getattr(getattr(session, "profile", None), "value", None)
+        if isinstance(payload, dict):
+            return self._environment_classification_from_payload(payload, fallback_profile=str(profile or ""))
+        return self._classify_environment(profile=str(profile or ""))
+
+    def _environment_classification_from_payload(
+        self,
+        payload: dict[str, object],
+        *,
+        fallback_profile: str,
+    ) -> EnvironmentClassification:
+        proof_sources = payload.get("proof_sources", ())
+        if not isinstance(proof_sources, (list, tuple)):
+            proof_sources = ()
+        return EnvironmentClassification(
+            profile=str(payload.get("profile") or fallback_profile),
+            environment=str(payload.get("environment") or "real_world"),
+            default_intent=str(payload.get("default_intent") or OperatorIntentRegistry.DEFAULT_INTENT_ID),
+            verified_lab=bool(payload.get("verified_lab")),
+            upgrade_applied=bool(payload.get("upgrade_applied")),
+            requires_environment_proof=bool(payload.get("requires_environment_proof")),
+            proof_sources=tuple(str(item) for item in proof_sources),
+            reason=str(payload.get("reason") or "session_metadata"),
+        )
+
     def _intent_has_lab_permissions(self, policy: object) -> bool:
         lab_policy = getattr(policy, "lab_policy", None)
         if lab_policy is None:

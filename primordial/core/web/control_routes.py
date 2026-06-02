@@ -256,7 +256,7 @@ def _operator_intent_route(app: Any, body: bytes) -> Any:
         return app._json_response({"error": "intent_id is required"}, status=400)
     try:
         outcome = app.runtime.set_operator_intent(intent_id)
-    except KeyError as exc:
+    except (KeyError, ValueError) as exc:
         return app._json_response({"error": str(exc)}, status=400)
     return app._action_response("operator-intent", {"operator_intent": outcome})
 
