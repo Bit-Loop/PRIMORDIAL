@@ -4,6 +4,7 @@ from primordial.labs.ctf.applicability import (
     ExploitApplicabilityResult,
     validate_vulhub_exploit_applicability,
 )
+from primordial.labs.ctf.asset_setup import LabAsset, LabAssetSetupResult, setup_all_assets, setup_asset, setup_phase_assets
 from primordial.labs.ctf.benchmark import BenchmarkRun
 from primordial.labs.ctf.benchmark_phase import BenchmarkPhaseControlResult, verify_benchmark_phase_controls
 from primordial.labs.ctf.cicd import CICDGoatPhaseControlResult, verify_cicd_goat_phase_controls
@@ -81,6 +82,8 @@ __all__ = [
     "HardcodeScanResult",
     "HardcodeScanner",
     "KubernetesGoatPhaseControlResult",
+    "LabAsset",
+    "LabAssetSetupResult",
     "MutationPlan",
     "MutationPlanner",
     "PatchProposal",
@@ -112,6 +115,9 @@ __all__ = [
     "probe_local_container_environment",
     "probe_localstack_cloud_environment",
     "probe_vulhub_cve_environment",
+    "setup_all_assets",
+    "setup_asset",
+    "setup_phase_assets",
     "validate_vulhub_exploit_applicability",
     "verify_benchmark_environment",
     "verify_phase_local_lab_environment",
