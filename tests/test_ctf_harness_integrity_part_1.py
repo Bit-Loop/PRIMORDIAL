@@ -101,7 +101,7 @@ class CTFHarnessIntegrityContractTestsPart1(CTFHarnessIntegrityContractTestsBase
             policy_version="policy:v1",
             model_versions={},
             hidden_solution_access_status="not_available_to_agent",
-            hardcode_scan_result={"status": "not_run"},
+            hardcode_scan_result={"status": "pass"},
         )
         run = run.record_solve_result(
             solve_session_id="solve:session-1",
@@ -194,5 +194,29 @@ class CTFHarnessIntegrityContractTestsPart1(CTFHarnessIntegrityContractTestsBase
                 "hardcode scan finding missing severity: solve:session-1 raw_flag",
             ),
         )
+
+    def test_integrity_rejects_benchmark_without_executed_hardcode_scan(self) -> None:
+        run = BenchmarkRun.start(
+            id="benchmark:run-1",
+            target_set=["target:juice"],
+            benchmark_mode="closed_book",
+            mutation_seed="seed:integrity",
+            code_version="git:abc123",
+            policy_version="policy:v1",
+            model_versions={},
+            hidden_solution_access_status="not_available_to_agent",
+            hardcode_scan_result={"status": "not_run"},
+        )
+
+        result = CTFHarnessIntegrity.validate_benchmark_run(
+            run,
+            solve_session_ids=set(),
+            target_ids={"target:juice"},
+            evidence_ids=set(),
+            policy_decision_ids=set(),
+        )
+
+        self.assertEqual(result.status, "fail")
+        self.assertEqual(result.errors, ("hardcode scan not run: benchmark:run-1",))
 
 __all__ = ["CTFHarnessIntegrityContractTestsPart1"]

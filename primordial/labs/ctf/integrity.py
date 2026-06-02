@@ -10,7 +10,8 @@ from primordial.labs.ctf.patches import PatchProposal
 from primordial.labs.ctf.scoring import SCORING_KEYS, compute_scoring_summary, is_scoring_counter
 
 
-PASS_HARDCODE_SCAN_STATUSES = frozenset({"pass", "passed", "not_run", "not run"})
+PASS_HARDCODE_SCAN_STATUSES = frozenset({"pass", "passed"})
+SKIPPED_HARDCODE_SCAN_STATUSES = frozenset({"not_run", "not run", "skipped"})
 REVIEW_HARDCODE_SEVERITIES = frozenset({"review"})
 HARD_FAIL_HARDCODE_SEVERITIES = frozenset({"hard_fail", "hard fail", "hard-fail"})
 CLOSED_BOOK_MODES = frozenset({"closed_book", "closed-book", "closed book"})
@@ -114,6 +115,8 @@ def _hardcode_scan_errors(context_id: str, value: Any) -> list[str]:
     findings = value.get("findings", ())
     if scan_status in PASS_HARDCODE_SCAN_STATUSES and not findings:
         return []
+    if scan_status in SKIPPED_HARDCODE_SCAN_STATUSES:
+        return [f"hardcode scan not run: {context_id}"]
     if not isinstance(findings, (list, tuple)):
         return [f"hardcode scan findings malformed: {context_id}"]
     if scan_status not in PASS_HARDCODE_SCAN_STATUSES and not findings:
