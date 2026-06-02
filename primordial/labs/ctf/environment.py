@@ -273,6 +273,7 @@ def verify_sandbox_cloud_environment(
     _validate_sandbox_cloud_target(target)
     checked_account_id = _account_id(account_id)
     checked_regions = _regions(regions)
+    _validate_sandbox_cloud_scope(target, account_id=checked_account_id, regions=checked_regions)
     checked_profile = _profile(target, profile)
     checked_assets = _observed_assets(target, observed_assets)
     checked_refs = _evidence_ref_tuple(evidence_refs)
@@ -294,6 +295,15 @@ def verify_sandbox_cloud_environment(
         provisioning=provisioning,
         observations=dict(observations or {}),
     )
+
+
+def _validate_sandbox_cloud_scope(target: CTFTarget, *, account_id: str, regions: tuple[str, ...]) -> None:
+    boundary_values = (target.scope.network, target.reset.network, *target.scope.assets)
+    if not any(account_id in str(value) for value in boundary_values):
+        raise ValueError("EnvironmentProof sandbox cloud account_id must match target account boundary")
+    off_scope_regions = [region for region in regions if region not in target.scope.assets]
+    if off_scope_regions:
+        raise ValueError("EnvironmentProof sandbox cloud regions must stay in target scope")
 
 
 def verify_benchmark_environment(
