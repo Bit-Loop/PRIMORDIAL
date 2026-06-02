@@ -223,6 +223,9 @@ def verify_local_ad_lab_environment(
     reject_hidden_flag_material(payload, path="ctf_ad_lab_environment_proof", label="EnvironmentProof")
     _validate_local_ad_lab_target(target)
     checked_domain = _domain(domain)
+    expected_domain = _domain(target.scope.network or target.reset.network)
+    if checked_domain != expected_domain:
+        raise ValueError("EnvironmentProof local AD domain must match target domain")
     checked_profile = _profile(target, profile)
     checked_assets = _observed_assets(target, observed_assets)
     checked_refs = _evidence_ref_tuple(evidence_refs)
